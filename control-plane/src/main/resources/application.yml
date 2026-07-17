@@ -1,0 +1,29 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: agent-video-control-plane
+  datasource:
+    url: ${MYSQL_URL:jdbc:mysql://127.0.0.1:3306/agent-video-pipeline?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false}
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: true
+  servlet:
+    multipart:
+      max-file-size: 2GB
+      max-request-size: 2GB
+
+app:
+  storage:
+    root: ${APP_STORAGE_ROOT:runtime/storage}
+  public-base-url: ${APP_PUBLIC_BASE_URL:http://127.0.0.1:8080}
+  tool-service:
+    base-url: ${TOOL_SERVICE_BASE_URL:http://127.0.0.1:8090}
+    poll-interval-ms: ${TOOL_SERVICE_POLL_INTERVAL_MS:3000}

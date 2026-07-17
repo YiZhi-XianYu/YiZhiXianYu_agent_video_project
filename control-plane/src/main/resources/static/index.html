@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent Video Pipeline - First Vertical Slice</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<main class="shell">
+    <header class="hero">
+        <div>
+            <p class="eyebrow">FIRST VERTICAL SLICE</p>
+            <h1>Agent-Driven Video Pipeline</h1>
+            <p class="lead">创建项目、上传视频，并通过 Java Workflow 调用 Python Tool Service 完成视频技术信息分析。</p>
+        </div>
+        <div class="service-state" id="service-state">等待开始</div>
+    </header>
+
+    <section class="steps">
+        <article class="card">
+            <span class="step-index">01</span>
+            <h2>创建项目</h2>
+            <label for="project-name">项目名称</label>
+            <input id="project-name" value="第一个智能视频项目" maxlength="200">
+            <button id="create-project">创建项目</button>
+            <p class="result" id="project-result">尚未创建</p>
+        </article>
+
+        <article class="card">
+            <span class="step-index">02</span>
+            <h2>上传视频</h2>
+            <label for="video-file">选择本地视频</label>
+            <input id="video-file" type="file" accept="video/*">
+            <button id="upload-video" disabled>上传素材</button>
+            <p class="result" id="asset-result">需要先创建项目</p>
+        </article>
+
+        <article class="card">
+            <span class="step-index">03</span>
+            <h2>启动工作流</h2>
+            <p class="explain">Java 创建单节点 Workflow，然后通过 HTTP 调用 <code>video.probe@1.0.0</code>。</p>
+            <button id="start-workflow" disabled>开始分析</button>
+            <p class="result" id="workflow-result">需要先上传视频</p>
+        </article>
+    </section>
+
+    <section class="workspace">
+        <div class="workspace-header">
+            <div>
+                <p class="eyebrow">WORKFLOW OBSERVABILITY</p>
+                <h2>执行状态</h2>
+            </div>
+            <span class="status neutral" id="run-status">未运行</span>
+        </div>
+
+        <div class="pipeline">
+            <div class="node" id="task-node">
+                <div class="node-topline">
+                    <span class="node-icon">VP</span>
+                    <span class="status neutral" id="task-status">PENDING</span>
+                </div>
+                <h3>Video Probe</h3>
+                <p>Tool: <code>video.probe@1.0.0</code></p>
+                <div class="progress"><span id="progress-bar"></span></div>
+                <div class="node-meta">
+                    <span>进度 <b id="task-progress">0%</b></span>
+                    <span>尝试 <b id="task-attempt">0</b></span>
+                </div>
+            </div>
+            <div class="arrow">→</div>
+            <div class="artifact-card">
+                <p class="eyebrow">ARTIFACT</p>
+                <h3>Video Metadata</h3>
+                <p id="artifact-state">等待 Tool 输出</p>
+            </div>
+        </div>
+
+        <div class="metadata-grid" id="metadata-grid">
+            <div><span>时长</span><strong id="meta-duration">-</strong></div>
+            <div><span>分辨率</span><strong id="meta-resolution">-</strong></div>
+            <div><span>FPS</span><strong id="meta-fps">-</strong></div>
+            <div><span>视频编码</span><strong id="meta-video-codec">-</strong></div>
+            <div><span>音频编码</span><strong id="meta-audio-codec">-</strong></div>
+            <div><span>文件大小</span><strong id="meta-size">-</strong></div>
+        </div>
+        <pre id="error-box" hidden></pre>
+    </section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>
+

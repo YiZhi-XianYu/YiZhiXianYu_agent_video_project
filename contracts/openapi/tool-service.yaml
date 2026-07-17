@@ -1,0 +1,30 @@
+openapi: 3.1.0
+info:
+  title: Agent Video Pipeline Tool Service
+  version: 0.1.0
+paths:
+  /api/v1/tools:
+    get:
+      summary: List available Tool manifests
+      responses:
+        "200":
+          description: Tool list
+  /api/v1/tool-executions:
+    post:
+      summary: Create an asynchronous Tool execution
+      responses:
+        "202":
+          description: Execution accepted
+  /api/v1/tool-executions/{executionId}:
+    get:
+      summary: Read Tool execution status
+      parameters:
+        - in: path
+          name: executionId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Execution status
+

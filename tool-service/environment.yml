@@ -1,0 +1,13 @@
+name: agent-video-pipeline
+channels:
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - fastapi==0.116.1
+      - uvicorn[standard]==0.35.0
+      - httpx==0.28.1
+      - pydantic-settings==2.10.1
+      - pytest==8.4.1
+

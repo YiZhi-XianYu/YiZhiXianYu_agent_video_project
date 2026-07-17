@@ -1,0 +1,21 @@
+# IDE
+.idea/
+*.iml
+
+# Java
+control-plane/target/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local runtime data
+runtime/
+control-plane/runtime/
+tool-service/runtime/
+
+# Local secrets
+.env
+*.local.yml
+
