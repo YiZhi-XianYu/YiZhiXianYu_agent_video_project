@@ -1,6 +1,7 @@
 # IDE
 .idea/
 *.iml
+.vscode/
 
 # Java
 control-plane/target/
