@@ -28,4 +28,4 @@ control-plane/
 
 模块化边界通过 Java package 实现，不使用 `control-plane/modules` Maven 子模块。各逻辑模块的职责与源码映射见 [`docs/modules/control-plane`](../docs/modules/control-plane/README.md)。
 
-当前可执行链路为 `VIDEO_PROXY_PIPELINE`：`video.probe` 成功后自动调度 `video.proxy-generate`，并通过 Artifact 内容接口向浏览器提供支持 Range 请求的代理 MP4。
+当前主链路为 `MULTI_ASSET_ANALYSIS`：Java 校验 `WorkflowDefinition`，为每个关联素材展开 `video.probe -> video.proxy-generate -> video.shot-detect`，通过依赖表进行就绪扫描、并行分发和失败传播。Artifact 内容接口向浏览器提供支持 Range 请求的代理 MP4 和关键帧图片。第二阶段 `VIDEO_PROXY_PIPELINE` API 继续兼容。

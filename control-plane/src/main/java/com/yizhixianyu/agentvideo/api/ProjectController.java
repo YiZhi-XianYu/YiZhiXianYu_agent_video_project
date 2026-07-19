@@ -48,6 +48,18 @@ public class ProjectController {
         return AssetView.from(assetService.upload(projectId, file));
     }
 
+    @PostMapping(path = "/{projectId}/assets/batch", consumes = "multipart/form-data")
+    @ResponseStatus(HttpStatus.CREATED)
+    public List<AssetView> uploadBatch(
+        @PathVariable String projectId,
+        @RequestPart("files") List<MultipartFile> files
+    ) {
+        if (files == null || files.isEmpty()) {
+            throw new IllegalArgumentException("At least one video file is required");
+        }
+        return files.stream().map(file -> AssetView.from(assetService.upload(projectId, file))).toList();
+    }
+
     @GetMapping("/{projectId}/assets")
     public List<AssetView> listAssets(@PathVariable String projectId) {
         projectService.getRequired(projectId);
@@ -74,4 +86,3 @@ public class ProjectController {
         }
     }
 }
-

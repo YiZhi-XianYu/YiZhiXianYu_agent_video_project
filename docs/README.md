@@ -16,7 +16,8 @@
 阶段交接入口：
 
 - `first-vertical-slice.md`：Day 1，单节点视频技术信息分析；
-- `second-vertical-slice.md`：Day 2，两节点依赖调度与代理视频生成，当前开发基线。
+- `second-vertical-slice.md`：Day 2，两节点依赖调度与代理视频生成；
+- `third-stage-handoff.md`：第三阶段，多素材 DAG、Shot Detection 与关键帧，当前开发基线。
 
 ## 后续内容
 

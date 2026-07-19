@@ -3,16 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Agent Video Pipeline - Proxy Vertical Slice</title>
+    <title>Agent Video Pipeline - Multi-Asset Analysis</title>
     <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
 <main class="shell">
     <header class="hero">
         <div>
-            <p class="eyebrow">SECOND VERTICAL SLICE</p>
+            <p class="eyebrow">THIRD VERTICAL SLICE</p>
             <h1>Agent-Driven Video Pipeline</h1>
-            <p class="lead">上传视频后，Java 依次调度分析与代理生成 Tool，并按用户选择输出可直接预览的 4K、2K、1080p 或 720p MP4。</p>
+            <p class="lead">批量上传视频后，Java 展开多素材 DAG，为每个素材并行生成代理视频、镜头列表和关键帧。</p>
         </div>
         <div class="service-state" id="service-state">等待开始</div>
     </header>
@@ -31,15 +31,16 @@
             <span class="step-index">02</span>
             <h2>上传视频</h2>
             <label for="video-file">选择本地视频</label>
-            <input id="video-file" type="file" accept="video/*">
+            <input id="video-file" type="file" accept="video/*" multiple>
             <button id="upload-video" disabled>上传素材</button>
-            <p class="result" id="asset-result">需要先创建项目</p>
+            <p class="result" id="asset-result">需要先创建项目，可一次选择多个视频</p>
+            <div class="asset-list" id="asset-list"></div>
         </article>
 
         <article class="card">
             <span class="step-index">03</span>
             <h2>启动工作流</h2>
-            <p class="explain">Java 创建两节点 Workflow：<code>video.probe</code> 成功后自动解锁 <code>video.proxy-generate</code>。</p>
+            <p class="explain">Java 校验多素材 WorkflowDefinition，并为每个素材并行执行 Probe、Proxy 和 Shot Detection。</p>
             <label for="proxy-quality">输出清晰度</label>
             <select id="proxy-quality">
                 <option value="4K">4K · 3840×2160</option>
@@ -61,35 +62,7 @@
             <span class="status neutral" id="run-status">未运行</span>
         </div>
 
-        <div class="pipeline two-stage">
-            <div class="node" id="probe-task-node">
-                <div class="node-topline">
-                    <span class="node-icon">VP</span>
-                    <span class="status neutral" id="probe-task-status">PENDING</span>
-                </div>
-                <h3>Video Probe</h3>
-                <p>Tool: <code>video.probe@1.0.0</code></p>
-                <div class="progress"><span id="probe-progress-bar"></span></div>
-                <div class="node-meta">
-                    <span>进度 <b id="probe-task-progress">0%</b></span>
-                    <span>尝试 <b id="probe-task-attempt">0</b></span>
-                </div>
-            </div>
-            <div class="arrow">→</div>
-            <div class="node" id="proxy-task-node">
-                <div class="node-topline">
-                    <span class="node-icon proxy">PX</span>
-                    <span class="status neutral" id="proxy-task-status">PENDING</span>
-                </div>
-                <h3>Proxy Generate</h3>
-                <p>Tool: <code>video.proxy-generate@1.0.0</code></p>
-                <div class="progress"><span id="proxy-progress-bar"></span></div>
-                <div class="node-meta">
-                    <span>进度 <b id="proxy-task-progress">0%</b></span>
-                    <span>尝试 <b id="proxy-task-attempt">0</b></span>
-                </div>
-            </div>
-        </div>
+        <div class="task-grid" id="task-grid"></div>
 
         <div class="artifact-summary">
             <div class="artifact-card">
@@ -122,6 +95,16 @@
             </div>
             <video id="proxy-video" controls preload="metadata"></video>
             <p class="result" id="proxy-details"></p>
+        </section>
+        <section class="shots-panel" id="shots-panel" hidden>
+            <div class="workspace-header">
+                <div>
+                    <p class="eyebrow">SHOT KNOWLEDGE</p>
+                    <h2>镜头列表</h2>
+                </div>
+                <span class="status neutral" id="shot-count">0 SHOTS</span>
+            </div>
+            <div class="shot-grid" id="shot-grid"></div>
         </section>
         <pre id="error-box" hidden></pre>
     </section>

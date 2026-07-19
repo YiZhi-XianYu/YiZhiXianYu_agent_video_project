@@ -4,6 +4,7 @@ from typing import Protocol
 from app.core.models import ArtifactDescriptor, ToolExecutionRequest
 from app.tools.video_proxy_generate import VideoProxyGenerateTool
 from app.tools.video_probe import VideoProbeTool
+from app.tools.video_shot_detect import VideoShotDetectTool
 
 
 class Tool(Protocol):
@@ -21,7 +22,7 @@ class Tool(Protocol):
 
 class ToolRegistry:
     def __init__(self) -> None:
-        tools: list[Tool] = [VideoProbeTool(), VideoProxyGenerateTool()]
+        tools: list[Tool] = [VideoProbeTool(), VideoProxyGenerateTool(), VideoShotDetectTool()]
         self._tools = {(tool.name, tool.version): tool for tool in tools}
 
     def get(self, name: str, version: str) -> Tool:

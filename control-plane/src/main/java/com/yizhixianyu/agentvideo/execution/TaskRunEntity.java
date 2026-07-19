@@ -6,6 +6,7 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
+import jakarta.persistence.Lob;
 
 import java.time.Instant;
 
@@ -19,11 +20,24 @@ public class TaskRunEntity extends BaseEntity {
     @Column(nullable = false, length = 100)
     private String nodeKey;
 
+    @Column(length = 40)
+    private String assetId;
+
+    @Column(length = 180)
+    private String instanceKey;
+
     @Column(nullable = false, length = 120)
     private String toolName;
 
     @Column(nullable = false, length = 30)
     private String toolVersion;
+
+    @Column(length = 40)
+    private String inputBinding;
+
+    @Lob
+    @Column(columnDefinition = "LONGTEXT")
+    private String parametersJson;
 
     @Column(length = 40)
     private String dependsOnTaskRunId;
@@ -59,7 +73,33 @@ public class TaskRunEntity extends BaseEntity {
         this.nodeKey = nodeKey;
         this.toolName = toolName;
         this.toolVersion = toolVersion;
+        this.inputBinding = "PROJECT_ASSET";
+        this.parametersJson = "{}";
         this.dependsOnTaskRunId = dependsOnTaskRunId;
+        this.status = TaskStatus.PENDING;
+        this.progress = 0;
+        this.attempt = 0;
+    }
+
+    public TaskRunEntity(
+        String workflowRunId,
+        String assetId,
+        String instanceKey,
+        String nodeKey,
+        String toolName,
+        String toolVersion,
+        String inputBinding,
+        String parametersJson
+    ) {
+        this.workflowRunId = workflowRunId;
+        this.assetId = assetId;
+        this.instanceKey = instanceKey;
+        this.nodeKey = nodeKey;
+        this.toolName = toolName;
+        this.toolVersion = toolVersion;
+        this.inputBinding = inputBinding;
+        this.parametersJson = parametersJson;
+        this.dependsOnTaskRunId = null;
         this.status = TaskStatus.PENDING;
         this.progress = 0;
         this.attempt = 0;
@@ -118,6 +158,16 @@ public class TaskRunEntity extends BaseEntity {
         errorMessage = message;
     }
 
+    public void markSkipped(String message) {
+        if (status == TaskStatus.SUCCEEDED || status == TaskStatus.FAILED || status == TaskStatus.SKIPPED) {
+            return;
+        }
+        status = TaskStatus.SKIPPED;
+        progress = 100;
+        completedAt = Instant.now();
+        errorMessage = message;
+    }
+
     private void require(TaskStatus expected) {
         if (status != expected) {
             throw new IllegalStateException("Expected task status " + expected + " but was " + status);
@@ -132,6 +182,9 @@ public class TaskRunEntity extends BaseEntity {
         return nodeKey;
     }
 
+    public String getAssetId() { return assetId; }
+    public String getInstanceKey() { return instanceKey; }
+
     public String getToolName() {
         return toolName;
     }
@@ -139,6 +192,9 @@ public class TaskRunEntity extends BaseEntity {
     public String getToolVersion() {
         return toolVersion;
     }
+
+    public String getInputBinding() { return inputBinding; }
+    public String getParametersJson() { return parametersJson; }
 
     public String getDependsOnTaskRunId() {
         return dependsOnTaskRunId;

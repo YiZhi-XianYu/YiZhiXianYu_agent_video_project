@@ -6,6 +6,6 @@ public enum TaskStatus {
     DISPATCHING,
     RUNNING,
     SUCCEEDED,
-    FAILED
+    FAILED,
+    SKIPPED
 }
-

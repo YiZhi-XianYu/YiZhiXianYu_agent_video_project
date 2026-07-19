@@ -53,6 +53,17 @@ code { color: var(--blue); }
 .progress span { display: block; width: 0; height: 100%; background: linear-gradient(90deg, var(--blue), var(--accent)); transition: width .35s ease; }
 .node-meta { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
 .artifact-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 18px; }
+.asset-list { display: grid; gap: 6px; margin-top: 10px; }
+.asset-item { color: var(--muted); font-size: 12px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
+.task-grid { display: grid; gap: 18px; margin: 28px 0; }
+.task-group { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; padding: 16px; border: 1px solid var(--border); border-radius: 14px; }
+.task-group-title, .shot-group-title { grid-column: 1 / -1; margin: 0; color: var(--accent); font-size: 15px; word-break: break-all; }
+.task-card { min-height: 190px; }
+.shots-panel { margin-top: 22px; padding-top: 24px; border-top: 1px solid var(--border); }
+.shot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-top: 18px; }
+.shot-card { display: grid; gap: 7px; padding: 14px; background: #0e181f; border: 1px solid var(--border); border-radius: 12px; }
+.shot-card img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 8px; background: #05090c; }
+.shot-card span, .shot-card small { color: var(--muted); }
 .metadata-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
 .metadata-grid div { background: #0e181f; padding: 18px; }
 .metadata-grid span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 8px; }

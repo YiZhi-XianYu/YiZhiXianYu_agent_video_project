@@ -6,6 +6,7 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
+import jakarta.persistence.Lob;
 
 import java.time.Instant;
 
@@ -16,7 +17,7 @@ public class WorkflowRunEntity extends BaseEntity {
     @Column(nullable = false, length = 40)
     private String projectId;
 
-    @Column(nullable = false, length = 40)
+    @Column(length = 40)
     private String assetId;
 
     @Column(nullable = false, length = 100)
@@ -24,6 +25,15 @@ public class WorkflowRunEntity extends BaseEntity {
 
     @Column(length = 20)
     private String proxyQuality;
+
+    @Column(length = 100)
+    private String definitionKey;
+
+    private Integer definitionVersion;
+
+    @Lob
+    @Column(columnDefinition = "LONGTEXT")
+    private String definitionJson;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
@@ -47,6 +57,27 @@ public class WorkflowRunEntity extends BaseEntity {
         this.assetId = assetId;
         this.workflowType = workflowType;
         this.proxyQuality = proxyQuality.value();
+        this.status = RunStatus.CREATED;
+        this.progress = 0;
+    }
+
+    public WorkflowRunEntity(
+        String projectId,
+        String legacyAssetId,
+        String workflowType,
+        ProxyQuality proxyQuality,
+        String definitionKey,
+        int definitionVersion,
+        String definitionJson
+    ) {
+        this.projectId = projectId;
+        // Keep the first Asset in the legacy column for databases created before multi-asset support.
+        this.assetId = legacyAssetId;
+        this.workflowType = workflowType;
+        this.proxyQuality = proxyQuality.value();
+        this.definitionKey = definitionKey;
+        this.definitionVersion = definitionVersion;
+        this.definitionJson = definitionJson;
         this.status = RunStatus.CREATED;
         this.progress = 0;
     }
@@ -96,6 +127,10 @@ public class WorkflowRunEntity extends BaseEntity {
     public ProxyQuality getProxyQuality() {
         return proxyQuality == null ? ProxyQuality.FHD_1080P : ProxyQuality.fromValue(proxyQuality);
     }
+
+    public String getDefinitionKey() { return definitionKey; }
+    public Integer getDefinitionVersion() { return definitionVersion; }
+    public String getDefinitionJson() { return definitionJson; }
 
     public RunStatus getStatus() {
         return status;

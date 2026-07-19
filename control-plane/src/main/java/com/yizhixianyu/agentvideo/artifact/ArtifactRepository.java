@@ -8,5 +8,5 @@ import java.util.Optional;
 public interface ArtifactRepository extends JpaRepository<ArtifactEntity, String> {
     Optional<ArtifactEntity> findByExternalArtifactId(String externalArtifactId);
     List<ArtifactEntity> findByProducerTaskRunId(String producerTaskRunId);
+    List<ArtifactEntity> findByProducerTaskRunIdIn(List<String> producerTaskRunIds);
 }
-

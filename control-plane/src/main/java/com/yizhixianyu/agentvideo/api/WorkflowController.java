@@ -5,6 +5,9 @@ import com.yizhixianyu.agentvideo.execution.ProxyQuality;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
+
+import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -34,6 +37,16 @@ public class WorkflowController {
         return new RunAccepted(run.getId(), run.getStatus().name(), "/api/v1/workflow-runs/" + run.getId());
     }
 
+    @PostMapping("/projects/{projectId}/multi-asset-analysis-runs")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public RunAccepted startMultiAssetAnalysis(
+        @PathVariable String projectId,
+        @Valid @RequestBody StartMultiAssetAnalysisRequest request
+    ) {
+        var run = workflowService.createMultiAssetAnalysisRun(projectId, request.assetIds(), request.quality());
+        return new RunAccepted(run.getId(), run.getStatus().name(), "/api/v1/workflow-runs/" + run.getId());
+    }
+
     @GetMapping("/workflow-runs/{workflowRunId}")
     public WorkflowExecutionService.WorkflowSnapshot getRun(@PathVariable String workflowRunId) {
         return workflowService.getSnapshot(workflowRunId);
@@ -41,6 +54,11 @@ public class WorkflowController {
 
     public record StartVideoProxyRequest(@NotBlank String assetId, @NotNull ProxyQuality quality) {
     }
+
+    public record StartMultiAssetAnalysisRequest(
+        @NotNull @Size(min = 1, max = 20) List<@NotBlank String> assetIds,
+        @NotNull ProxyQuality quality
+    ) {}
 
     public record RunAccepted(String workflowRunId, String status, String statusUrl) {
     }
