@@ -22,6 +22,9 @@ public class WorkflowRunEntity extends BaseEntity {
     @Column(nullable = false, length = 100)
     private String workflowType;
 
+    @Column(length = 20)
+    private String proxyQuality;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
     private RunStatus status;
@@ -39,18 +42,29 @@ public class WorkflowRunEntity extends BaseEntity {
     protected WorkflowRunEntity() {
     }
 
-    public WorkflowRunEntity(String projectId, String assetId) {
+    public WorkflowRunEntity(String projectId, String assetId, String workflowType, ProxyQuality proxyQuality) {
         this.projectId = projectId;
         this.assetId = assetId;
-        this.workflowType = "INITIAL_VIDEO_PROBE";
+        this.workflowType = workflowType;
+        this.proxyQuality = proxyQuality.value();
         this.status = RunStatus.CREATED;
         this.progress = 0;
     }
 
     public void start() {
         status = RunStatus.RUNNING;
-        progress = 5;
-        startedAt = Instant.now();
+        if (progress == 0) {
+            progress = 5;
+        }
+        if (startedAt == null) {
+            startedAt = Instant.now();
+        }
+    }
+
+    public void updateProgress(int progress) {
+        if (status == RunStatus.RUNNING) {
+            this.progress = Math.max(this.progress, Math.min(progress, 99));
+        }
     }
 
     public void succeed() {
@@ -77,6 +91,10 @@ public class WorkflowRunEntity extends BaseEntity {
 
     public String getWorkflowType() {
         return workflowType;
+    }
+
+    public ProxyQuality getProxyQuality() {
+        return proxyQuality == null ? ProxyQuality.FHD_1080P : ProxyQuality.fromValue(proxyQuality);
     }
 
     public RunStatus getStatus() {

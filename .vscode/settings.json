@@ -4,5 +4,13 @@
     "python.defaultInterpreterPath": "C:\\software\\Anaconda\\envs\\agent-video-pipeline\\python.exe",
     "python.terminal.activateEnvironment": true,
     "java.configuration.updateBuildConfiguration": "automatic",
-    "java.import.maven.enabled": true
+    "java.import.maven.enabled": true,
+    "java.jdt.ls.java.home": "C:\\Users\\XRZ\\.jdks\\ms-21.0.11",
+    "java.configuration.runtimes": [
+    {
+        "name": "JavaSE-21",
+        "path": "C:\\Users\\XRZ\\.jdks\\ms-21.0.11",
+        "default": true
+    }
+    ]
 }

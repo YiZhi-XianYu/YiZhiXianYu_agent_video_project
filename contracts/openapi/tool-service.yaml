@@ -1,7 +1,8 @@
 openapi: 3.1.0
 info:
   title: Agent Video Pipeline Tool Service
-  version: 0.1.0
+  version: 0.2.0
+  description: Versioned asynchronous Tool API used by video.probe and video.proxy-generate.
 paths:
   /api/v1/tools:
     get:
@@ -26,5 +27,4 @@ paths:
             type: string
       responses:
         "200":
-          description: Execution status
-
+          description: Execution status, progress, outputs and normalized error

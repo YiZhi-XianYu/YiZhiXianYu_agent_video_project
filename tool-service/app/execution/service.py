@@ -63,7 +63,7 @@ class ExecutionService:
         )
         try:
             tool = registry.get(request.tool, request.version)
-            outputs = tool.execute(request)
+            outputs = tool.execute(request, lambda progress: self._report_progress(execution_id, progress))
             record = self._update(
                 execution_id,
                 status=ExecutionStatus.SUCCEEDED,
@@ -85,6 +85,9 @@ class ExecutionService:
             )
         self._callback(request, record)
 
+    def _report_progress(self, execution_id: str, progress: int) -> None:
+        self._update(execution_id, progress=max(10, min(progress, 99)))
+
     def _update(self, execution_id: str, **changes) -> ToolExecutionRecord:
         with self._lock:
             record = self._records[execution_id]
@@ -105,4 +108,3 @@ class ExecutionService:
 
 
 execution_service = ExecutionService()
-

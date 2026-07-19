@@ -25,6 +25,9 @@ public class TaskRunEntity extends BaseEntity {
     @Column(nullable = false, length = 30)
     private String toolVersion;
 
+    @Column(length = 40)
+    private String dependsOnTaskRunId;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
     private TaskStatus status;
@@ -45,11 +48,18 @@ public class TaskRunEntity extends BaseEntity {
     protected TaskRunEntity() {
     }
 
-    public TaskRunEntity(String workflowRunId) {
+    public TaskRunEntity(
+        String workflowRunId,
+        String nodeKey,
+        String toolName,
+        String toolVersion,
+        String dependsOnTaskRunId
+    ) {
         this.workflowRunId = workflowRunId;
-        this.nodeKey = "video_probe";
-        this.toolName = "video.probe";
-        this.toolVersion = "1.0.0";
+        this.nodeKey = nodeKey;
+        this.toolName = toolName;
+        this.toolVersion = toolVersion;
+        this.dependsOnTaskRunId = dependsOnTaskRunId;
         this.status = TaskStatus.PENDING;
         this.progress = 0;
         this.attempt = 0;
@@ -76,6 +86,13 @@ public class TaskRunEntity extends BaseEntity {
         if (startedAt == null) {
             startedAt = Instant.now();
         }
+    }
+
+    public void updateProgress(int progress) {
+        if (status != TaskStatus.RUNNING) {
+            return;
+        }
+        this.progress = Math.max(this.progress, Math.min(progress, 99));
     }
 
     public void markSucceeded() {
@@ -121,6 +138,10 @@ public class TaskRunEntity extends BaseEntity {
 
     public String getToolVersion() {
         return toolVersion;
+    }
+
+    public String getDependsOnTaskRunId() {
+        return dependsOnTaskRunId;
     }
 
     public TaskStatus getStatus() {

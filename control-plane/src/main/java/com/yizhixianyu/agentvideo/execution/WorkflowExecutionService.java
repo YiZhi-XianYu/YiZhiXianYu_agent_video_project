@@ -55,17 +55,23 @@ public class WorkflowExecutionService {
     }
 
     @Transactional
-    public WorkflowRunEntity createVideoProbeRun(String projectId, String assetId) {
+    public WorkflowRunEntity createVideoProxyRun(String projectId, String assetId, ProxyQuality proxyQuality) {
         projectService.getRequired(projectId);
         var asset = assetService.getRequired(assetId);
         if (!projectId.equals(asset.getProjectId())) {
             throw new IllegalArgumentException("Asset does not belong to project");
         }
-        var workflow = workflowRepository.save(new WorkflowRunEntity(projectId, assetId));
-        var task = new TaskRunEntity(workflow.getId());
-        task.markReady();
-        taskRepository.save(task);
-        eventPublisher.publishEvent(new WorkflowDispatchRequested(workflow.getId(), task.getId()));
+        var workflow = workflowRepository.save(new WorkflowRunEntity(
+            projectId, assetId, "VIDEO_PROXY_PIPELINE", proxyQuality
+        ));
+        var probeTask = taskRepository.save(new TaskRunEntity(
+            workflow.getId(), "video_probe", "video.probe", "1.0.0", null
+        ));
+        taskRepository.save(new TaskRunEntity(
+            workflow.getId(), "video_proxy_generate", "video.proxy-generate", "1.0.0", probeTask.getId()
+        ));
+        probeTask.markReady();
+        eventPublisher.publishEvent(new WorkflowDispatchRequested(workflow.getId(), probeTask.getId()));
         return workflow;
     }
 
@@ -76,13 +82,16 @@ public class WorkflowExecutionService {
         var asset = assetService.getRequired(workflow.getAssetId());
         workflow.start();
         task.markDispatching();
-        var idempotencyKey = "video-probe:" + task.getId() + ":" + task.getAttempt();
+        var idempotencyKey = task.getNodeKey() + ":" + task.getId() + ":" + task.getAttempt();
+        Map<String, Object> parameters = "video.proxy-generate".equals(task.getToolName())
+            ? Map.of("quality", workflow.getProxyQuality().value())
+            : Map.of();
         var request = new ToolServiceClient.CreateToolExecutionRequest(
             task.getToolName(),
             task.getToolVersion(),
             idempotencyKey,
             Map.of("video", new ToolServiceClient.ArtifactInput(asset.getId(), asset.getStorageUri(), asset.getFileName())),
-            Map.of(),
+            parameters,
             publicBaseUrl + "/internal/tool-callbacks",
             new ToolServiceClient.TraceContext(UUID.randomUUID().toString(), workflow.getId(), task.getId())
         );
@@ -120,6 +129,7 @@ public class WorkflowExecutionService {
 
         if ("RUNNING".equals(response.status())) {
             task.markRunning();
+            task.updateProgress(response.progress());
             return;
         }
         if ("QUEUED".equals(response.status())) {
@@ -135,13 +145,32 @@ public class WorkflowExecutionService {
                 }
             }
             task.markSucceeded();
-            workflow.succeed();
+            advanceWorkflow(workflow, task);
             return;
         }
         if ("FAILED".equals(response.status()) || "CANCELLED".equals(response.status())) {
             var message = response.error() == null ? "Tool execution failed" : response.error().message();
             task.markFailed(message);
             workflow.fail(message);
+        }
+    }
+
+    private void advanceWorkflow(WorkflowRunEntity workflow, TaskRunEntity completedTask) {
+        var tasks = taskRepository.findByWorkflowRunIdOrderByCreatedAtAsc(workflow.getId());
+        var successors = tasks.stream()
+            .filter(task -> completedTask.getId().equals(task.getDependsOnTaskRunId()))
+            .filter(task -> task.getStatus() == TaskStatus.PENDING)
+            .toList();
+        for (var successor : successors) {
+            successor.markReady();
+            eventPublisher.publishEvent(new WorkflowDispatchRequested(workflow.getId(), successor.getId()));
+        }
+
+        var succeeded = tasks.stream().filter(task -> task.getStatus() == TaskStatus.SUCCEEDED).count();
+        if (succeeded == tasks.size()) {
+            workflow.succeed();
+        } else {
+            workflow.updateProgress((int) (succeeded * 100 / tasks.size()));
         }
     }
 
@@ -152,15 +181,16 @@ public class WorkflowExecutionService {
         var tasks = taskRepository.findByWorkflowRunIdOrderByCreatedAtAsc(workflowRunId);
         var taskSnapshots = tasks.stream().map(task -> new TaskSnapshot(
             task.getId(), task.getNodeKey(), task.getToolName(), task.getToolVersion(), task.getStatus(),
-            task.getProgress(), task.getAttempt(), task.getErrorMessage(),
+            task.getDependsOnTaskRunId(), task.getProgress(), task.getAttempt(), task.getErrorMessage(),
             artifactRepository.findByProducerTaskRunId(task.getId()).stream()
                 .map(artifact -> new ArtifactSnapshot(
                     artifact.getId(), artifact.getType(), artifact.getStorageUri(), artifact.getMediaType(),
-                    artifact.getMetadataJson()
+                    artifact.getMetadataJson(), "/api/v1/artifacts/" + artifact.getId() + "/content"
                 )).toList()
         )).toList();
         return new WorkflowSnapshot(
             workflow.getId(), workflow.getProjectId(), workflow.getAssetId(), workflow.getWorkflowType(),
+            workflow.getProxyQuality().value(),
             workflow.getStatus(), workflow.getProgress(), workflow.getErrorMessage(), taskSnapshots
         );
     }
@@ -193,19 +223,20 @@ public class WorkflowExecutionService {
     }
 
     public record WorkflowSnapshot(
-        String id, String projectId, String assetId, String workflowType, RunStatus status, int progress,
+        String id, String projectId, String assetId, String workflowType, String proxyQuality,
+        RunStatus status, int progress,
         String errorMessage, List<TaskSnapshot> tasks
     ) {
     }
 
     public record TaskSnapshot(
-        String id, String nodeKey, String toolName, String toolVersion, TaskStatus status, int progress,
-        int attempt, String errorMessage, List<ArtifactSnapshot> artifacts
+        String id, String nodeKey, String toolName, String toolVersion, TaskStatus status,
+        String dependsOnTaskRunId, int progress, int attempt, String errorMessage, List<ArtifactSnapshot> artifacts
     ) {
     }
 
     public record ArtifactSnapshot(
-        String id, String type, String storageUri, String mediaType, String metadataJson
+        String id, String type, String storageUri, String mediaType, String metadataJson, String contentUrl
     ) {
     }
 }

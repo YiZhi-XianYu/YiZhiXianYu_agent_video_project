@@ -1,15 +1,5 @@
 # 在 VS Code 中配置 Java 21
 
-## 当前机器状态
-
-本机当前安装的是 JDK 25：
-
-```text
-C:\software\Java
-```
-
-IntelliJ IDEA 自带的 JetBrains Runtime 也是 Java 25，因此目前没有可以直接配置的 JDK 21 目录。项目的 Maven 编译目标已经设置为 Java 21，所以即使用 JDK 25 启动 Maven，也只会接受 Java 21 范围内的源码并输出 Java 21 字节码。
-
 ## 推荐安装方式：使用 VS Code 安装 JDK
 
 1. 在 VS Code 扩展市场安装 `Extension Pack for Java`。

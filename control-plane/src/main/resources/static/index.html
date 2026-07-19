@@ -3,16 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Agent Video Pipeline - First Vertical Slice</title>
+    <title>Agent Video Pipeline - Proxy Vertical Slice</title>
     <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
 <main class="shell">
     <header class="hero">
         <div>
-            <p class="eyebrow">FIRST VERTICAL SLICE</p>
+            <p class="eyebrow">SECOND VERTICAL SLICE</p>
             <h1>Agent-Driven Video Pipeline</h1>
-            <p class="lead">创建项目、上传视频，并通过 Java Workflow 调用 Python Tool Service 完成视频技术信息分析。</p>
+            <p class="lead">上传视频后，Java 依次调度分析与代理生成 Tool，并按用户选择输出可直接预览的 4K、2K、1080p 或 720p MP4。</p>
         </div>
         <div class="service-state" id="service-state">等待开始</div>
     </header>
@@ -39,8 +39,15 @@
         <article class="card">
             <span class="step-index">03</span>
             <h2>启动工作流</h2>
-            <p class="explain">Java 创建单节点 Workflow，然后通过 HTTP 调用 <code>video.probe@1.0.0</code>。</p>
-            <button id="start-workflow" disabled>开始分析</button>
+            <p class="explain">Java 创建两节点 Workflow：<code>video.probe</code> 成功后自动解锁 <code>video.proxy-generate</code>。</p>
+            <label for="proxy-quality">输出清晰度</label>
+            <select id="proxy-quality">
+                <option value="4K">4K · 3840×2160</option>
+                <option value="2K">2K · 2560×1440</option>
+                <option value="1080P" selected>1080p · 高清</option>
+                <option value="720P">720p · 标清</option>
+            </select>
+            <button id="start-workflow" disabled>分析并生成代理视频</button>
             <p class="result" id="workflow-result">需要先上传视频</p>
         </article>
     </section>
@@ -54,25 +61,46 @@
             <span class="status neutral" id="run-status">未运行</span>
         </div>
 
-        <div class="pipeline">
-            <div class="node" id="task-node">
+        <div class="pipeline two-stage">
+            <div class="node" id="probe-task-node">
                 <div class="node-topline">
                     <span class="node-icon">VP</span>
-                    <span class="status neutral" id="task-status">PENDING</span>
+                    <span class="status neutral" id="probe-task-status">PENDING</span>
                 </div>
                 <h3>Video Probe</h3>
                 <p>Tool: <code>video.probe@1.0.0</code></p>
-                <div class="progress"><span id="progress-bar"></span></div>
+                <div class="progress"><span id="probe-progress-bar"></span></div>
                 <div class="node-meta">
-                    <span>进度 <b id="task-progress">0%</b></span>
-                    <span>尝试 <b id="task-attempt">0</b></span>
+                    <span>进度 <b id="probe-task-progress">0%</b></span>
+                    <span>尝试 <b id="probe-task-attempt">0</b></span>
                 </div>
             </div>
             <div class="arrow">→</div>
+            <div class="node" id="proxy-task-node">
+                <div class="node-topline">
+                    <span class="node-icon proxy">PX</span>
+                    <span class="status neutral" id="proxy-task-status">PENDING</span>
+                </div>
+                <h3>Proxy Generate</h3>
+                <p>Tool: <code>video.proxy-generate@1.0.0</code></p>
+                <div class="progress"><span id="proxy-progress-bar"></span></div>
+                <div class="node-meta">
+                    <span>进度 <b id="proxy-task-progress">0%</b></span>
+                    <span>尝试 <b id="proxy-task-attempt">0</b></span>
+                </div>
+            </div>
+        </div>
+
+        <div class="artifact-summary">
             <div class="artifact-card">
-                <p class="eyebrow">ARTIFACT</p>
+                <p class="eyebrow">ARTIFACT 01</p>
                 <h3>Video Metadata</h3>
-                <p id="artifact-state">等待 Tool 输出</p>
+                <p id="metadata-artifact-state">等待 video.probe 输出</p>
+            </div>
+            <div class="artifact-card">
+                <p class="eyebrow">ARTIFACT 02</p>
+                <h3>Video Proxy</h3>
+                <p id="proxy-artifact-state">等待 video.proxy-generate 输出</p>
             </div>
         </div>
 
@@ -84,10 +112,20 @@
             <div><span>音频编码</span><strong id="meta-audio-codec">-</strong></div>
             <div><span>文件大小</span><strong id="meta-size">-</strong></div>
         </div>
+        <section class="proxy-preview" id="proxy-preview" hidden>
+            <div class="workspace-header">
+                <div>
+                    <p class="eyebrow">GENERATED VIDEO ARTIFACT</p>
+                    <h2>代理视频预览</h2>
+                </div>
+                <a id="proxy-download" class="download-link" download>下载 MP4</a>
+            </div>
+            <video id="proxy-video" controls preload="metadata"></video>
+            <p class="result" id="proxy-details"></p>
+        </section>
         <pre id="error-box" hidden></pre>
     </section>
 </main>
 <script src="/app.js"></script>
 </body>
 </html>
-

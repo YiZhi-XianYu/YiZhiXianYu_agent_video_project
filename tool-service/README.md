@@ -14,3 +14,7 @@ Python Tool Service 是系统的能力执行面，通过统一 HTTP API 暴露�
 
 每项能力都是独立 Tool。Tool 不直接修改 Java 工作流状态，也不把大型二进制数据塞入 JSON。
 
+## 当前 Tool
+
+- `video.probe@1.0.0`：生成 `VIDEO_METADATA`；
+- `video.proxy-generate@1.0.0`：生成浏览器兼容的 `VIDEO_PROXY`，并报告 FFmpeg 转码进度。

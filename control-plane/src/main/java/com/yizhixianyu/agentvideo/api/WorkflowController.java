@@ -1,8 +1,10 @@
 package com.yizhixianyu.agentvideo.api;
 
 import com.yizhixianyu.agentvideo.execution.WorkflowExecutionService;
+import com.yizhixianyu.agentvideo.execution.ProxyQuality;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -22,13 +24,13 @@ public class WorkflowController {
         this.workflowService = workflowService;
     }
 
-    @PostMapping("/projects/{projectId}/video-probe-runs")
+    @PostMapping("/projects/{projectId}/video-proxy-runs")
     @ResponseStatus(HttpStatus.ACCEPTED)
-    public RunAccepted startVideoProbe(
+    public RunAccepted startVideoProxyPipeline(
         @PathVariable String projectId,
-        @Valid @RequestBody StartVideoProbeRequest request
+        @Valid @RequestBody StartVideoProxyRequest request
     ) {
-        var run = workflowService.createVideoProbeRun(projectId, request.assetId());
+        var run = workflowService.createVideoProxyRun(projectId, request.assetId(), request.quality());
         return new RunAccepted(run.getId(), run.getStatus().name(), "/api/v1/workflow-runs/" + run.getId());
     }
 
@@ -37,10 +39,9 @@ public class WorkflowController {
         return workflowService.getSnapshot(workflowRunId);
     }
 
-    public record StartVideoProbeRequest(@NotBlank String assetId) {
+    public record StartVideoProxyRequest(@NotBlank String assetId, @NotNull ProxyQuality quality) {
     }
 
     public record RunAccepted(String workflowRunId, String status, String statusUrl) {
     }
 }
-

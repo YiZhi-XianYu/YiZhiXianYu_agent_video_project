@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -31,7 +32,11 @@ class VideoProbeTool:
             "outputTypes": ["VIDEO_METADATA"],
         }
 
-    def execute(self, request: ToolExecutionRequest) -> list[ArtifactDescriptor]:
+    def execute(
+        self,
+        request: ToolExecutionRequest,
+        report_progress: Callable[[int], None] | None = None,
+    ) -> list[ArtifactDescriptor]:
         video_input = request.inputs.get("video")
         if video_input is None:
             raise ValueError("video.probe requires inputs.video")
@@ -55,6 +60,8 @@ class VideoProbeTool:
             raise RuntimeError(process.stderr.strip() or "ffprobe failed")
 
         raw = json.loads(process.stdout)
+        if report_progress is not None:
+            report_progress(80)
         metadata = self._normalize(raw)
         payload = json.dumps(metadata, ensure_ascii=False, indent=2).encode("utf-8")
         content_hash = hashlib.sha256(payload).hexdigest()
@@ -137,4 +144,3 @@ class VideoProbeTool:
             return round(float(numerator) / float(denominator), 3)
         except (ValueError, ZeroDivisionError):
             return None
-

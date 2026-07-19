@@ -4,6 +4,8 @@
 > 当前阶段：第一条垂直链路已完成并通过真实端到端验证  
 > 用途：第一天开发记录、本机运行说明、新对话窗口交接入口
 
+> 历史说明：本文记录 Day 1 基线。第二阶段已经完成，当前开发入口请阅读 [`second-vertical-slice.md`](second-vertical-slice.md)。
+
 ## 1. 新窗口先读这里
 
 本项目是 **Agent-Driven Intelligent Video Production Pipeline**。完整目标是通过大模型理解用户意图、生成 Workflow DAG、调用独立 AI Tool 并最终渲染视频。
@@ -511,4 +513,3 @@ docs/modules/control-plane/README.md
 - [Java 控制面模块映射](modules/control-plane/README.md)
 - [VS Code Java 21 配置](vscode-java21.md)
 - [项目根说明](../README.md)
-

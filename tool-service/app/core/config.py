@@ -6,6 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8090
+    ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
     artifact_root: Path = Path("runtime/artifacts")
     callback_timeout_seconds: float = 10.0
@@ -17,4 +18,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-

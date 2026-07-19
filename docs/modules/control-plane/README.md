@@ -28,14 +28,14 @@ control-plane/src/main/java/com/yizhixianyu/agentvideo/
 | 逻辑模块 | 当前源码位置 | 状态 |
 |---|---|---|
 | App Bootstrap | `agentvideo/AgentVideoControlPlaneApplication.java` | 已实现基础启动 |
-| Interface API | `agentvideo/api/` | 已实现第一条链路 API |
+| Interface API | `agentvideo/api/` | 已实现项目、素材、代理工作流与 Artifact 内容 API |
 | Project Domain | `agentvideo/project/` | 已实现 |
 | Asset Domain | `agentvideo/asset/`、`agentvideo/artifact/` | 已实现基础素材与 Artifact |
-| Execution Domain | `agentvideo/execution/` | 已实现单节点 Workflow 与状态机 |
+| Execution Domain | `agentvideo/execution/` | 已实现两节点串行依赖调度与状态机 |
 | Storage Infrastructure | `agentvideo/storage/` | 已实现本地存储适配器 |
 | Tool Client Infrastructure | `agentvideo/toolclient/` | 已实现 Python HTTP Tool Client |
 | Planning Domain | 尚未创建源码包 | 待实现 LLM Planner |
-| Workflow Domain | 当前暂含于 `execution/` | 待提取通用 DAG 定义与校验 |
+| Workflow Domain | 当前暂含于 `execution/` | 已实现单前置依赖，待提取通用 DAG 定义与校验 |
 | Context Domain | 尚未创建源码包 | 待实现 |
 | Explanation Domain | 尚未创建源码包 | 待实现 |
 | Tool Registry Domain | 尚未创建源码包 | 待实现 |

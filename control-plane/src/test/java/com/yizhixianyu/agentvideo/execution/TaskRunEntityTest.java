@@ -8,7 +8,9 @@ class TaskRunEntityTest {
 
     @Test
     void followsTheFirstVerticalSliceStateMachine() {
-        var task = new TaskRunEntity("workflow-1");
+        var task = new TaskRunEntity(
+            "workflow-1", "video_probe", "video.probe", "1.0.0", null
+        );
 
         task.markReady();
         task.markDispatching();
@@ -19,5 +21,14 @@ class TaskRunEntityTest {
         assertThat(task.getProgress()).isEqualTo(100);
         assertThat(task.getAttempt()).isEqualTo(1);
     }
-}
 
+    @Test
+    void keepsThePredecessorForSerialScheduling() {
+        var task = new TaskRunEntity(
+            "workflow-1", "video_proxy_generate", "video.proxy-generate", "1.0.0", "probe-task"
+        );
+
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.PENDING);
+        assertThat(task.getDependsOnTaskRunId()).isEqualTo("probe-task");
+    }
+}
