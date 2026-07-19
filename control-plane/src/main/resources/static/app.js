@@ -2,6 +2,8 @@ const state = { projectId: null, assetId: null, assetIds: [], assets: [], workfl
 
 const el = (id) => document.getElementById(id);
 
+document.addEventListener("DOMContentLoaded", loadProjects);
+
 async function request(url, options = {}) {
     const response = await fetch(url, options);
     const body = response.status === 204 ? null : await response.json();
@@ -20,6 +22,46 @@ el("create-project").addEventListener("click", async () => {
         el("project-result").textContent = `已创建：${project.name} (${project.id})`;
         el("upload-video").disabled = false;
         el("asset-result").textContent = "请选择一个或多个视频并上传";
+        await loadProjects(project.id);
+        await loadWorkflowHistory();
+    } catch (error) { showError(error); }
+});
+
+el("load-project").addEventListener("click", async () => {
+    const projectId = el("project-select").value;
+    if (!projectId) return showError(new Error("请选择一个历史项目"));
+    try {
+        clearInterval(state.timer);
+        const project = el("project-select").selectedOptions[0];
+        const assets = await request(`/api/v1/projects/${projectId}/assets`);
+        state.projectId = projectId;
+        state.workflowRunId = null;
+        state.assets = assets;
+        state.assetId = assets[0]?.id || null;
+        renderAssets(assets);
+        el("project-result").textContent = `已载入：${project.dataset.name} (${projectId})`;
+        el("upload-video").disabled = false;
+        el("asset-result").textContent = assets.length ? `已读取 ${assets.length} 个历史素材` : "项目暂无素材，可继续上传";
+        el("workflow-result").textContent = assets.length ? "历史素材可用，可以启动新分析" : "需要先上传视频";
+        await loadWorkflowHistory();
+        setServiceState("历史项目已载入");
+    } catch (error) { showError(error); }
+});
+
+el("load-workflow").addEventListener("click", async () => {
+    const workflowRunId = el("workflow-select").value;
+    if (!workflowRunId) return showError(new Error("请选择一个历史 Workflow"));
+    try {
+        clearInterval(state.timer);
+        state.workflowRunId = workflowRunId;
+        const run = await request(`/api/v1/workflow-runs/${workflowRunId}`);
+        renderRun(run);
+        el("workflow-result").textContent = `正在回看历史 Workflow：${workflowRunId}`;
+        el("error-box").hidden = true;
+        setServiceState(run.status === "RUNNING" ? "历史 Workflow 仍在运行" : "历史 Workflow 已载入");
+        if (!["SUCCEEDED", "FAILED"].includes(run.status)) {
+            state.timer = setInterval(refreshRun, 1200);
+        }
     } catch (error) { showError(error); }
 });
 
@@ -53,7 +95,7 @@ el("start-workflow").addEventListener("click", async () => {
         state.workflowRunId = accepted.workflowRunId;
         el("workflow-result").textContent = `Workflow 已创建：${accepted.workflowRunId}，输出 ${el("proxy-quality").value}`;
         el("error-box").hidden = true;
-        setServiceState("Java 正在执行多素材分析工作流");
+        setServiceState("Java 正在执行多素材分析与决策工作流");
         await refreshRun();
         state.timer = setInterval(refreshRun, 1200);
     } catch (error) { showError(error); }
@@ -66,7 +108,7 @@ async function refreshRun() {
         renderRun(run);
         if (["SUCCEEDED", "FAILED"].includes(run.status)) {
             clearInterval(state.timer);
-            setServiceState(run.status === "SUCCEEDED" ? "多素材分析链路已完成" : "工作流执行失败");
+            setServiceState(run.status === "SUCCEEDED" ? "评分、排序、高光与 Timeline 已完成" : "工作流执行失败");
         }
     } catch (error) { showError(error); }
 }
@@ -84,6 +126,42 @@ function renderRun(run) {
     const proxyArtifact = (run.tasks || []).flatMap(task => task.artifacts || []).find(artifact => artifact.type === "VIDEO_PROXY");
     if (proxyArtifact) renderProxy(proxyArtifact);
     renderShots(run.tasks || []);
+    renderDecisions(run.tasks || []);
+}
+
+async function loadProjects(selectedId = null) {
+    try {
+        const projects = await request("/api/v1/projects");
+        const select = el("project-select");
+        select.replaceChildren(new Option(projects.length ? "请选择历史项目" : "暂无历史项目", ""));
+        projects.forEach(project => {
+            const option = new Option(`${project.name} · ${project.status}`, project.id);
+            option.dataset.name = project.name;
+            select.add(option);
+        });
+        if (selectedId) select.value = selectedId;
+        el("load-project").disabled = !projects.length;
+    } catch (error) { showError(error); }
+}
+
+async function loadWorkflowHistory(selectedId = null) {
+    const select = el("workflow-select");
+    if (!state.projectId) {
+        select.replaceChildren(new Option("请先载入项目", ""));
+        select.disabled = true;
+        el("load-workflow").disabled = true;
+        return;
+    }
+    const runs = await request(`/api/v1/projects/${state.projectId}/workflow-runs`);
+    select.replaceChildren(new Option(runs.length ? "请选择历史 Workflow" : "暂无历史 Workflow", ""));
+    runs.forEach(run => {
+        const timestamp = run.createdAt ? new Date(run.createdAt).toLocaleString("zh-CN", { hour12: false }) : "未知时间";
+        const label = `${timestamp} · ${run.workflowType} · ${run.status} · ${run.assetCount}素材/${run.taskCount}任务`;
+        select.add(new Option(label, run.id));
+    });
+    if (selectedId) select.value = selectedId;
+    select.disabled = !runs.length;
+    el("load-workflow").disabled = !runs.length;
 }
 
 function renderAssets(assets) {
@@ -119,7 +197,8 @@ function renderTasks(tasks) {
             status.className = "status";
             setStatus(status, task.status);
             status.textContent = task.status;
-            card.innerHTML = `<div class="node-topline"><span class="node-icon">${task.nodeKey.slice(0, 2).toUpperCase()}</span></div><h3>${task.nodeKey}</h3><p>${asset?.fileName || "Workflow"}</p><p><code>${task.toolName}@${task.toolVersion}</code></p><div class="progress"><span style="width:${task.progress}%"></span></div><div class="node-meta"><span>${task.progress}%</span><span>尝试 ${task.attempt}</span></div>`;
+            const retryLabel = task.retryCount ? ` · 重试 ${task.retryCount}` : "";
+            card.innerHTML = `<div class="node-topline"><span class="node-icon">${task.nodeKey.slice(0, 2).toUpperCase()}</span></div><h3>${task.nodeKey}</h3><p>${asset?.fileName || "Workflow"}</p><p><code>${task.toolName}@${task.toolVersion}</code></p><div class="progress"><span style="width:${task.progress}%"></span></div><div class="node-meta"><span>${task.progress}%</span><span>尝试 ${task.attempt}${retryLabel}</span></div>`;
             card.querySelector(".node-topline").append(status);
             return card;
         }));
@@ -139,6 +218,18 @@ function renderShots(tasks) {
             });
             return { asset, shots };
         });
+    const qualityByShot = new Map(tasks.flatMap(task => task.artifacts || [])
+        .filter(artifact => artifact.type === "SHOT_QUALITY")
+        .flatMap(artifact => parseMetadata(artifact).shots || [])
+        .map(shot => [shot.shotId, shot]));
+    const rankingByShot = new Map(tasks.flatMap(task => task.artifacts || [])
+        .filter(artifact => artifact.type === "SHOT_RANKING")
+        .flatMap(artifact => parseMetadata(artifact).shots || [])
+        .map(shot => [shot.shotId, shot]));
+    const selectedIds = new Set(tasks.flatMap(task => task.artifacts || [])
+        .filter(artifact => artifact.type === "HIGHLIGHT_SET")
+        .flatMap(artifact => parseMetadata(artifact).shots || [])
+        .map(shot => shot.shotId));
     const shotCount = groups.reduce((total, group) => total + group.shots.length, 0);
     el("shots-panel").hidden = !shotCount;
     el("shot-count").textContent = `${shotCount} SHOTS`;
@@ -148,13 +239,13 @@ function renderShots(tasks) {
         heading.textContent = group.asset?.fileName || "素材";
         return [heading, ...group.shots.map(shot => {
             const card = document.createElement("article");
-            card.className = "shot-card";
+            card.className = `shot-card${selectedIds.has(shot.shotId) ? " selected" : ""}`;
             const keyframe = keyframes.get(shot.keyframeArtifactId);
             if (keyframe) {
                 const image = document.createElement("img");
                 image.src = keyframe.contentUrl;
                 image.alt = `${group.asset?.fileName || "素材"} Shot ${shot.index + 1} 关键帧`;
-                image.loading = "eager";
+                image.loading = "lazy";
                 card.append(image);
             }
             const title = document.createElement("strong");
@@ -164,9 +255,68 @@ function renderShots(tasks) {
             const detail = document.createElement("small");
             detail.textContent = `${(shot.durationMs / 1000).toFixed(2)} 秒 · 置信度 ${shot.boundaryConfidence}`;
             card.append(title, range, detail);
+            const quality = qualityByShot.get(shot.shotId);
+            const ranking = rankingByShot.get(shot.shotId);
+            if (quality) {
+                const total = document.createElement("strong");
+                total.className = "score-total";
+                total.textContent = `质量 ${(quality.qualityScore * 100).toFixed(1)}${ranking ? ` · #${ranking.rank}` : ""}`;
+                const scores = document.createElement("div");
+                scores.className = "score-grid";
+                scores.innerHTML = `<span>清晰 ${(quality.clarity * 100).toFixed(0)}</span><span>曝光 ${(quality.exposure * 100).toFixed(0)}</span><span>稳定 ${(quality.stability * 100).toFixed(0)}</span><span>构图 ${(quality.composition * 100).toFixed(0)}</span>`;
+                card.append(total, scores);
+            }
+            if (selectedIds.has(shot.shotId)) {
+                const badge = document.createElement("small");
+                badge.textContent = "已入选高光 Timeline";
+                card.append(badge);
+            }
             return card;
         })];
     }));
+}
+
+function renderDecisions(tasks) {
+    const artifacts = tasks.flatMap(task => task.artifacts || []);
+    const ranking = artifacts.find(artifact => artifact.type === "SHOT_RANKING");
+    const story = artifacts.find(artifact => artifact.type === "STORY_PLAN");
+    const highlights = artifacts.find(artifact => artifact.type === "HIGHLIGHT_SET");
+    const timeline = artifacts.find(artifact => artifact.type === "TIMELINE");
+    el("decision-panel").hidden = !timeline;
+    if (!timeline) return;
+    const rankingData = ranking ? parseMetadata(ranking) : {};
+    const storyData = story ? parseMetadata(story) : {};
+    const highlightData = highlights ? parseMetadata(highlights) : {};
+    const timelineData = parseMetadata(timeline);
+    el("timeline-duration").textContent = `${(timelineData.durationMs / 1000).toFixed(2)}s`;
+    const summary = [
+        ["跨素材候选", `${rankingData.shotCount ?? 0} shots`],
+        ["入选高光", `${highlightData.selectedShotCount ?? 0} shots`],
+        ["Timeline", `${timelineData.canvas?.width ?? "-"}×${timelineData.canvas?.height ?? "-"} @ ${timelineData.canvas?.fps ?? "-"} FPS`]
+    ];
+    el("decision-summary").replaceChildren(...summary.map(([label, value]) => {
+        const item = document.createElement("div");
+        item.innerHTML = `<span>${label}</span><strong>${value}</strong>`;
+        return item;
+    }));
+    el("story-beats").replaceChildren(...(storyData.beats || []).map(beat => {
+        const item = document.createElement("article");
+        item.className = "story-beat";
+        item.innerHTML = `<strong>${beat.role}</strong><span>${(beat.actualDurationMs / 1000).toFixed(2)}s / ${(beat.targetDurationMs / 1000).toFixed(2)}s</span><small>${beat.shots?.length ?? 0} shots</small>`;
+        return item;
+    }));
+    const clips = timelineData.tracks?.find(track => track.type === "VIDEO")?.clips || [];
+    el("timeline-track").replaceChildren(...clips.map((clip, index) => {
+        const item = document.createElement("div");
+        item.className = "timeline-clip";
+        const asset = state.assets.find(value => value.id === clip.assetId);
+        item.innerHTML = `<strong>${index + 1}. ${asset?.fileName || clip.assetId}</strong><small>${clip.storyRole} · ${(clip.sourceInMs / 1000).toFixed(2)}s - ${(clip.sourceOutMs / 1000).toFixed(2)}s</small><small>rank #${clip.selectionRank}</small>`;
+        return item;
+    }));
+}
+
+function parseMetadata(artifact) {
+    try { return JSON.parse(artifact.metadataJson) || {}; } catch { return {}; }
 }
 
 function renderMetadata(artifact) {
@@ -192,7 +342,7 @@ function renderProxy(artifact) {
 }
 
 function setStatus(node, status) {
-    node.className = "status " + (status === "SUCCEEDED" ? "success" : status === "FAILED" ? "failed" : ["RUNNING", "DISPATCHING", "READY"].includes(status) ? "running" : "neutral");
+    node.className = "status " + (status === "SUCCEEDED" ? "success" : status === "FAILED" ? "failed" : ["RUNNING", "DISPATCHING", "READY", "RETRY_WAIT"].includes(status) ? "running" : "neutral");
 }
 
 function setServiceState(text) { el("service-state").textContent = text; }

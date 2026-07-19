@@ -22,13 +22,18 @@ public class WorkflowDispatchListener {
     public void onDispatchRequested(WorkflowExecutionService.WorkflowDispatchRequested event) {
         try {
             var context = workflowService.prepareDispatch(event.workflowRunId(), event.taskRunId());
+            if (context == null) {
+                return;
+            }
             var accepted = toolClient.createExecution(context.request());
-            workflowService.markAccepted(event.taskRunId(), context.idempotencyKey(), accepted);
+            workflowService.markAccepted(
+                event.workflowRunId(), event.taskRunId(), context.idempotencyKey(), accepted
+            );
         } catch (Exception exc) {
+            var message = WorkflowExecutionService.rootMessage(exc);
             workflowService.markDispatchFailed(
-                event.workflowRunId(), event.taskRunId(), WorkflowExecutionService.rootMessage(exc)
+                event.workflowRunId(), event.taskRunId(), message
             );
         }
     }
 }
-

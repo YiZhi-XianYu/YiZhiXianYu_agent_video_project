@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yizhixianyu.com/contracts/timeline/timeline.schema.json",
+  "title": "Deterministic Video Timeline",
+  "type": "object",
+  "required": ["timelineId", "version", "schemaVersion", "sourceHighlightArtifactId", "canvas", "durationMs", "tracks", "validation"],
+  "additionalProperties": false,
+  "properties": {
+    "timelineId": { "type": "string", "pattern": "^tl_[a-f0-9]{16}$" },
+    "version": { "type": "integer", "minimum": 1 },
+    "schemaVersion": { "const": "1.0" },
+    "sourceHighlightArtifactId": { "type": "string", "minLength": 1 },
+    "canvas": {
+      "type": "object",
+      "required": ["width", "height", "fps"],
+      "additionalProperties": false,
+      "properties": {
+        "width": { "type": "integer", "minimum": 320 },
+        "height": { "type": "integer", "minimum": 240 },
+        "fps": { "type": "integer", "minimum": 1, "maximum": 120 }
+      }
+    },
+    "durationMs": { "type": "integer", "minimum": 0 },
+    "tracks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["type", "clips"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "const": "VIDEO" },
+          "clips": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["clipId", "shotId", "assetId", "sourceProxyArtifactId", "sourceInMs", "sourceOutMs", "sourceShotStartMs", "sourceShotEndMs", "timelineInMs", "timelineOutMs", "playbackRate", "transitionIn", "selectionRank", "storyRole", "selectionReasons"],
+              "additionalProperties": false,
+              "properties": {
+                "clipId": { "type": "string" },
+                "shotId": { "type": "string" },
+                "assetId": { "type": "string" },
+                "sourceProxyArtifactId": { "type": "string" },
+                "sourceInMs": { "type": "integer", "minimum": 0 },
+                "sourceOutMs": { "type": "integer", "minimum": 1 },
+                "sourceShotStartMs": { "type": "integer", "minimum": 0 },
+                "sourceShotEndMs": { "type": "integer", "minimum": 1 },
+                "timelineInMs": { "type": "integer", "minimum": 0 },
+                "timelineOutMs": { "type": "integer", "minimum": 1 },
+                "playbackRate": { "const": 1.0 },
+                "transitionIn": {
+                  "type": "object",
+                  "required": ["type", "durationMs"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "type": { "const": "CUT" },
+                    "durationMs": { "const": 0 }
+                  }
+                },
+                "selectionRank": { "type": "integer", "minimum": 1 },
+                "storyRole": { "enum": ["HOOK", "INTRO", "JOURNEY", "CLIMAX", "ENDING"] },
+                "selectionReasons": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          }
+        }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "required": ["valid", "errors"],
+      "additionalProperties": false,
+      "properties": {
+        "valid": { "const": true },
+        "errors": { "type": "array", "maxItems": 0 }
+      }
+    }
+  }
+}

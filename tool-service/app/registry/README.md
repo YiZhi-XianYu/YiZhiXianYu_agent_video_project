@@ -13,4 +13,4 @@
 
 只注册符合契约的 Tool；不能通过隐式导入把未声明能力暴露给 Java。
 
-当前注册 `video.probe@1.0.0`、`video.proxy-generate@1.0.0` 和 `video.shot-detect@1.0.0`。
+当前注册 `video.probe@1.0.0`、`video.proxy-generate@1.0.0`、`video.shot-detect@1.0.0`、`vision.quality-score@1.0.0`、`decision.shot-rank@1.0.0`、`planning.story-template@1.0.0`、`decision.highlight-select@1.0.0` 和 `timeline.compose@1.0.0`。

@@ -5,6 +5,9 @@ from app.core.models import ArtifactDescriptor, ToolExecutionRequest
 from app.tools.video_proxy_generate import VideoProxyGenerateTool
 from app.tools.video_probe import VideoProbeTool
 from app.tools.video_shot_detect import VideoShotDetectTool
+from app.tools.vision_quality_score import VisionQualityScoreTool
+from app.tools.shot_decisions import HighlightSelectionTool, ShotRankingTool, TimelineComposeTool
+from app.tools.story_plan import StoryPlanTool
 
 
 class Tool(Protocol):
@@ -22,7 +25,10 @@ class Tool(Protocol):
 
 class ToolRegistry:
     def __init__(self) -> None:
-        tools: list[Tool] = [VideoProbeTool(), VideoProxyGenerateTool(), VideoShotDetectTool()]
+        tools: list[Tool] = [
+            VideoProbeTool(), VideoProxyGenerateTool(), VideoShotDetectTool(), VisionQualityScoreTool(),
+            ShotRankingTool(), StoryPlanTool(), HighlightSelectionTool(), TimelineComposeTool(),
+        ]
         self._tools = {(tool.name, tool.version): tool for tool in tools}
 
     def get(self, name: str, version: str) -> Tool:

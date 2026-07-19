@@ -2,7 +2,7 @@
 
 Agent 驱动的智能视频制作流水线暑期实训项目。
 
-当前已完成第三条本机开发模式的垂直链路：浏览器可批量上传多个视频，Java 根据受约束的 `WorkflowDefinition` 为每个素材展开 `video.probe -> video.proxy-generate -> video.shot-detect` DAG，Python 使用 FFmpeg 生成代理视频、镜头列表和关键帧。项目、素材集合、Workflow、Task 依赖、Tool Execution 和 Artifact 状态保存到 MySQL。
+当前已完成第四阶段本机开发模式的垂直链路：浏览器可选择数据库中的历史项目或创建新项目；Java 根据受约束的 `WorkflowDefinition` 为每个素材展开 `video.probe -> video.proxy-generate -> video.shot-detect -> vision.quality-score` 分支，再以工作流级节点汇聚执行 `decision.shot-rank -> planning.story-template -> decision.highlight-select -> timeline.compose`。Python 使用 FFmpeg 生成代理视频、镜头列表和关键帧，并以确定性 Tool 输出质量指标、跨素材 Ranking、五段式 Story Plan、高光集合与声明式 Timeline。项目、素材集合、Workflow、Task 依赖、Tool Execution 和 Artifact 状态保存到 MySQL。
 
 ## 当前功能
 
@@ -17,13 +17,22 @@ Agent 驱动的智能视频制作流水线暑期实训项目。
 - 用户可选择 4K、2K、1080p 或 720p，Python 生成对应的 30 FPS H.264/AAC 代理视频并报告转码进度。
 - Tool 结果保存为不可变 `VIDEO_METADATA`、`VIDEO_PROXY`、`SHOT_LIST` 和 `KEYFRAME_IMAGE` Artifact。
 - Java 根据依赖表解锁所有就绪任务；上游失败时自动跳过下游，所有任务终态后结束 Workflow。
+- Workflow 终态更新使用数据库行锁串行化；分发故障和可重试 Tool 故障采用有限指数退避，并由定时补偿扫描恢复 `READY`、`DISPATCHING`、`RETRY_WAIT` 和丢失的 Tool Execution。
 - Java 接收回调，并通过定时轮询补偿丢失回调。
 - 浏览器按素材动态展示 Task、Shot 和关键帧，并提供代理视频预览和下载。
 - 一个 Workflow 可关联最多 20 个视频 Asset，并为每个素材并行展开独立分析分支。
+- 历史项目可从数据库载入并恢复其素材列表，无需每次新建项目。
+- 项目下的历史 Workflow 可按时间选择并恢复完整 Asset、Task、评分、高光和 Timeline 快照。
+- 每个 Shot 输出清晰度、曝光、稳定性、构图与总质量分，并保留 Proxy、Shot List、关键帧血缘。
+- 跨素材 Ranking 保存评分分解、运动兴趣、时长适配、近重复/素材均衡/时间邻近惩罚、排名和原因码。
+- Story Plan 使用固定 `HOOK -> INTRO -> JOURNEY -> CLIMAX -> ENDING` 模板，精确填满目标时长并保持多素材均衡。
+- Highlight Selection 将已验证 Story Plan 编译为不可变高光集合。
+- `TIMELINE` Artifact 使用受约束的结构化视频轨道和 `CUT` 转场，不包含 Shell 或 FFmpeg 字符串。
+- Timeline 在写入 Artifact 前校验画布、Clip 唯一性、Shot 边界、轨道连续性、时长一致性和转场白名单。
 
 ## 快速开始
 
-当前本机运行与交接说明见 [第三阶段交接](docs/third-stage-handoff.md)。前两阶段历史记录保留在 [第一条垂直链路](docs/first-vertical-slice.md) 和 [第二条垂直链路](docs/second-vertical-slice.md)。
+当前本机运行与交接说明见 [第四阶段交接](docs/fourth-stage-handoff.md)。历史记录保留在 [第三阶段交接](docs/third-stage-handoff.md)、[第一条垂直链路](docs/first-vertical-slice.md) 和 [第二条垂直链路](docs/second-vertical-slice.md)。
 
 ```powershell
 # 终端 1
@@ -40,7 +49,7 @@ scripts\start-control-plane.cmd
 ## 项目结构
 
 - `control-plane/`：Spring Boot 控制面与当前演示页面。
-- `tool-service/`：FastAPI Tool Service、Probe、Proxy Generate 与 Shot Detection Tool。
+- `tool-service/`：FastAPI Tool Service、媒体分析、确定性 Shot 决策与 Timeline Tool。
 - `contracts/`：共享协议与 OpenAPI。
 - `docs/`：完整系统设计与开发说明。
 - `scripts/`：本机启动、测试与数据库初始化脚本。

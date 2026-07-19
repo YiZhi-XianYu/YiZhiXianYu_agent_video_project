@@ -47,7 +47,7 @@ public class LocalStorageService {
 
     private static String sanitize(String name) {
         var value = name == null || name.isBlank() ? "video.bin" : Path.of(name).getFileName().toString();
-        return value.replaceAll("[^A-Za-z0-9._-]", "_");
+        return value.replaceAll("[^\\p{L}\\p{N}._-]", "_");
     }
 
     private static String sha256(Path path) throws IOException {
@@ -69,4 +69,3 @@ public class LocalStorageService {
     public record StoredFile(String fileName, String storageUri, long sizeBytes, String contentHash) {
     }
 }
-

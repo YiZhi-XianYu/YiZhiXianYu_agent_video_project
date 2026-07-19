@@ -17,16 +17,20 @@ public class ToolExecutionPoller {
 
     @Scheduled(fixedDelayString = "${app.tool-service.poll-interval-ms}")
     public void poll() {
+        for (var workflowRunId : workflowService.findRunningWorkflowIds()) {
+            workflowService.recoverWorkflow(workflowRunId);
+        }
         for (var execution : workflowService.findPendingToolExecutions()) {
             try {
                 var response = toolClient.getExecution(execution.getExternalExecutionId());
                 if (response != null) {
                     workflowService.applyToolResult(response);
                 }
-            } catch (Exception ignored) {
-                // Temporary Tool Service outages are retried by the next scan.
+            } catch (Exception exc) {
+                workflowService.recordPollFailure(
+                    execution.getExternalExecutionId(), WorkflowExecutionService.rootMessage(exc)
+                );
             }
         }
     }
 }
-

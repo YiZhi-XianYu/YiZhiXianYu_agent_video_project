@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yizhixianyu.com/contracts/story/story-plan.schema.json",
+  "title": "Validated Travel Story Plan",
+  "type": "object",
+  "required": ["schemaVersion", "template", "sourceRankingArtifactId", "targetDurationMs", "maxShots", "beats", "assumptions", "validation"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "template": { "const": "TRAVEL_JOURNEY_V1" },
+    "sourceRankingArtifactId": { "type": "string", "minLength": 1 },
+    "targetDurationMs": { "type": "integer", "minimum": 5000, "maximum": 300000 },
+    "maxShots": { "type": "integer", "minimum": 5, "maximum": 100 },
+    "beats": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "required": ["role", "targetDurationMs", "actualDurationMs", "shots"],
+        "additionalProperties": false,
+        "properties": {
+          "role": { "enum": ["HOOK", "INTRO", "JOURNEY", "CLIMAX", "ENDING"] },
+          "targetDurationMs": { "type": "integer", "minimum": 600 },
+          "actualDurationMs": { "type": "integer", "minimum": 600 },
+          "shots": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["shotId", "sourceAssetId", "sourceProxyArtifactId", "startMs", "endMs", "sourceInMs", "sourceOutMs", "selectedDurationMs", "rank", "storyRole", "selectionReasons"],
+              "properties": {
+                "shotId": { "type": "string", "minLength": 1 },
+                "sourceAssetId": { "type": "string", "minLength": 1 },
+                "sourceProxyArtifactId": { "type": "string", "minLength": 1 },
+                "startMs": { "type": "integer", "minimum": 0 },
+                "endMs": { "type": "integer", "minimum": 1 },
+                "sourceInMs": { "type": "integer", "minimum": 0 },
+                "sourceOutMs": { "type": "integer", "minimum": 1 },
+                "selectedDurationMs": { "type": "integer", "minimum": 600 },
+                "rank": { "type": "integer", "minimum": 1 },
+                "storyRole": { "enum": ["HOOK", "INTRO", "JOURNEY", "CLIMAX", "ENDING"] },
+                "selectionReasons": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          }
+        }
+      }
+    },
+    "assumptions": { "type": "array", "items": { "type": "string" } },
+    "validation": {
+      "type": "object",
+      "required": ["valid", "errors"],
+      "additionalProperties": false,
+      "properties": {
+        "valid": { "const": true },
+        "errors": { "type": "array", "maxItems": 0 }
+      }
+    }
+  }
+}

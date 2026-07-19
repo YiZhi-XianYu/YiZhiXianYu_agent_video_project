@@ -27,3 +27,8 @@ app:
   tool-service:
     base-url: ${TOOL_SERVICE_BASE_URL:http://127.0.0.1:8090}
     poll-interval-ms: ${TOOL_SERVICE_POLL_INTERVAL_MS:3000}
+  workflow:
+    max-attempts: ${WORKFLOW_MAX_ATTEMPTS:3}
+    retry-base-delay-ms: ${WORKFLOW_RETRY_BASE_DELAY_MS:1000}
+    dispatch-recovery-timeout-ms: ${WORKFLOW_DISPATCH_RECOVERY_TIMEOUT_MS:30000}
+    poll-failure-limit: ${WORKFLOW_POLL_FAILURE_LIMIT:10}

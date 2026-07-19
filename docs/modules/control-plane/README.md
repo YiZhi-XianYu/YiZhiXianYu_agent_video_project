@@ -28,14 +28,14 @@ control-plane/src/main/java/com/yizhixianyu/agentvideo/
 | 逻辑模块 | 当前源码位置 | 状态 |
 |---|---|---|
 | App Bootstrap | `agentvideo/AgentVideoControlPlaneApplication.java` | 已实现基础启动 |
-| Interface API | `agentvideo/api/` | 已实现项目、批量素材、多素材工作流与 Artifact 内容 API |
+| Interface API | `agentvideo/api/` | 已实现项目列表、批量素材、项目 Workflow 历史、多素材工作流与 Artifact 内容 API；静态页面可回看历史运行 |
 | Project Domain | `agentvideo/project/` | 已实现 |
 | Asset Domain | `agentvideo/asset/`、`agentvideo/artifact/` | 已实现基础素材与 Artifact |
-| Execution Domain | `agentvideo/execution/` | 已实现多素材展开、依赖表、并行就绪扫描、失败传播与状态机 |
+| Execution Domain | `agentvideo/execution/` | 已实现 `ASSET`/`WORKFLOW` 节点作用域、多素材展开、跨分支汇聚、Artifact 类型输入绑定、依赖表、数据库行锁收敛、有限重试、丢失执行检测、补偿扫描、失败传播与状态机 |
 | Storage Infrastructure | `agentvideo/storage/` | 已实现本地存储适配器 |
 | Tool Client Infrastructure | `agentvideo/toolclient/` | 已实现 Python HTTP Tool Client |
-| Planning Domain | 尚未创建源码包 | 待实现 LLM Planner |
-| Workflow Domain | `agentvideo/workflow/` | 已实现最小 WorkflowDefinition、DAG Validator 与多素材模板 |
+| Planning Domain | Python `planning.story-template` 与共享 Story/LLM 契约 | 已实现确定性五段 Story 基线；待第五阶段增加受约束 LLM Provider |
+| Workflow Domain | `agentvideo/workflow/` | 已实现带节点作用域的 WorkflowDefinition、DAG Validator 与确定性 8 节点多素材模板 |
 | Context Domain | 尚未创建源码包 | 待实现 |
 | Explanation Domain | 尚未创建源码包 | 待实现 |
 | Tool Registry Domain | 尚未创建源码包 | 待实现 |

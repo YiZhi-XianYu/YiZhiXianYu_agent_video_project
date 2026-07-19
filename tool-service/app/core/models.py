@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import Annotated, Any
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
@@ -20,17 +20,17 @@ class ExecutionStatus(StrEnum):
 
 
 class ArtifactInput(BaseModel):
-    artifact_id: Annotated[str, Field(alias="artifactId")]
+    artifact_id: str = Field(alias="artifactId")
     uri: str
-    file_name: Annotated[str | None, Field(alias="fileName")] = None
+    file_name: str | None = Field(default=None, alias="fileName")
 
     model_config = ConfigDict(populate_by_name=True)
 
 
 class TraceContext(BaseModel):
-    trace_id: Annotated[str | None, Field(alias="traceId")] = None
-    workflow_run_id: Annotated[str | None, Field(alias="workflowRunId")] = None
-    task_run_id: Annotated[str | None, Field(alias="taskRunId")] = None
+    trace_id: str | None = Field(default=None, alias="traceId")
+    workflow_run_id: str | None = Field(default=None, alias="workflowRunId")
+    task_run_id: str | None = Field(default=None, alias="taskRunId")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -38,22 +38,22 @@ class TraceContext(BaseModel):
 class ToolExecutionRequest(BaseModel):
     tool: str
     version: str
-    idempotency_key: Annotated[str, Field(alias="idempotencyKey")]
+    idempotency_key: str = Field(alias="idempotencyKey")
     inputs: dict[str, ArtifactInput]
     parameters: dict[str, Any] = Field(default_factory=dict)
-    callback_url: Annotated[HttpUrl | None, Field(alias="callbackUrl")] = None
-    trace_context: Annotated[TraceContext, Field(alias="traceContext")] = Field(default_factory=TraceContext)
+    callback_url: HttpUrl | None = Field(default=None, alias="callbackUrl")
+    trace_context: TraceContext = Field(default_factory=TraceContext, alias="traceContext")
 
     model_config = ConfigDict(populate_by_name=True)
 
 
 class ArtifactDescriptor(BaseModel):
-    artifact_id: Annotated[str, Field(alias="artifactId")]
+    artifact_id: str = Field(alias="artifactId")
     type: str
     uri: str
-    media_type: Annotated[str, Field(alias="mediaType")]
+    media_type: str = Field(alias="mediaType")
     size: int
-    content_hash: Annotated[str, Field(alias="contentHash")]
+    content_hash: str = Field(alias="contentHash")
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     model_config = ConfigDict(populate_by_name=True)
@@ -67,24 +67,24 @@ class ToolError(BaseModel):
 
 
 class ToolExecutionRecord(BaseModel):
-    execution_id: Annotated[str, Field(alias="executionId")]
-    idempotency_key: Annotated[str, Field(alias="idempotencyKey")]
+    execution_id: str = Field(alias="executionId")
+    idempotency_key: str = Field(alias="idempotencyKey")
     tool: str
     version: str
     status: ExecutionStatus
     progress: int = 0
     outputs: list[ArtifactDescriptor] = Field(default_factory=list)
     error: ToolError | None = None
-    created_at: Annotated[datetime, Field(alias="createdAt")] = Field(default_factory=utc_now)
-    started_at: Annotated[datetime | None, Field(alias="startedAt")] = None
-    completed_at: Annotated[datetime | None, Field(alias="completedAt")] = None
+    created_at: datetime = Field(default_factory=utc_now, alias="createdAt")
+    started_at: datetime | None = Field(default=None, alias="startedAt")
+    completed_at: datetime | None = Field(default=None, alias="completedAt")
 
     model_config = ConfigDict(populate_by_name=True)
 
 
 class AcceptedExecution(BaseModel):
-    execution_id: Annotated[str, Field(alias="executionId")]
+    execution_id: str = Field(alias="executionId")
     status: ExecutionStatus
-    status_url: Annotated[str, Field(alias="statusUrl")]
+    status_url: str = Field(alias="statusUrl")
 
     model_config = ConfigDict(populate_by_name=True)

@@ -5,6 +5,7 @@ public enum TaskStatus {
     READY,
     DISPATCHING,
     RUNNING,
+    RETRY_WAIT,
     SUCCEEDED,
     FAILED,
     SKIPPED

@@ -52,9 +52,17 @@ public class TaskRunEntity extends BaseEntity {
     @Column(nullable = false)
     private int attempt;
 
+    @Column(nullable = false)
+    private int retryCount;
+
     private Instant startedAt;
 
     private Instant completedAt;
+
+    private Instant nextAttemptAt;
+
+    @Column(nullable = false)
+    private boolean retrySameAttempt;
 
     @Column(length = 2000)
     private String errorMessage;
@@ -79,6 +87,8 @@ public class TaskRunEntity extends BaseEntity {
         this.status = TaskStatus.PENDING;
         this.progress = 0;
         this.attempt = 0;
+        this.retryCount = 0;
+        this.retrySameAttempt = false;
     }
 
     public TaskRunEntity(
@@ -103,6 +113,8 @@ public class TaskRunEntity extends BaseEntity {
         this.status = TaskStatus.PENDING;
         this.progress = 0;
         this.attempt = 0;
+        this.retryCount = 0;
+        this.retrySameAttempt = false;
     }
 
     public void markReady() {
@@ -115,6 +127,15 @@ public class TaskRunEntity extends BaseEntity {
         status = TaskStatus.DISPATCHING;
         attempt += 1;
         progress = 5;
+        errorMessage = null;
+        nextAttemptAt = null;
+    }
+
+    public void resumeDispatching() {
+        require(TaskStatus.DISPATCHING);
+        progress = 5;
+        errorMessage = null;
+        nextAttemptAt = null;
     }
 
     public void markRunning() {
@@ -156,6 +177,34 @@ public class TaskRunEntity extends BaseEntity {
         progress = 100;
         completedAt = Instant.now();
         errorMessage = message;
+        nextAttemptAt = null;
+    }
+
+    public void scheduleRetry(String message, Instant retryAt, boolean sameAttempt) {
+        if (status != TaskStatus.DISPATCHING && status != TaskStatus.RUNNING) {
+            throw new IllegalStateException("Cannot retry task from " + status);
+        }
+        status = TaskStatus.RETRY_WAIT;
+        progress = 0;
+        completedAt = null;
+        errorMessage = message;
+        nextAttemptAt = retryAt;
+        retrySameAttempt = sameAttempt;
+        retryCount += 1;
+    }
+
+    public boolean releaseRetry(Instant now) {
+        require(TaskStatus.RETRY_WAIT);
+        if (nextAttemptAt != null && nextAttemptAt.isAfter(now)) {
+            throw new IllegalStateException("Task retry is not due yet");
+        }
+        var resumeAttempt = retrySameAttempt;
+        status = resumeAttempt ? TaskStatus.DISPATCHING : TaskStatus.READY;
+        progress = 0;
+        errorMessage = null;
+        nextAttemptAt = null;
+        retrySameAttempt = false;
+        return resumeAttempt;
     }
 
     public void markSkipped(String message) {
@@ -212,12 +261,24 @@ public class TaskRunEntity extends BaseEntity {
         return attempt;
     }
 
+    public int getRetryCount() {
+        return retryCount;
+    }
+
+    public boolean canRetry(int maxAttempts) {
+        return retryCount < maxAttempts - 1;
+    }
+
     public Instant getStartedAt() {
         return startedAt;
     }
 
     public Instant getCompletedAt() {
         return completedAt;
+    }
+
+    public Instant getNextAttemptAt() {
+        return nextAttemptAt;
     }
 
     public String getErrorMessage() {

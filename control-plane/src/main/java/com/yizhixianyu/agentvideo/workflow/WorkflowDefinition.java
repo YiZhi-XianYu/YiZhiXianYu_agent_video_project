@@ -13,9 +13,19 @@ public record WorkflowDefinition(
         String nodeKey,
         String toolName,
         String toolVersion,
+        NodeScope scope,
         InputBinding inputBinding,
         Map<String, Object> parameters
     ) {
+        public Node(
+            String nodeKey,
+            String toolName,
+            String toolVersion,
+            InputBinding inputBinding,
+            Map<String, Object> parameters
+        ) {
+            this(nodeKey, toolName, toolVersion, NodeScope.ASSET, inputBinding, parameters);
+        }
     }
 
     public record Edge(String from, String to) {
@@ -24,5 +34,10 @@ public record WorkflowDefinition(
     public enum InputBinding {
         PROJECT_ASSET,
         UPSTREAM_ARTIFACT
+    }
+
+    public enum NodeScope {
+        ASSET,
+        WORKFLOW
     }
 }

@@ -21,6 +21,9 @@ public class ToolExecutionEntity extends BaseEntity {
     @Column(nullable = false, length = 30)
     private String status;
 
+    @Column(nullable = false)
+    private int pollFailureCount;
+
     protected ToolExecutionEntity() {
     }
 
@@ -29,10 +32,27 @@ public class ToolExecutionEntity extends BaseEntity {
         this.idempotencyKey = idempotencyKey;
         this.externalExecutionId = externalExecutionId;
         this.status = status;
+        this.pollFailureCount = 0;
     }
 
     public void updateStatus(String status) {
         this.status = status;
+        this.pollFailureCount = 0;
+    }
+
+    public void replaceAcceptance(String externalExecutionId, String status) {
+        this.externalExecutionId = externalExecutionId;
+        updateStatus(status);
+    }
+
+    public int recordPollFailure() {
+        pollFailureCount += 1;
+        return pollFailureCount;
+    }
+
+    public boolean isTerminal() {
+        return "SUCCEEDED".equals(status) || "FAILED".equals(status)
+            || "CANCELLED".equals(status) || "LOST".equals(status);
     }
 
     public String getTaskRunId() {
@@ -49,5 +69,9 @@ public class ToolExecutionEntity extends BaseEntity {
 
     public String getStatus() {
         return status;
+    }
+
+    public int getPollFailureCount() {
+        return pollFailureCount;
     }
 }

@@ -52,6 +52,11 @@ public class WorkflowController {
         return workflowService.getSnapshot(workflowRunId);
     }
 
+    @GetMapping("/projects/{projectId}/workflow-runs")
+    public List<WorkflowExecutionService.WorkflowHistoryItem> listProjectRuns(@PathVariable String projectId) {
+        return workflowService.listProjectRuns(projectId);
+    }
+
     public record StartVideoProxyRequest(@NotBlank String assetId, @NotNull ProxyQuality quality) {
     }
 

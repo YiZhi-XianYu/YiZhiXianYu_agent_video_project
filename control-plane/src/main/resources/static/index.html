@@ -3,16 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Agent Video Pipeline - Multi-Asset Analysis</title>
+    <title>Agent Video Pipeline - Deterministic Shot Decisions</title>
     <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
 <main class="shell">
     <header class="hero">
         <div>
-            <p class="eyebrow">THIRD VERTICAL SLICE</p>
+            <p class="eyebrow">FOURTH VERTICAL SLICE</p>
             <h1>Agent-Driven Video Pipeline</h1>
-            <p class="lead">批量上传视频后，Java 展开多素材 DAG，为每个素材并行生成代理视频、镜头列表和关键帧。</p>
+            <p class="lead">载入历史项目或新建项目，执行确定性的镜头质量评分、跨素材排序、高光选择与结构化 Timeline。</p>
         </div>
         <div class="service-state" id="service-state">等待开始</div>
     </header>
@@ -20,7 +20,17 @@
     <section class="steps">
         <article class="card">
             <span class="step-index">01</span>
-            <h2>创建项目</h2>
+            <h2>选择或创建项目</h2>
+            <label for="project-select">历史项目</label>
+            <select id="project-select">
+                <option value="">正在读取项目...</option>
+            </select>
+            <button id="load-project" class="secondary">载入所选项目</button>
+            <label for="workflow-select">历史 Workflow</label>
+            <select id="workflow-select" disabled>
+                <option value="">请先载入项目</option>
+            </select>
+            <button id="load-workflow" class="secondary" disabled>回看所选 Workflow</button>
             <label for="project-name">项目名称</label>
             <input id="project-name" value="第一个智能视频项目" maxlength="200">
             <button id="create-project">创建项目</button>
@@ -40,7 +50,7 @@
         <article class="card">
             <span class="step-index">03</span>
             <h2>启动工作流</h2>
-            <p class="explain">Java 校验多素材 WorkflowDefinition，并为每个素材并行执行 Probe、Proxy 和 Shot Detection。</p>
+            <p class="explain">Java 校验受约束的 8 节点定义：每素材 Probe、Proxy、Shot、Quality，再汇聚 Ranking、Story、Highlight 与 Timeline。</p>
             <label for="proxy-quality">输出清晰度</label>
             <select id="proxy-quality">
                 <option value="4K">4K · 3840×2160</option>
@@ -48,7 +58,7 @@
                 <option value="1080P" selected>1080p · 高清</option>
                 <option value="720P">720p · 标清</option>
             </select>
-            <button id="start-workflow" disabled>分析并生成代理视频</button>
+            <button id="start-workflow" disabled>分析、评分并生成 Timeline</button>
             <p class="result" id="workflow-result">需要先上传视频</p>
         </article>
     </section>
@@ -105,6 +115,18 @@
                 <span class="status neutral" id="shot-count">0 SHOTS</span>
             </div>
             <div class="shot-grid" id="shot-grid"></div>
+        </section>
+        <section class="decision-panel" id="decision-panel" hidden>
+            <div class="workspace-header">
+                <div>
+                    <p class="eyebrow">DETERMINISTIC DECISIONS</p>
+                    <h2>高光选择与 Timeline</h2>
+                </div>
+                <span class="status neutral" id="timeline-duration">0.00s</span>
+            </div>
+            <div class="decision-summary" id="decision-summary"></div>
+            <div class="story-beats" id="story-beats"></div>
+            <div class="timeline-track" id="timeline-track"></div>
         </section>
         <pre id="error-box" hidden></pre>
     </section>

@@ -2,6 +2,8 @@ package com.yizhixianyu.agentvideo.execution;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 class TaskRunEntityTest {
@@ -44,5 +46,60 @@ class TaskRunEntityTest {
         assertThat(task.getStatus()).isEqualTo(TaskStatus.SKIPPED);
         assertThat(task.getProgress()).isEqualTo(100);
         assertThat(task.getErrorMessage()).isEqualTo("Upstream failed");
+    }
+
+    @Test
+    void retriesATransportFailureWithTheSameAttempt() {
+        var task = new TaskRunEntity(
+            "workflow-1", "video_probe", "video.probe", "1.0.0", null
+        );
+        var now = Instant.now();
+
+        task.markReady();
+        task.markDispatching();
+        task.scheduleRetry("Connection refused", now, true);
+
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.RETRY_WAIT);
+        assertThat(task.getAttempt()).isEqualTo(1);
+        assertThat(task.getRetryCount()).isEqualTo(1);
+        assertThat(task.releaseRetry(now)).isTrue();
+        task.resumeDispatching();
+        assertThat(task.getAttempt()).isEqualTo(1);
+    }
+
+    @Test
+    void retriesAToolFailureAsANewAttempt() {
+        var task = new TaskRunEntity(
+            "workflow-1", "video_probe", "video.probe", "1.0.0", null
+        );
+        var now = Instant.now();
+
+        task.markReady();
+        task.markDispatching();
+        task.markRunning();
+        task.scheduleRetry("Temporary ffmpeg failure", now, false);
+
+        assertThat(task.releaseRetry(now)).isFalse();
+        task.markDispatching();
+        assertThat(task.getAttempt()).isEqualTo(2);
+    }
+
+    @Test
+    void enforcesTheConfiguredRetryLimit() {
+        var task = new TaskRunEntity(
+            "workflow-1", "video_probe", "video.probe", "1.0.0", null
+        );
+        var now = Instant.now();
+
+        task.markReady();
+        task.markDispatching();
+        task.scheduleRetry("first", now, true);
+        task.releaseRetry(now);
+        task.resumeDispatching();
+        task.scheduleRetry("second", now, true);
+
+        assertThat(task.canRetry(3)).isFalse();
+        task.markFailed("third");
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.FAILED);
     }
 }

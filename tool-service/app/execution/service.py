@@ -79,11 +79,16 @@ class ExecutionService:
                 error=ToolError(
                     code="TOOL_EXECUTION_FAILED",
                     message=str(exc),
-                    retryable=False,
+                    retryable=self._is_retryable(exc),
                 ),
                 completed_at=datetime.now(timezone.utc),
             )
         self._callback(request, record)
+
+    @staticmethod
+    def _is_retryable(exc: Exception) -> bool:
+        # Contract and parameter failures are deterministic; runtime and I/O failures may recover.
+        return not isinstance(exc, ValueError)
 
     def _report_progress(self, execution_id: str, progress: int) -> None:
         self._update(execution_id, progress=max(10, min(progress, 99)))

@@ -28,7 +28,6 @@ public class ProjectService {
 
     @Transactional(readOnly = true)
     public List<ProjectEntity> list() {
-        return repository.findAll();
+        return repository.findAllByOrderByCreatedAtDesc();
     }
 }
-

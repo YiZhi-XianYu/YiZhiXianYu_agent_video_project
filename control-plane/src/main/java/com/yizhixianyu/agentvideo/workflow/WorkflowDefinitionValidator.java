@@ -17,7 +17,12 @@ public class WorkflowDefinitionValidator {
     private static final Set<String> KNOWN_TOOLS = Set.of(
         "video.probe@1.0.0",
         "video.proxy-generate@1.0.0",
-        "video.shot-detect@1.0.0"
+        "video.shot-detect@1.0.0",
+        "vision.quality-score@1.0.0",
+        "decision.shot-rank@1.0.0",
+        "planning.story-template@1.0.0",
+        "decision.highlight-select@1.0.0",
+        "timeline.compose@1.0.0"
     );
 
     public void validate(WorkflowDefinition definition) {
@@ -44,6 +49,13 @@ public class WorkflowDefinitionValidator {
                 throw new IllegalArgumentException("Unknown or disabled Tool: " + toolKey);
             }
             validateParameters(node);
+            if (node.scope() == null) {
+                throw new IllegalArgumentException("Workflow node scope is required: " + node.nodeKey());
+            }
+            if (node.scope() == WorkflowDefinition.NodeScope.WORKFLOW
+                && node.inputBinding() == WorkflowDefinition.InputBinding.PROJECT_ASSET) {
+                throw new IllegalArgumentException("Workflow-scoped nodes cannot bind a single project Asset");
+            }
         }
 
         var adjacency = new HashMap<String, Set<String>>();
@@ -63,6 +75,10 @@ public class WorkflowDefinitionValidator {
                 throw new IllegalArgumentException("Duplicate workflow edge: " + edge.from() + " -> " + edge.to());
             }
             indegree.compute(edge.to(), (key, value) -> value + 1);
+            if (nodes.get(edge.from()).scope() == WorkflowDefinition.NodeScope.WORKFLOW
+                && nodes.get(edge.to()).scope() == WorkflowDefinition.NodeScope.ASSET) {
+                throw new IllegalArgumentException("Workflow-scoped nodes cannot feed asset-scoped nodes");
+            }
         }
 
         var queue = new ArrayDeque<String>();
@@ -113,8 +129,20 @@ public class WorkflowDefinitionValidator {
             if (!allowed.containsAll(parameters.keySet())) {
                 throw new IllegalArgumentException("video.shot-detect contains unsupported parameters");
             }
+        } else if ("vision.quality-score".equals(node.toolName())) {
+            validateAllowed(parameters, Set.of("sampleFrames"), node.toolName());
+        } else if ("planning.story-template".equals(node.toolName())) {
+            validateAllowed(parameters, Set.of("targetDurationMs", "maxShots"), node.toolName());
+        } else if ("timeline.compose".equals(node.toolName())) {
+            validateAllowed(parameters, Set.of("width", "height", "fps"), node.toolName());
         } else if (!parameters.isEmpty()) {
             throw new IllegalArgumentException(node.toolName() + " does not accept parameters");
+        }
+    }
+
+    private void validateAllowed(Map<String, Object> parameters, Set<String> allowed, String toolName) {
+        if (!allowed.containsAll(parameters.keySet())) {
+            throw new IllegalArgumentException(toolName + " contains unsupported parameters");
         }
     }
 }

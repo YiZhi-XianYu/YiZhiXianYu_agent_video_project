@@ -8,6 +8,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.assertThat;
 
 class WorkflowDefinitionValidatorTest {
 
@@ -16,8 +17,14 @@ class WorkflowDefinitionValidatorTest {
 
     @Test
     void acceptsTheMultiAssetAnalysisTemplate() {
-        assertThatCode(() -> validator.validate(template.create(ProxyQuality.FHD_1080P)))
+        var definition = template.create(ProxyQuality.FHD_1080P);
+
+        assertThatCode(() -> validator.validate(definition))
             .doesNotThrowAnyException();
+        assertThat(definition.definitionVersion()).isEqualTo(3);
+        assertThat(definition.nodes()).hasSize(8);
+        assertThat(definition.nodes().stream()
+            .filter(node -> node.scope() == WorkflowDefinition.NodeScope.WORKFLOW)).hasSize(4);
     }
 
     @Test

@@ -13,12 +13,13 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["nodeKey", "toolName", "toolVersion", "inputBinding"],
+        "required": ["nodeKey", "toolName", "toolVersion", "scope", "inputBinding"],
         "additionalProperties": false,
         "properties": {
           "nodeKey": { "type": "string", "pattern": "^[a-z][a-z0-9_]{1,99}$" },
           "toolName": { "type": "string", "minLength": 1, "maxLength": 120 },
           "toolVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+          "scope": { "enum": ["ASSET", "WORKFLOW"] },
           "inputBinding": { "enum": ["PROJECT_ASSET", "UPSTREAM_ARTIFACT"] },
           "parameters": { "type": "object", "default": {} }
         }
