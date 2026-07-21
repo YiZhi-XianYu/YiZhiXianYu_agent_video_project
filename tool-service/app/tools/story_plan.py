@@ -379,6 +379,32 @@ def _compile_llm_proposal(
             })
             used_ids.add(sid)
             remaining -= duration
+
+        # ── Hybrid filling: fill remaining budget from candidate pool ──
+        if remaining > 0:
+            unused = [s for s in candidates if s["shotId"] not in used_ids]
+            unused.sort(key=lambda s: _beat_sort_key(role, s), reverse=True)
+            for s in unused:
+                if remaining <= 0:
+                    break
+                dur = min(int(s["durationMs"]), remaining)
+                if dur < 600:
+                    continue
+                source_in = _source_in_for_role(role, s, dur)
+                beat_shots.append({
+                    **s,
+                    "storyRole": role,
+                    "sourceInMs": source_in,
+                    "sourceOutMs": source_in + dur,
+                    "selectedDurationMs": dur,
+                    "selectionReasons": [
+                        f"LLM_STORY_ROLE_{role}",
+                        "HYBRID_FILL",
+                    ],
+                })
+                used_ids.add(s["shotId"])
+                remaining -= dur
+
         if not beat_shots:
             raise ValueError(f"No valid shots for beat {role}")
 
@@ -401,6 +427,38 @@ def _compile_llm_proposal(
                 shot["sourceOutMs"] = shot["sourceInMs"] + new_dur
                 shot["selectedDurationMs"] = new_dur
                 remaining -= extra
+
+        # ── Gap handler: if remaining < 600, trim a shot to create room ──
+        if 0 < remaining < 600 and beat_shots:
+            needed = 600 - remaining
+            for shot in reversed(beat_shots):
+                if shot["selectedDurationMs"] >= 600 + needed:
+                    shot["selectedDurationMs"] -= needed
+                    if role == "ENDING":
+                        shot["sourceInMs"] = int(shot["endMs"]) - shot["selectedDurationMs"]
+                    shot["sourceOutMs"] = shot["sourceInMs"] + shot["selectedDurationMs"]
+                    remaining += needed
+                    break
+            # Now try to fill remaining (which is now >= 600) from candidates
+            if remaining >= 600:
+                unused = [s for s in candidates if s["shotId"] not in used_ids]
+                unused.sort(key=lambda s: _beat_sort_key(role, s), reverse=True)
+                for s in unused:
+                    dur = min(int(s["durationMs"]), remaining)
+                    if dur < 600:
+                        continue
+                    source_in = _source_in_for_role(role, s, dur)
+                    beat_shots.append({
+                        **s,
+                        "storyRole": role,
+                        "sourceInMs": source_in,
+                        "sourceOutMs": source_in + dur,
+                        "selectedDurationMs": dur,
+                        "selectionReasons": [f"LLM_STORY_ROLE_{role}", "HYBRID_FILL"],
+                    })
+                    used_ids.add(s["shotId"])
+                    remaining -= dur
+                    break
 
         beats.append({
             "role": role,
