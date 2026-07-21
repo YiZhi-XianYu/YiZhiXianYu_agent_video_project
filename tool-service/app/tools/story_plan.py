@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import logging
+import time
+import uuid
 from collections.abc import Callable
 from typing import Any
 
+from app.llm.audit import LlmAuditRecord
+from app.llm.provider import LlmError, get_provider
+from app.llm.prompt import StoryProposalPrompt
 from app.core.models import ArtifactDescriptor, ToolExecutionRequest
 from app.tools.artifact_json import matching_inputs, read_json_artifact, write_json_artifact
 
+logger = logging.getLogger(__name__)
 
 STORY_BEATS = [
     ("HOOK", 0.1167),
@@ -24,13 +31,13 @@ class StoryPlanTool:
         return {
             "name": self.name,
             "version": self.version,
-            "description": "Build a deterministic five-beat travel Story Plan from ranked Shots",
+            "description": "Build a five-beat travel Story Plan from ranked Shots (LLM-assisted with deterministic fallback)",
             "executionMode": "ASYNC",
             "resourceClass": "CPU_LIGHT",
             "timeoutSeconds": 120,
             "supportsCancellation": False,
-            "deterministic": True,
-            "cacheable": True,
+            "deterministic": False,
+            "cacheable": False,
             "inputTypes": ["SHOT_RANKING"],
             "outputTypes": ["STORY_PLAN"],
         }
@@ -52,61 +59,98 @@ class StoryPlanTool:
         candidates = [shot for shot in ranking.get("shots") or [] if shot.get("eligible", True)]
         if len(candidates) < 5:
             candidates = list(ranking.get("shots") or [])
-        budgets = _beat_budgets(target_duration)
-        used_ids: set[str] = set()
-        asset_counts = {shot["sourceAssetId"]: 0 for shot in candidates}
-        beats = []
-        remaining_slots = max_shots
-        for beat_index, ((role, _), budget) in enumerate(zip(STORY_BEATS, budgets)):
-            remaining_beats = len(STORY_BEATS) - beat_index
-            slot_limit = max(1, remaining_slots - (remaining_beats - 1))
-            available_count = sum(shot["shotId"] not in used_ids for shot in candidates)
-            candidate_limit = available_count - (remaining_beats - 1)
-            beat_shots = _select_for_beat(
-                role,
-                candidates,
-                used_ids,
-                asset_counts,
-                budget,
-                min(slot_limit, candidate_limit),
-            )
-            if not beat_shots:
-                raise ValueError(f"No candidate Shot is available for Story beat {role}")
-            used_ids.update(shot["shotId"] for shot in beat_shots)
-            for shot in beat_shots:
-                asset_id = shot["sourceAssetId"]
-                asset_counts[asset_id] = asset_counts.get(asset_id, 0) + 1
-            remaining_slots -= len(beat_shots)
-            beats.append({
-                "role": role,
-                "targetDurationMs": budget,
-                "actualDurationMs": sum(shot["selectedDurationMs"] for shot in beat_shots),
-                "shots": beat_shots,
-            })
 
-        proposal = {
-            "schemaVersion": "1.0",
-            "template": "TRAVEL_JOURNEY_V1",
-            "sourceRankingArtifactId": ranking_inputs[0].artifact_id,
-            "targetDurationMs": target_duration,
-            "maxShots": max_shots,
-            "beats": beats,
-            "assumptions": [
-                "No semantic scene labels are available; beat roles use deterministic quality, motion and chronology signals.",
-                "Story selection prefers the least-used source Asset when it can still fill the current beat exactly.",
-                "Only eligible ranked Shots are preferred; rejected Shots are used only when fewer than five eligible candidates exist.",
-            ],
-        }
-        errors = StoryProposalValidator.validate(
-            proposal,
-            {shot["shotId"] for shot in ranking.get("shots") or []},
-            target_duration,
-            max_shots,
+        audit = LlmAuditRecord(
+            provider="none",
+            model="none",
+            temperature=0.3,
+            request_id=uuid.uuid4().hex[:12],
+            input_candidate_count=len(candidates),
         )
-        if errors:
-            raise ValueError("Story Plan validation failed: " + "; ".join(errors))
-        proposal["validation"] = {"valid": True, "errors": []}
+
+        provider = get_provider()
+        if provider is not None and provider.name != "noop":
+            llm_result = _try_llm_story_plan(
+                provider, ranking, candidates, target_duration, max_shots, audit
+            )
+            if llm_result is not None:
+                llm_result["llmAudit"] = audit.to_dict()
+                return [write_json_artifact("STORY_PLAN", "story-plan.json", llm_result, llm_result)]
+
+        # deterministic fallback
+        if audit.final_source == "DETERMINISTIC_FALLBACK":
+            logger.warning(
+                "Story Plan [%s] LLM unavailable or validation failed, using deterministic fallback",
+                audit.request_id,
+            )
+        proposal = _build_deterministic_story_plan(
+            ranking, ranking_inputs[0], candidates, target_duration, max_shots, STORY_BEATS
+        )
+        proposal["llmAudit"] = audit.to_dict()
         return [write_json_artifact("STORY_PLAN", "story-plan.json", proposal, proposal)]
+
+
+def _build_deterministic_story_plan(
+    ranking: dict[str, Any],
+    ranking_inputs: Any,
+    candidates: list[dict[str, Any]],
+    target_duration: int,
+    max_shots: int,
+    beats_def: list[tuple[str, float]],
+) -> dict[str, Any]:
+    """Pure deterministic story plan builder (extracted for fallback reuse)."""
+
+    budgets = _beat_budgets(target_duration)
+    used_ids: set[str] = set()
+    asset_counts = {shot["sourceAssetId"]: 0 for shot in candidates}
+    beats = []
+    remaining_slots = max_shots
+    for beat_index, ((role, _), budget) in enumerate(zip(beats_def, budgets)):
+        remaining_beats = len(beats_def) - beat_index
+        slot_limit = max(1, remaining_slots - (remaining_beats - 1))
+        available_count = sum(shot["shotId"] not in used_ids for shot in candidates)
+        candidate_limit = available_count - (remaining_beats - 1)
+        beat_shots = _select_for_beat(
+            role,
+            candidates,
+            used_ids,
+            asset_counts,
+            budget,
+            min(slot_limit, candidate_limit),
+        )
+        if not beat_shots:
+            raise ValueError(f"No candidate Shot is available for Story beat {role}")
+        used_ids.update(shot["shotId"] for shot in beat_shots)
+        for shot in beat_shots:
+            asset_id = shot["sourceAssetId"]
+            asset_counts[asset_id] = asset_counts.get(asset_id, 0) + 1
+        remaining_slots -= len(beat_shots)
+        beats.append({
+            "role": role,
+            "targetDurationMs": budget,
+            "actualDurationMs": sum(shot["selectedDurationMs"] for shot in beat_shots),
+            "shots": beat_shots,
+        })
+
+    proposal = {
+        "schemaVersion": "1.0",
+        "template": "TRAVEL_JOURNEY_V1",
+        "sourceRankingArtifactId": ranking_inputs.artifact_id,
+        "targetDurationMs": target_duration,
+        "maxShots": max_shots,
+        "beats": beats,
+        "assumptions": [
+            "No semantic scene labels are available; beat roles use deterministic quality, motion and chronology signals.",
+            "Story selection prefers the least-used source Asset when it can still fill the current beat exactly.",
+            "Only eligible ranked Shots are preferred; rejected Shots are used only when fewer than five eligible candidates exist.",
+        ],
+    }
+    allowed_ids = {shot["shotId"] for shot in ranking.get("shots") or []}
+    errors = StoryProposalValidator.validate(proposal, allowed_ids, target_duration, max_shots)
+    if errors:
+        raise ValueError("Story Plan validation failed: " + "; ".join(errors))
+    proposal["validation"] = {"valid": True, "errors": []}
+    return proposal
 
 
 class StoryProposalValidator:
@@ -232,6 +276,148 @@ class LlmStoryProposalValidator:
         if total_shots > max_shots:
             errors.append("proposal exceeds maxShots")
         return errors
+
+
+def _try_llm_story_plan(
+    provider: Any,
+    ranking: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    target_duration: int,
+    max_shots: int,
+    audit: LlmAuditRecord,
+) -> dict[str, Any] | None:
+    """Attempt LLM story proposal. Returns None if LLM fails or validation fails."""
+    audit.start()
+    start = time.monotonic()
+
+    try:
+        asset_count = len({shot.get("sourceAssetId") for shot in candidates})
+        budgets = _beat_budgets(target_duration)
+        system = StoryProposalPrompt.build_system_prompt()
+        user = StoryProposalPrompt.build_user_prompt(
+            candidates, target_duration, budgets, asset_count, max_shots,
+        )
+        audit.system_prompt_hash = StoryProposalPrompt.hash_system_prompt()
+
+        raw = provider.generate_json(
+            system, user, {},
+            temperature=0.3, request_id=audit.request_id,
+        )
+    except (LlmError, Exception) as exc:
+        logger.warning("LLM call failed [%s]: %s", audit.request_id, exc)
+        audit.mark_llm_error(provider.name, getattr(provider, "model", provider.name))
+        audit.duration_ms = int((time.monotonic() - start) * 1000)
+        return None
+
+    audit.mark_llm_success(provider.name, getattr(provider, "model", provider.name), raw)
+    audit.duration_ms = int((time.monotonic() - start) * 1000)
+
+    allowed_ids = {shot["shotId"] for shot in ranking.get("shots", [])}
+    errors = LlmStoryProposalValidator.validate(raw, allowed_ids, target_duration, max_shots)
+    if errors:
+        logger.warning("LLM proposal validation failed [%s]: %s", audit.request_id, errors)
+        audit.mark_validation_failed(errors)
+        return None
+
+    proposal = _compile_llm_proposal(raw, ranking, candidates, target_duration, max_shots)
+    errors = StoryProposalValidator.validate(proposal, allowed_ids, target_duration, max_shots)
+    if errors:
+        logger.warning("LLM compiled Story Plan validation failed [%s]: %s", audit.request_id, errors)
+        audit.mark_validation_failed(errors)
+        return None
+
+    proposal["validation"] = {"valid": True, "errors": []}
+    return proposal
+
+
+def _compile_llm_proposal(
+    raw: dict[str, Any],
+    ranking: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    target_duration: int,
+    max_shots: int,
+) -> dict[str, Any]:
+    """Compile an LLM proposal into a full Story Plan.
+
+    The LLM only chooses shotIds per beat.  We use the deterministic timing
+    helpers to compute sourceInMs / sourceOutMs so the LLM never sees raw
+    frame numbers or clip boundaries.
+    """
+    budgets = _beat_budgets(target_duration)
+    shot_map = {shot["shotId"]: shot for shot in candidates}
+    used_ids: set[str] = set()
+    beats = []
+
+    for (role, _), budget in zip(STORY_BEATS, budgets):
+        raw_beats = raw.get("beats", [])
+        raw_beat = raw_beats[len(beats)] if len(beats) < len(raw_beats) else {}
+        shot_ids = raw_beat.get("shotIds", [])
+        beat_shots = []
+        remaining = budget
+        for sid in shot_ids:
+            if sid in used_ids:
+                continue
+            shot = shot_map.get(sid)
+            if shot is None:
+                continue
+            duration = min(int(shot["durationMs"]), remaining)
+            if duration <= 0:
+                break
+            if duration < 600:
+                continue
+            source_in = _source_in_for_role(role, shot, duration)
+            beat_shots.append({
+                **shot,
+                "storyRole": role,
+                "sourceInMs": source_in,
+                "sourceOutMs": source_in + duration,
+                "selectedDurationMs": duration,
+                "selectionReasons": [
+                    f"LLM_STORY_ROLE_{role}",
+                    *raw_beat.get("reasonCodes", []),
+                ],
+            })
+            used_ids.add(sid)
+            remaining -= duration
+        if not beat_shots:
+            raise ValueError(f"No valid shots for beat {role}")
+
+        if remaining != 0 and beat_shots:
+            for shot_idx in range(len(beat_shots) - 1, -1, -1):
+                if remaining <= 0:
+                    break
+                shot = beat_shots[shot_idx]
+                shot_start = int(shot["startMs"])
+                shot_end = int(shot["endMs"])
+                max_available = shot_end - shot_start
+                extra = min(remaining, max_available - shot["selectedDurationMs"])
+                if extra <= 0:
+                    continue
+                new_dur = shot["selectedDurationMs"] + extra
+                if role == "ENDING":
+                    shot["sourceInMs"] = shot_end - new_dur
+                elif role in ("JOURNEY", "CLIMAX"):
+                    shot["sourceInMs"] = shot_start + max(0, (max_available - new_dur) // 2)
+                shot["sourceOutMs"] = shot["sourceInMs"] + new_dur
+                shot["selectedDurationMs"] = new_dur
+                remaining -= extra
+
+        beats.append({
+            "role": role,
+            "targetDurationMs": budget,
+            "actualDurationMs": sum(s["selectedDurationMs"] for s in beat_shots),
+            "shots": beat_shots,
+        })
+    return {
+        "schemaVersion": "1.0",
+        "template": "TRAVEL_JOURNEY_V1",
+        "sourceRankingArtifactId": "llm-proposal",
+        "targetDurationMs": target_duration,
+        "maxShots": max_shots,
+        "beats": beats,
+        "assumptions": (raw.get("assumptions") if isinstance(raw.get("assumptions"), list) else [str(raw.get("assumptions", ""))]),
+        "confidence": raw.get("confidence", 0),
+    }
 
 
 def _beat_budgets(target_duration_ms: int) -> list[int]:

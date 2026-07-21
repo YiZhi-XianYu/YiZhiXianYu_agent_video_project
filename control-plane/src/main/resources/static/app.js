@@ -123,8 +123,10 @@ function renderRun(run) {
 
     const metadataArtifact = (run.tasks || []).flatMap(task => task.artifacts || []).find(artifact => artifact.type === "VIDEO_METADATA");
     if (metadataArtifact) renderMetadata(metadataArtifact);
-    const proxyArtifact = (run.tasks || []).flatMap(task => task.artifacts || []).find(artifact => artifact.type === "VIDEO_PROXY");
-    if (proxyArtifact) renderProxy(proxyArtifact);
+    const proxyArtifacts = (run.tasks || []).flatMap(task =>
+        (task.artifacts || []).filter(a => a.type === "VIDEO_PROXY").map(a => ({...a, taskAssetId: task.assetId}))
+    );
+    if (proxyArtifacts.length) renderProxies(proxyArtifacts);
     renderShots(run.tasks || []);
     renderDecisions(run.tasks || []);
 }
@@ -299,58 +301,153 @@ function renderDecisions(tasks) {
         item.innerHTML = `<span>${label}</span><strong>${value}</strong>`;
         return item;
     }));
+    const llmAudit = storyData.llmAudit;
+    if (llmAudit) {
+        const isLlm = llmAudit.finalSource === "LLM";
+        const color = isLlm ? "#e67e22" : "#888";
+        const text = isLlm ? "AI 生成" : "确定性算法";
+        
+        // 主 badge
+        const sourceBadge = document.createElement("div");
+        sourceBadge.innerHTML = `<span>故事来源</span><strong style="color:${color}">${text}</strong>`;
+        el("decision-summary").appendChild(sourceBadge);
+        
+        // 如果 LLM 参与过（含失败回退），显示详细审计
+        if (llmAudit.provider && llmAudit.provider !== "none") {
+            const auditDetail = document.createElement("div");
+            const wasLLM = llmAudit.finalSource === "LLM";
+            const wasFallback = llmAudit.finalSource === "DETERMINISTIC_FALLBACK";
+
+            let statusText = "";
+            if (wasLLM) {
+                statusText = "通过校验，已采用";
+            } else if (wasFallback && llmAudit.validationErrors.length > 0) {
+                statusText = "校验失败: " + llmAudit.validationErrors.slice(0, 2).join("; ");
+            } else if (wasFallback) {
+                statusText = "LLM 调用异常，已回退";
+            }
+
+            auditDetail.innerHTML = `<span>LLM审计</span>
+                <small>${llmAudit.provider}/${llmAudit.model} · ${llmAudit.durationMs}ms · candidates=${llmAudit.inputCandidateCount}</small>
+                <small style="color:${wasLLM ? '#27ae60' : '#e74c3c'}">${statusText}</small>`;
+            el("decision-summary").appendChild(auditDetail);
+        }
+    }
     el("story-beats").replaceChildren(...(storyData.beats || []).map(beat => {
         const item = document.createElement("article");
         item.className = "story-beat";
-        item.innerHTML = `<strong>${beat.role}</strong><span>${(beat.actualDurationMs / 1000).toFixed(2)}s / ${(beat.targetDurationMs / 1000).toFixed(2)}s</span><small>${beat.shots?.length ?? 0} shots</small>`;
+        const sourceLabel = (llmAudit && llmAudit.finalSource === "LLM") 
+            ? "✨ " : "⚙ ";
+        const roleNames = { HOOK: "开场", INTRO: "介绍", JOURNEY: "旅程", CLIMAX: "高潮", ENDING: "收尾" };
+        item.innerHTML = `<strong>${sourceLabel}${beat.role}</strong><span>${(beat.actualDurationMs / 1000).toFixed(2)}s / ${(beat.targetDurationMs / 1000).toFixed(2)}s</span><small>${beat.shots?.length ?? 0} shots</small>`;
+        if (beat.shots?.length) {
+            const shotList = document.createElement("div");
+            shotList.className = "beat-shot-list";
+            beat.shots.forEach(shot => {
+                const shotRow = document.createElement("div");
+                shotRow.className = "beat-shot-row";
+                const asset = state.assets.find(a => a.id === shot.sourceAssetId);
+                const srcLabel = asset?.fileName || shot.sourceAssetId?.slice(0, 8) || "?";
+                const timeRange = `${(shot.sourceInMs / 1000).toFixed(1)}s–${(shot.sourceOutMs / 1000).toFixed(1)}s`;
+                shotRow.innerHTML = `<code>#${shot.rank}</code><span class="beat-shot-asset">${srcLabel}</span><span class="beat-shot-time">${timeRange}</span>`;
+                shotList.appendChild(shotRow);
+            });
+            item.appendChild(shotList);
+        }
         return item;
     }));
-    const clips = timelineData.tracks?.find(track => track.type === "VIDEO")?.clips || [];
-    el("timeline-track").replaceChildren(...clips.map((clip, index) => {
-        const item = document.createElement("div");
-        item.className = "timeline-clip";
-        const asset = state.assets.find(value => value.id === clip.assetId);
-        item.innerHTML = `<strong>${index + 1}. ${asset?.fileName || clip.assetId}</strong><small>${clip.storyRole} · ${(clip.sourceInMs / 1000).toFixed(2)}s - ${(clip.sourceOutMs / 1000).toFixed(2)}s</small><small>rank #${clip.selectionRank}</small>`;
-        return item;
-    }));
+    if (timelineData.tracks?.[0]?.clips?.length) {
+        const totalMs = timelineData.durationMs || 30000;
+        el("timeline-track").replaceChildren(...timelineData.tracks[0].clips.map(clip => {
+            const block = document.createElement("div");
+            block.className = `timeline-clip role-${clip.storyRole}`;
+            block.style.width = `${Math.max((clip.timelineOutMs - clip.timelineInMs) / totalMs * 100, 2)}%`;
+            const asset = state.assets.find(a => a.id === clip.assetId);
+            const srcLabel = asset?.fileName || clip.assetId?.slice(0, 8) || "?";
+            const tIn = (clip.timelineInMs / 1000).toFixed(1);
+            const tOut = (clip.timelineOutMs / 1000).toFixed(1);
+            const srcIn = (clip.sourceInMs / 1000).toFixed(1);
+            const srcOut = (clip.sourceOutMs / 1000).toFixed(1);
+            block.innerHTML = `<span>#${clip.selectionRank} ${srcLabel}</span><small>${srcIn}s → ${srcOut}s</small><small>T+${tIn}s–${tOut}s</small>`;
+            block.title = `${clip.storyRole} · #${clip.selectionRank} · ${srcLabel}\n源 ${srcIn}s–${srcOut}s  时间线 ${tIn}s–${tOut}s`;
+            return block;
+        }));
+    }
+}
+ 
+function showError(error) {
+    const box = el("error-box");
+    box.hidden = false;
+    box.textContent = error?.message || error?.toString() || "未知错误";
+    console.error(error);
+}
+
+function setServiceState(text) {
+    el("service-state").textContent = text;
+}
+
+function setStatus(element, status) {
+    element.className = "status";
+    switch (status) {
+        case "RUNNING": element.classList.add("running"); break;
+        case "SUCCEEDED": element.classList.add("success"); break;
+        case "FAILED": element.classList.add("failed"); break;
+        default: element.classList.add("neutral");
+    }
 }
 
 function parseMetadata(artifact) {
-    try { return JSON.parse(artifact.metadataJson) || {}; } catch { return {}; }
+    if (!artifact?.metadataJson) return {};
+    try { return JSON.parse(artifact.metadataJson); } catch { return {}; }
+}
+
+function formatBytes(bytes) {
+    if (bytes == null) return "?";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 function renderMetadata(artifact) {
-    el("metadata-artifact-state").textContent = `已生成 ${artifact.type}`;
-    const metadata = JSON.parse(artifact.metadataJson);
-    el("meta-duration").textContent = `${(metadata.durationMs / 1000).toFixed(2)} 秒`;
-    el("meta-resolution").textContent = `${metadata.width ?? "-"} × ${metadata.height ?? "-"}`;
-    el("meta-fps").textContent = metadata.fps ?? "-";
-    el("meta-video-codec").textContent = metadata.videoCodec ?? "-";
-    el("meta-audio-codec").textContent = metadata.hasAudio ? (metadata.audioCodec ?? "未知") : "无音轨";
-    el("meta-size").textContent = formatBytes(metadata.sizeBytes);
+    el("metadata-artifact-state").textContent = "已输出";
+    const meta = parseMetadata(artifact);
+    el("meta-duration").textContent = meta.durationMs ? `${(meta.durationMs / 1000).toFixed(2)}s` : "-";
+    el("meta-resolution").textContent = meta.width && meta.height ? `${meta.width}×${meta.height}` : "-";
+    el("meta-fps").textContent = meta.fps || "-";
+    el("meta-video-codec").textContent = meta.videoCodec || "-";
+    el("meta-audio-codec").textContent = meta.audioCodec || "-";
+    el("meta-size").textContent = meta.sizeBytes ? formatBytes(meta.sizeBytes) : "-";
 }
 
-function renderProxy(artifact) {
-    const metadata = JSON.parse(artifact.metadataJson);
-    el("proxy-artifact-state").textContent = `已生成 ${artifact.type}，${formatBytes(metadata.sizeBytes)}`;
-    el("proxy-preview").hidden = false;
-    if (el("proxy-video").getAttribute("src") !== artifact.contentUrl) {
-        el("proxy-video").src = artifact.contentUrl;
-    }
-    el("proxy-download").href = artifact.contentUrl;
-    el("proxy-details").textContent = `${metadata.quality ?? "-"} · ${metadata.width ?? "-"} × ${metadata.height ?? "-"} · ${metadata.fps ?? 30} FPS · ${metadata.videoCodec ?? "h264"} · ${formatBytes(metadata.sizeBytes)}`;
-}
 
-function setStatus(node, status) {
-    node.className = "status " + (status === "SUCCEEDED" ? "success" : status === "FAILED" ? "failed" : ["RUNNING", "DISPATCHING", "READY", "RETRY_WAIT"].includes(status) ? "running" : "neutral");
-}
-
-function setServiceState(text) { el("service-state").textContent = text; }
-function showError(error) { el("error-box").hidden = false; el("error-box").textContent = error.message; setServiceState("发生错误"); }
-function formatBytes(value) {
-    if (value == null) return "-";
-    const units = ["B", "KB", "MB", "GB"];
-    let index = 0, size = Number(value);
-    while (size >= 1024 && index < units.length - 1) { size /= 1024; index++; }
-    return `${size.toFixed(index ? 2 : 0)} ${units[index]}`;
+function renderProxies(proxies) {
+    el("proxy-artifact-state").textContent = "已生成";
+    const container = el("proxy-previews");
+    container.replaceChildren(...proxies.map(proxy => {
+        const section = document.createElement("section");
+        section.className = "proxy-preview";
+        const asset = state.assets.find(a => a.id === proxy.taskAssetId);
+        const label = asset?.fileName || proxy.taskAssetId?.slice(0, 8) || "素材";
+        const dl = document.createElement("a");
+        dl.className = "download-link";
+        dl.href = proxy.contentUrl;
+        dl.download = "";
+        dl.textContent = "下载 MP4";
+        const vid = document.createElement("video");
+        vid.controls = true;
+        vid.preload = "metadata";
+        vid.src = proxy.contentUrl;
+        const info = document.createElement("p");
+        info.className = "result";
+        info.textContent = proxy.fileName || "代理视频";
+        const header = document.createElement("div");
+        header.className = "workspace-header";
+        header.innerHTML = '<div><p class="eyebrow">GENERATED VIDEO ARTIFACT</p><h2>代理视频 &middot; ' + label + '</h2></div>';
+        header.appendChild(dl);
+        section.appendChild(header);
+        section.appendChild(vid);
+        section.appendChild(info);
+        return section;
+    }));
 }

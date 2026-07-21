@@ -1,6 +1,13 @@
 from pathlib import Path
 
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Load .env before Settings is instantiated so all env vars are available.
+# This runs once at module import time.  If the file does not exist
+# (e.g. in CI) load_dotenv silently returns False.
+_project_root = Path(__file__).resolve().parent.parent.parent
+load_dotenv(_project_root / ".env")
 
 
 class Settings(BaseSettings):
@@ -10,6 +17,12 @@ class Settings(BaseSettings):
     ffprobe_path: str = "ffprobe"
     artifact_root: Path = Path("runtime/artifacts")
     callback_timeout_seconds: float = 10.0
+
+    # LLM configuration (loaded from .env or environment)
+    llm_provider: str = "deepseek"
+    llm_api_key: str = ""
+    llm_base_url: str = "https://api.deepseek.com"
+    llm_model: str = "deepseek-chat"
 
     model_config = SettingsConfigDict(
         env_prefix="TOOL_SERVICE_",

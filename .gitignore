@@ -9,6 +9,7 @@ control-plane/target/
 # Python
 __pycache__/
 *.py[cod]
+.venv/
 .pytest_cache/
 
 # Local runtime data
@@ -20,3 +21,5 @@ tool-service/runtime/
 .env
 *.local.yml
 
+# Environment
+.env

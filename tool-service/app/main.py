@@ -1,3 +1,8 @@
+import warnings
+
+# Suppress Pydantic alias warnings on union types (known harmless with Pydantic 2.x)
+warnings.filterwarnings("ignore", message=".*'alias' attribute.*was provided to the `Field`.*")
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -20,4 +25,3 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(router)
-
