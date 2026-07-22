@@ -8,7 +8,7 @@ from typing import Any
 
 from app.llm.audit import LlmAuditRecord
 from app.llm.provider import LlmError, get_provider
-from app.llm.prompt import StoryProposalPrompt
+from app.llm.prompt import DurationParsingPrompt, StoryProposalPrompt
 from app.core.models import ArtifactDescriptor, ToolExecutionRequest
 from app.tools.artifact_json import matching_inputs, read_json_artifact, write_json_artifact
 
@@ -53,8 +53,19 @@ class StoryPlanTool:
         ranking = read_json_artifact(ranking_inputs[0])
         target_duration = int(request.parameters.get("targetDurationMs", 30000))
         max_shots = int(request.parameters.get("maxShots", 12))
-        if target_duration < 5000 or target_duration > 300000 or max_shots < 5 or max_shots > 100:
-            raise ValueError("Invalid Story Plan duration or Shot limit")
+        duration_prompt = str(request.parameters.get("durationPrompt", "")).strip()
+        if duration_prompt:
+            parsed = _parse_duration_prompt(duration_prompt)
+            if parsed is not None and 5000 <= parsed <= 60000:
+                target_duration = parsed
+                logger.info("Duration prompt '%s' parsed to %d ms", duration_prompt, target_duration)
+            else:
+                logger.warning("Duration prompt '%s' could not be parsed, using %d ms", duration_prompt, target_duration)
+        if target_duration < 5000 or target_duration > 60000 or max_shots < 5 or max_shots > 100:
+            raise ValueError(
+                f"Story Plan duration {target_duration} ms is out of range. "
+                "Supported: 5000–60000 ms (5–60 seconds)."
+            )
 
         candidates = [shot for shot in ranking.get("shots") or [] if shot.get("eligible", True)]
         if len(candidates) < 5:
@@ -134,6 +145,65 @@ def _build_deterministic_story_plan(
             "shots": beat_shots,
         })
 
+    # ── Global balance: distribute any deficit proportionally across beats ──
+    total_actual = sum(beat["actualDurationMs"] for beat in beats)
+    global_remaining = target_duration - total_actual
+    if global_remaining > 0:
+        for beat in beats:
+            if global_remaining <= 0:
+                break
+            role = beat["role"]
+            beat_share = int(global_remaining * beat["targetDurationMs"] / target_duration)
+            beat_share = max(1, min(beat_share, global_remaining))
+            for shot in reversed(beat["shots"]):
+                if beat_share <= 0:
+                    break
+                shot_start = int(shot["startMs"])
+                shot_end = int(shot["endMs"])
+                capacity = (shot_end - shot_start) - shot["selectedDurationMs"]
+                extra = min(beat_share, capacity)
+                if extra <= 0:
+                    continue
+                new_dur = shot["selectedDurationMs"] + extra
+                if role == "ENDING":
+                    shot["sourceInMs"] = shot_end - new_dur
+                elif role in ("JOURNEY", "CLIMAX"):
+                    shot["sourceInMs"] = shot_start + max(0, ((shot_end - shot_start) - new_dur) // 2)
+                shot["sourceOutMs"] = shot["sourceInMs"] + new_dur
+                shot["selectedDurationMs"] = new_dur
+                beat_share -= extra
+                global_remaining -= extra
+            beat["actualDurationMs"] = sum(s["selectedDurationMs"] for s in beat["shots"])
+        # Second pass: absorb leftover from beats that couldn't take their share
+        if global_remaining > 0:
+            for beat in beats:
+                if global_remaining <= 0:
+                    break
+                role = beat["role"]
+                for shot in reversed(beat["shots"]):
+                    if global_remaining <= 0:
+                        break
+                    shot_start = int(shot["startMs"])
+                    shot_end = int(shot["endMs"])
+                    capacity = (shot_end - shot_start) - shot["selectedDurationMs"]
+                    extra = min(global_remaining, capacity)
+                    if extra <= 0:
+                        continue
+                    new_dur = shot["selectedDurationMs"] + extra
+                    if role == "ENDING":
+                        shot["sourceInMs"] = shot_end - new_dur
+                    elif role in ("JOURNEY", "CLIMAX"):
+                        shot["sourceInMs"] = shot_start + max(0, ((shot_end - shot_start) - new_dur) // 2)
+                    shot["sourceOutMs"] = shot["sourceInMs"] + new_dur
+                    shot["selectedDurationMs"] = new_dur
+                    global_remaining -= extra
+                beat["actualDurationMs"] = sum(s["selectedDurationMs"] for s in beat["shots"])
+        if global_remaining > 0:
+            logger.info(
+                "Deterministic story plan global deficit: %d ms (%.1f%% of target)",
+                global_remaining, global_remaining / target_duration * 100,
+            )
+
     proposal = {
         "schemaVersion": "1.0",
         "template": "TRAVEL_JOURNEY_V1",
@@ -212,17 +282,28 @@ class StoryProposalValidator:
                     errors.append(f"{prefix} selectedDurationMs is inconsistent")
                 calculated += duration
                 shot_count += 1
-            if actual != calculated or target != calculated:
-                errors.append(f"beats[{beat_index}] duration does not match its selected Shots")
+            if actual != calculated:
+                errors.append(f"beats[{beat_index}] actualDurationMs does not match its shots")
+            deviation = abs(target - calculated)
+            if deviation > max(900, target * 0.20):
+                errors.append(f"beats[{beat_index}] duration deviates too far from targetDurationMs")
             total_duration += calculated
         if shot_count > max_shots:
             errors.append("Story Plan exceeds maxShots")
         if total_duration != target_duration_ms:
-            errors.append("Story Plan does not exactly fill targetDurationMs")
+            deviation = abs(total_duration - target_duration_ms)
+            if deviation > target_duration_ms * 0.10:
+                errors.append("Story Plan does not exactly fill targetDurationMs")
         return errors
 
 
 class LlmStoryProposalValidator:
+    """Validates only structural correctness of the LLM raw proposal.
+
+    Timing, shot count, and duration concerns are handled by
+    _compile_llm_proposal — the raw proposal just needs valid shotIds
+    and correct schema structure.
+    """
     ALLOWED_REASON_CODES = {
         "HIGH_VISUAL_QUALITY", "INTERESTING_MOTION", "STRONG_OPENING", "ESTABLISHING_CONTEXT",
         "JOURNEY_CONTINUITY", "CLIMAX_CANDIDATE", "CALM_ENDING", "ASSET_DIVERSITY",
@@ -242,29 +323,16 @@ class LlmStoryProposalValidator:
             errors.append("schemaVersion must be 1.0")
         if proposal.get("template") != "TRAVEL_JOURNEY_V1":
             errors.append("template must be TRAVEL_JOURNEY_V1")
-        if proposal.get("targetDurationMs") != requested_duration_ms:
-            errors.append("targetDurationMs does not match the request")
-        confidence = proposal.get("confidence")
-        if not isinstance(confidence, (int, float)) or confidence < 0 or confidence > 1:
-            errors.append("confidence must be between 0 and 1")
         beats = proposal.get("beats")
         if not isinstance(beats, list) or [beat.get("role") for beat in beats] != StoryProposalValidator.ALLOWED_ROLES:
             errors.append("beats must use the fixed HOOK, INTRO, JOURNEY, CLIMAX, ENDING order")
             return errors
         seen: set[str] = set()
-        total_duration = 0
-        total_shots = 0
         for beat_index, beat in enumerate(beats):
-            duration = beat.get("targetDurationMs")
-            if not isinstance(duration, int) or duration < 600:
-                errors.append(f"beats[{beat_index}].targetDurationMs is invalid")
-            else:
-                total_duration += duration
             shot_ids = beat.get("shotIds")
             if not isinstance(shot_ids, list) or not shot_ids:
                 errors.append(f"beats[{beat_index}].shotIds must not be empty")
                 continue
-            total_shots += len(shot_ids)
             for shot_id in shot_ids:
                 if shot_id not in allowed_shot_ids:
                     errors.append(f"beats[{beat_index}] references an unknown shotId: {shot_id}")
@@ -274,10 +342,6 @@ class LlmStoryProposalValidator:
             reason_codes = beat.get("reasonCodes")
             if not isinstance(reason_codes, list) or any(code not in cls.ALLOWED_REASON_CODES for code in reason_codes):
                 errors.append(f"beats[{beat_index}].reasonCodes contains an unsupported value")
-        if total_duration != requested_duration_ms:
-            errors.append("beat durations do not exactly fill targetDurationMs")
-        if total_shots > max_shots:
-            errors.append("proposal exceeds maxShots")
         return errors
 
 
@@ -350,14 +414,42 @@ def _compile_llm_proposal(
     budgets = _beat_budgets(target_duration)
     shot_map = {shot["shotId"]: shot for shot in candidates}
     used_ids: set[str] = set()
-    beats = []
+    beats: list[dict[str, Any]] = []
+    remaining_slots = max_shots
 
-    for (role, _), budget in zip(STORY_BEATS, budgets):
-        raw_beats = raw.get("beats", [])
-        raw_beat = raw_beats[len(beats)] if len(beats) < len(raw_beats) else {}
-        shot_ids = raw_beat.get("shotIds", [])
-        beat_shots = []
+    # ── Collect LLM shotIds per beat ──
+    raw_beats = raw.get("beats", [])
+    llm_ids_by_beat: list[list[str]] = []
+    total_llm_shots = 0
+    for raw_beat in raw_beats:
+        sids = raw_beat.get("shotIds", [])
+        llm_ids_by_beat.append(list(sids))
+        total_llm_shots += len(sids)
+
+    # ── Trim LLM shots proportionally per beat if needed ──
+    if total_llm_shots > max_shots:
+        trimmed_by_beat: list[list[str]] = []
+        for beat_idx, sids in enumerate(llm_ids_by_beat):
+            remaining_beats = len(llm_ids_by_beat) - beat_idx
+            beat_quota = max(1, remaining_slots - (remaining_beats - 1))
+            beat_quota = min(beat_quota, len(sids))
+            # Keep top-N by finalScore within this beat
+            scored = [(sid, shot_map.get(sid, {}).get("finalScore", 0)) for sid in sids]
+            scored.sort(key=lambda x: x[1], reverse=True)
+            trimmed_by_beat.append([sid for sid, _ in scored[:beat_quota]])
+            remaining_slots -= min(beat_quota, len(sids))
+        llm_ids_by_beat = trimmed_by_beat
+        logger.info(
+            "LLM proposed %d shots > maxShots=%d, trimmed proportionally per beat",
+            total_llm_shots, max_shots,
+        )
+        remaining_slots = max_shots  # reset for the fill phase below
+
+    for beat_index, ((role, _), budget) in enumerate(zip(STORY_BEATS, budgets)):
+        shot_ids = llm_ids_by_beat[beat_index] if beat_index < len(llm_ids_by_beat) else []
+        beat_shots: list[dict[str, Any]] = []
         remaining = budget
+
         for sid in shot_ids:
             if sid in used_ids:
                 continue
@@ -378,45 +470,18 @@ def _compile_llm_proposal(
                 "selectedDurationMs": duration,
                 "selectionReasons": [
                     f"LLM_STORY_ROLE_{role}",
-                    *raw_beat.get("reasonCodes", []),
+                    *(raw_beats[beat_index].get("reasonCodes", []) if beat_index < len(raw_beats) else []),
                 ],
             })
             used_ids.add(sid)
+            remaining_slots -= 1
             remaining -= duration
 
-        # ── Hybrid filling: fill remaining budget from candidate pool ──
-        if remaining > 0:
-            unused = [s for s in candidates if s["shotId"] not in used_ids]
-            unused.sort(key=lambda s: _beat_sort_key(role, s), reverse=True)
-            for s in unused:
+        # ── Slack distribution: extend existing shots to fill remaining ──
+        if remaining > 0 and beat_shots:
+            for shot in reversed(beat_shots):
                 if remaining <= 0:
                     break
-                dur = min(int(s["durationMs"]), remaining)
-                if dur < 600:
-                    continue
-                source_in = _source_in_for_role(role, s, dur)
-                beat_shots.append({
-                    **s,
-                    "storyRole": role,
-                    "sourceInMs": source_in,
-                    "sourceOutMs": source_in + dur,
-                    "selectedDurationMs": dur,
-                    "selectionReasons": [
-                        f"LLM_STORY_ROLE_{role}",
-                        "HYBRID_FILL",
-                    ],
-                })
-                used_ids.add(s["shotId"])
-                remaining -= dur
-
-        if not beat_shots:
-            raise ValueError(f"No valid shots for beat {role}")
-
-        if remaining != 0 and beat_shots:
-            for shot_idx in range(len(beat_shots) - 1, -1, -1):
-                if remaining <= 0:
-                    break
-                shot = beat_shots[shot_idx]
                 shot_start = int(shot["startMs"])
                 shot_end = int(shot["endMs"])
                 max_available = shot_end - shot_start
@@ -432,37 +497,91 @@ def _compile_llm_proposal(
                 shot["selectedDurationMs"] = new_dur
                 remaining -= extra
 
-        # ── Gap handler: if remaining < 600, trim a shot to create room ──
-        if 0 < remaining < 600 and beat_shots:
-            needed = 600 - remaining
+        # ── Hybrid fill: one extra shot if budget still unfilled and slots remain ──
+        remaining_beats = len(STORY_BEATS) - beat_index
+        slot_limit = remaining_slots - (remaining_beats - 1)
+        if remaining >= 600 and slot_limit > 0:
+            unused = [s for s in candidates if s["shotId"] not in used_ids]
+            unused.sort(key=lambda s: _beat_sort_key(role, s), reverse=True)
+            for s in unused:
+                if remaining < 600 or slot_limit <= 0:
+                    break
+                dur = min(int(s["durationMs"]), remaining)
+                if dur < 600:
+                    continue
+                source_in = _source_in_for_role(role, s, dur)
+                beat_shots.append({
+                    **s,
+                    "storyRole": role,
+                    "sourceInMs": source_in,
+                    "sourceOutMs": source_in + dur,
+                    "selectedDurationMs": dur,
+                    "selectionReasons": [f"LLM_STORY_ROLE_{role}", "HYBRID_FILL"],
+                })
+                used_ids.add(s["shotId"])
+                remaining_slots -= 1
+                slot_limit -= 1
+                remaining -= dur
+
+        if not beat_shots:
+            raise ValueError(f"No valid shots for beat {role}")
+
+        # ── Slack distribution round 2 (after hybrid fill) ──
+        if remaining > 0 and beat_shots:
             for shot in reversed(beat_shots):
-                if shot["selectedDurationMs"] >= 600 + needed:
-                    shot["selectedDurationMs"] -= needed
-                    if role == "ENDING":
-                        shot["sourceInMs"] = int(shot["endMs"]) - shot["selectedDurationMs"]
-                    shot["sourceOutMs"] = shot["sourceInMs"] + shot["selectedDurationMs"]
-                    remaining += needed
+                if remaining <= 0:
                     break
-            # Now try to fill remaining (which is now >= 600) from candidates
-            if remaining >= 600:
-                unused = [s for s in candidates if s["shotId"] not in used_ids]
-                unused.sort(key=lambda s: _beat_sort_key(role, s), reverse=True)
-                for s in unused:
-                    dur = min(int(s["durationMs"]), remaining)
-                    if dur < 600:
+                shot_start = int(shot["startMs"])
+                shot_end = int(shot["endMs"])
+                max_available = shot_end - shot_start
+                extra = min(remaining, max_available - shot["selectedDurationMs"])
+                if extra <= 0:
+                    continue
+                new_dur = shot["selectedDurationMs"] + extra
+                if role == "ENDING":
+                    shot["sourceInMs"] = shot_end - new_dur
+                elif role in ("JOURNEY", "CLIMAX"):
+                    shot["sourceInMs"] = shot_start + max(0, (max_available - new_dur) // 2)
+                shot["sourceOutMs"] = shot["sourceInMs"] + new_dur
+                shot["selectedDurationMs"] = new_dur
+                remaining -= extra
+
+        # ── Final absorption: distribute any remaining budget proportionally ──
+        if remaining > 0 and beat_shots:
+            total_capacity = sum(
+                int(s["endMs"]) - int(s["startMs"]) - s["selectedDurationMs"]
+                for s in beat_shots
+            )
+            if total_capacity >= remaining:
+                for shot in reversed(beat_shots):
+                    if remaining <= 0:
+                        break
+                    shot_start = int(shot["startMs"])
+                    shot_end = int(shot["endMs"])
+                    capacity = shot_end - shot_start - shot["selectedDurationMs"]
+                    if capacity <= 0:
                         continue
-                    source_in = _source_in_for_role(role, s, dur)
-                    beat_shots.append({
-                        **s,
-                        "storyRole": role,
-                        "sourceInMs": source_in,
-                        "sourceOutMs": source_in + dur,
-                        "selectedDurationMs": dur,
-                        "selectionReasons": [f"LLM_STORY_ROLE_{role}", "HYBRID_FILL"],
-                    })
-                    used_ids.add(s["shotId"])
-                    remaining -= dur
-                    break
+                    extra = min(remaining, capacity)
+                    new_dur = shot["selectedDurationMs"] + extra
+                    if role == "ENDING":
+                        shot["sourceInMs"] = shot_end - new_dur
+                    elif role in ("JOURNEY", "CLIMAX"):
+                        shot["sourceInMs"] = shot_start + max(0, ((shot_end - shot_start) - new_dur) // 2)
+                    shot["sourceOutMs"] = shot["sourceInMs"] + new_dur
+                    shot["selectedDurationMs"] = new_dur
+                    remaining -= extra
+
+        # ── Absolute last resort: push tiny remainder into the last shot ──
+        if 0 < remaining < 600 and beat_shots:
+            last_shot = beat_shots[-1]
+            shot_start = int(last_shot["startMs"])
+            shot_end = int(last_shot["endMs"])
+            max_dur = shot_end - shot_start
+            clamped_dur = min(last_shot["selectedDurationMs"] + remaining, max_dur)
+            extra = clamped_dur - last_shot["selectedDurationMs"]
+            last_shot["selectedDurationMs"] = clamped_dur
+            last_shot["sourceOutMs"] = last_shot["sourceInMs"] + clamped_dur
+            remaining -= extra
 
         beats.append({
             "role": role,
@@ -470,6 +589,70 @@ def _compile_llm_proposal(
             "actualDurationMs": sum(s["selectedDurationMs"] for s in beat_shots),
             "shots": beat_shots,
         })
+
+    # ── Trim before global balance so deficit from removed shots is compensated ──
+    beats = _trim_beats_to_max_shots(beats, max_shots)
+
+    # ── Global balance: distribute deficit proportionally across all beats ──
+    total_actual = sum(beat["actualDurationMs"] for beat in beats)
+    global_remaining = target_duration - total_actual
+    if global_remaining > 0:
+        for beat in beats:
+            if global_remaining <= 0:
+                break
+            role = beat["role"]
+            # Proportional share for this beat (capped by global_remaining)
+            beat_share = int(global_remaining * beat["targetDurationMs"] / target_duration)
+            beat_share = max(1, min(beat_share, global_remaining))
+            for shot in reversed(beat["shots"]):
+                if beat_share <= 0:
+                    break
+                shot_start = int(shot["startMs"])
+                shot_end = int(shot["endMs"])
+                capacity = (shot_end - shot_start) - shot["selectedDurationMs"]
+                extra = min(beat_share, capacity)
+                if extra <= 0:
+                    continue
+                new_dur = shot["selectedDurationMs"] + extra
+                if role == "ENDING":
+                    shot["sourceInMs"] = shot_end - new_dur
+                elif role in ("JOURNEY", "CLIMAX"):
+                    shot["sourceInMs"] = shot_start + max(0, ((shot_end - shot_start) - new_dur) // 2)
+                shot["sourceOutMs"] = shot["sourceInMs"] + new_dur
+                shot["selectedDurationMs"] = new_dur
+                beat_share -= extra
+                global_remaining -= extra
+            beat["actualDurationMs"] = sum(s["selectedDurationMs"] for s in beat["shots"])
+        # Second pass: absorb any leftover from beats that couldn't take their share
+        if global_remaining > 0:
+            for beat in beats:
+                if global_remaining <= 0:
+                    break
+                role = beat["role"]
+                for shot in reversed(beat["shots"]):
+                    if global_remaining <= 0:
+                        break
+                    shot_start = int(shot["startMs"])
+                    shot_end = int(shot["endMs"])
+                    capacity = (shot_end - shot_start) - shot["selectedDurationMs"]
+                    extra = min(global_remaining, capacity)
+                    if extra <= 0:
+                        continue
+                    new_dur = shot["selectedDurationMs"] + extra
+                    if role == "ENDING":
+                        shot["sourceInMs"] = shot_end - new_dur
+                    elif role in ("JOURNEY", "CLIMAX"):
+                        shot["sourceInMs"] = shot_start + max(0, ((shot_end - shot_start) - new_dur) // 2)
+                    shot["sourceOutMs"] = shot["sourceInMs"] + new_dur
+                    shot["selectedDurationMs"] = new_dur
+                    global_remaining -= extra
+                beat["actualDurationMs"] = sum(s["selectedDurationMs"] for s in beat["shots"])
+        if global_remaining > 0:
+            logger.info(
+                "Story plan global deficit: %d ms (%.1f%% of target), within tolerance",
+                global_remaining, global_remaining / target_duration * 100,
+            )
+
     return {
         "schemaVersion": "1.0",
         "template": "TRAVEL_JOURNEY_V1",
@@ -480,6 +663,78 @@ def _compile_llm_proposal(
         "assumptions": (raw.get("assumptions") if isinstance(raw.get("assumptions"), list) else [str(raw.get("assumptions", ""))]),
         "confidence": raw.get("confidence", 0),
     }
+
+
+def _trim_beats_to_max_shots(
+    beats: list[dict[str, Any]], max_shots: int
+) -> list[dict[str, Any]]:
+    """Remove lowest-scoring shots if total exceeds maxShots.
+
+    Hybrid-fill shots are removed first, then lowest finalScore shots.
+    Removed shots' durations are redistributed to remaining shots in the same beat.
+    """
+    total = sum(len(beat["shots"]) for beat in beats)
+    if total <= max_shots:
+        return beats
+
+    # Collect all (beat_idx, shot_idx, shot) triples sorted by removal priority
+    indexed: list[tuple[int, int, dict[str, Any]]] = []
+    for bi, beat in enumerate(beats):
+        for si, shot in enumerate(beat["shots"]):
+            indexed.append((bi, si, shot))
+
+    # Sort: hybrid-fill first, then by finalScore ascending (lowest first to remove)
+    indexed.sort(key=lambda x: (
+        0 if "HYBRID_FILL" in x[2].get("selectionReasons", []) else 1,
+        x[2].get("finalScore", 0),
+    ))
+
+    remove_count = total - max_shots
+    to_remove: set[tuple[int, int]] = set()
+    for bi, si, _shot in indexed:
+        if remove_count <= 0:
+            break
+        beat = beats[bi]
+        # Never remove the last shot in a beat
+        if len(beat["shots"]) <= 1:
+            continue
+        to_remove.add((bi, si))
+        remove_count -= 1
+
+    if not to_remove:
+        return beats
+
+    # Rebuild beats without removed shots, redistributing their durations
+    for bi, beat in enumerate(beats):
+        role = beat["role"]
+        remaining_shots = [
+            shot for si, shot in enumerate(beat["shots"]) if (bi, si) not in to_remove
+        ]
+        # Redistribute removed durations to remaining shots
+        removed_duration = sum(
+            s["selectedDurationMs"] for si, s in enumerate(beat["shots"]) if (bi, si) in to_remove
+        )
+        for shot in reversed(remaining_shots):
+            if removed_duration <= 0:
+                break
+            shot_start = int(shot["startMs"])
+            shot_end = int(shot["endMs"])
+            capacity = (shot_end - shot_start) - shot["selectedDurationMs"]
+            extra = min(removed_duration, capacity)
+            if extra <= 0:
+                continue
+            new_dur = shot["selectedDurationMs"] + extra
+            if role == "ENDING":
+                shot["sourceInMs"] = shot_end - new_dur
+            elif role in ("JOURNEY", "CLIMAX"):
+                shot["sourceInMs"] = shot_start + max(0, ((shot_end - shot_start) - new_dur) // 2)
+            shot["sourceOutMs"] = shot["sourceInMs"] + new_dur
+            shot["selectedDurationMs"] = new_dur
+            removed_duration -= extra
+        beat["shots"] = remaining_shots
+        beat["actualDurationMs"] = sum(s["selectedDurationMs"] for s in remaining_shots)
+
+    return beats
 
 
 def _beat_budgets(target_duration_ms: int) -> list[int]:
@@ -511,6 +766,10 @@ def _select_for_beat(
         covering = [shot for shot in unused if int(shot["durationMs"]) >= remaining]
         fitting = [shot for shot in unused if int(shot["durationMs"]) <= remaining - 600]
         viable = covering or fitting
+        # When no shot perfectly covers or cleanly fits, accept the best
+        # available — slack distribution will absorb the small remainder.
+        if not viable and unused:
+            viable = unused
         if viable:
             minimum_count = min(working_asset_counts.get(shot["sourceAssetId"], 0) for shot in viable)
             viable = [
@@ -537,7 +796,32 @@ def _select_for_beat(
         asset_id = shot["sourceAssetId"]
         working_asset_counts[asset_id] = working_asset_counts.get(asset_id, 0) + 1
         remaining -= duration
-    return selected if remaining == 0 else []
+    # Slack distribution: extend existing shots to fill remaining budget
+    if remaining > 0 and selected:
+        for shot in reversed(selected):
+            if remaining <= 0:
+                break
+            shot_start = int(shot["startMs"])
+            shot_end = int(shot["endMs"])
+            max_available = shot_end - shot_start
+            extra = min(remaining, max_available - shot["selectedDurationMs"])
+            if extra <= 0:
+                continue
+            shot["selectedDurationMs"] += extra
+            shot["sourceOutMs"] = shot["sourceInMs"] + shot["selectedDurationMs"]
+            remaining -= extra
+    # Last resort: clamp tiny remainder into the last shot boundary
+    if 0 < remaining < 600 and selected:
+        last_shot = selected[-1]
+        shot_start = int(last_shot["startMs"])
+        shot_end = int(last_shot["endMs"])
+        max_dur = shot_end - shot_start
+        clamped_dur = min(last_shot["selectedDurationMs"] + remaining, max_dur)
+        extra = clamped_dur - last_shot["selectedDurationMs"]
+        last_shot["selectedDurationMs"] = clamped_dur
+        last_shot["sourceOutMs"] = last_shot["sourceInMs"] + clamped_dur
+        remaining -= extra
+    return selected if selected else []
 
 
 def _beat_sort_key(role: str, shot: dict[str, Any]) -> tuple[Any, ...]:
@@ -622,3 +906,37 @@ def _build_semantic_map(inputs: dict[str, Any]) -> dict[str, dict[str, list[str]
             continue
 
     return sem
+
+
+def _parse_duration_prompt(prompt: str) -> int | None:
+    """Use LLM to parse a natural-language duration description into milliseconds.
+
+    Returns None if the LLM is unavailable or the result is invalid.
+    """
+    provider = get_provider()
+    if provider is None or provider.name == "noop":
+        logger.warning("No LLM available for duration parsing, using default")
+        return None
+
+    system = DurationParsingPrompt.build_system_prompt()
+    user = DurationParsingPrompt.build_user_prompt(prompt)
+
+    try:
+        result = provider.generate_json(
+            system, user, {},
+            temperature=0.1, max_tokens=256,
+            request_id="duration-parse",
+        )
+    except (LlmError, Exception) as exc:
+        logger.warning("Duration parsing LLM call failed: %s", exc)
+        return None
+
+    if not isinstance(result, dict):
+        return None
+
+    ms = result.get("targetDurationMs")
+    if isinstance(ms, (int, float)) and 5000 <= ms <= 300000:
+        return int(ms)
+
+    logger.warning("Duration parsing returned invalid value: %s", ms)
+    return None

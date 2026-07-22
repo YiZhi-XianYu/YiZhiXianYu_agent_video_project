@@ -25,7 +25,9 @@ public class WorkflowDefinitionValidator {
         "decision.shot-rank@1.0.0",
         "planning.story-template@1.0.0",
         "decision.highlight-select@1.0.0",
-        "timeline.compose@1.0.0"
+        "timeline.compose@1.0.0",
+        "video.render@1.0.0",
+        "vision.vlm-analyze@1.0.0"
     );
 
     public void validate(WorkflowDefinition definition) {
@@ -135,9 +137,13 @@ public class WorkflowDefinitionValidator {
         } else if ("vision.quality-score".equals(node.toolName())) {
             validateAllowed(parameters, Set.of("sampleFrames"), node.toolName());
         } else if ("planning.story-template".equals(node.toolName())) {
-            validateAllowed(parameters, Set.of("targetDurationMs", "maxShots"), node.toolName());
+            validateAllowed(parameters, Set.of("targetDurationMs", "maxShots", "durationPrompt"), node.toolName());
         } else if ("timeline.compose".equals(node.toolName())) {
             validateAllowed(parameters, Set.of("width", "height", "fps"), node.toolName());
+        } else if ("video.render".equals(node.toolName())) {
+            if (!parameters.isEmpty()) {
+                throw new IllegalArgumentException("video.render does not accept parameters");
+            }
         } else if (!parameters.isEmpty()) {
             throw new IllegalArgumentException(node.toolName() + " does not accept parameters");
         }

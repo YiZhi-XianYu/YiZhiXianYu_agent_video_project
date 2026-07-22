@@ -1,0 +1,263 @@
+package com.yizhixianyu.agentvideo.api;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yizhixianyu.agentvideo.artifact.ArtifactRepository;
+import com.yizhixianyu.agentvideo.execution.TaskRunRepository;
+import com.yizhixianyu.agentvideo.execution.WorkflowExecutionService;
+import com.yizhixianyu.agentvideo.execution.WorkflowRunRepository;
+import com.yizhixianyu.agentvideo.plan.CustomStoryPlanEntity;
+import com.yizhixianyu.agentvideo.plan.CustomStoryPlanRepository;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotNull;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+@RestController
+public class CustomStoryPlanController {
+
+    private static final Set<String> VALID_ROLES = Set.of("HOOK", "INTRO", "JOURNEY", "CLIMAX", "ENDING");
+    private static final String STATUS_DRAFT = "DRAFT";
+    private static final String STATUS_SUPERSEDED = "SUPERSEDED";
+    private static final String STATUS_APPLIED = "APPLIED";
+
+    private final CustomStoryPlanRepository repository;
+    private final WorkflowExecutionService workflowService;
+    private final WorkflowRunRepository workflowRunRepository;
+    private final TaskRunRepository taskRunRepository;
+    private final ArtifactRepository artifactRepository;
+    private final ObjectMapper objectMapper;
+
+    public CustomStoryPlanController(
+        CustomStoryPlanRepository repository,
+        WorkflowExecutionService workflowService,
+        WorkflowRunRepository workflowRunRepository,
+        TaskRunRepository taskRunRepository,
+        ArtifactRepository artifactRepository,
+        ObjectMapper objectMapper
+    ) {
+        this.repository = repository;
+        this.workflowService = workflowService;
+        this.workflowRunRepository = workflowRunRepository;
+        this.taskRunRepository = taskRunRepository;
+        this.artifactRepository = artifactRepository;
+        this.objectMapper = objectMapper;
+    }
+
+    @GetMapping("/api/v1/workflow-runs/{workflowRunId}/custom-story-plan")
+    public CustomStoryPlanView getPlan(@PathVariable String workflowRunId) {
+        var draft = repository.findBySourceWorkflowRunIdAndStatus(workflowRunId, STATUS_DRAFT);
+        if (draft.isPresent()) {
+            var entity = draft.get();
+            return new CustomStoryPlanView(entity.getId(), workflowRunId,
+                parsePlanJson(entity.getPlanJson()), true, entity.getStatus(),
+                entity.getVersionName(), entity.getCreatedAt().toString());
+        }
+        var workflow = workflowRunRepository.findById(workflowRunId)
+            .orElseThrow(() -> new IllegalArgumentException("Workflow run not found: " + workflowRunId));
+        var tasks = taskRunRepository.findByWorkflowRunIdOrderByCreatedAtAsc(workflowRunId);
+        for (var task : tasks) {
+            var artifacts = artifactRepository.findByProducerTaskRunId(task.getId());
+            for (var artifact : artifacts) {
+                if ("STORY_PLAN".equals(artifact.getType()) && artifact.getMetadataJson() != null) {
+                    return new CustomStoryPlanView(null, workflowRunId,
+                        parseMetadata(artifact.getMetadataJson()), false, "ORIGINAL", null, null);
+                }
+            }
+        }
+        throw new IllegalArgumentException("No STORY_PLAN artifact found for workflow run: " + workflowRunId);
+    }
+
+    @PutMapping("/api/v1/workflow-runs/{workflowRunId}/custom-story-plan")
+    @ResponseStatus(HttpStatus.CREATED)
+    public CustomStoryPlanView savePlan(
+        @PathVariable String workflowRunId,
+        @Valid @RequestBody SaveCustomStoryPlanRequest request
+    ) {
+        validatePlan(request.plan());
+        var workflow = workflowRunRepository.findById(workflowRunId)
+            .orElseThrow(() -> new IllegalArgumentException("Workflow run not found: " + workflowRunId));
+        var existing = repository.findBySourceWorkflowRunIdAndStatus(workflowRunId, STATUS_DRAFT);
+        existing.ifPresent(e -> {
+            e.setStatus(STATUS_SUPERSEDED);
+            repository.save(e);
+        });
+        var entity = repository.save(new CustomStoryPlanEntity(
+            workflow.getProjectId(), workflowRunId, toJson(request.plan()), STATUS_DRAFT, request.versionName()
+        ));
+        return new CustomStoryPlanView(entity.getId(), workflowRunId, request.plan(), true,
+            entity.getStatus(), entity.getVersionName(), entity.getCreatedAt().toString());
+    }
+
+    @PostMapping("/api/v1/workflow-runs/{workflowRunId}/custom-story-plan/apply")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public ApplyResponse applyPlan(@PathVariable String workflowRunId) {
+        var draft = repository.findBySourceWorkflowRunIdAndStatus(workflowRunId, STATUS_DRAFT)
+            .orElseThrow(() -> new IllegalArgumentException("No DRAFT custom story plan found. Save a plan first."));
+        var plan = parsePlanJson(draft.getPlanJson());
+        validatePlan(plan);
+        var renderRunId = workflowService.createCustomRenderRun(
+            draft.getProjectId(), workflowRunId, plan);
+        draft.setStatus(STATUS_APPLIED);
+        repository.save(draft);
+        return new ApplyResponse(renderRunId, "/api/v1/workflow-runs/" + renderRunId);
+    }
+
+    @GetMapping("/api/v1/workflow-runs/{workflowRunId}/custom-story-plan/version-list")
+    public List<VersionSummary> listVersions(@PathVariable String workflowRunId) {
+        var all = repository.findBySourceWorkflowRunIdOrderByCreatedAtDesc(workflowRunId);
+        return all.stream().map(entity -> {
+            var plan = parsePlanJson(entity.getPlanJson());
+            @SuppressWarnings("unchecked")
+            var beats = (List<Map<String, Object>>) plan.getOrDefault("beats", List.of());
+            int shotCount = 0;
+            long totalDurationMs = 0;
+            for (var beat : beats) {
+                @SuppressWarnings("unchecked")
+                var shots = (List<Map<String, Object>>) beat.getOrDefault("shots", List.of());
+                shotCount += shots.size();
+                for (var shot : shots) {
+                    totalDurationMs += toLong(shot.get("selectedDurationMs"),
+                        toLong(shot.get("sourceOutMs"), 0) - toLong(shot.get("sourceInMs"), 0));
+                }
+            }
+            return new VersionSummary(entity.getId(), entity.getVersionName(),
+                entity.getStatus(), entity.getCreatedAt().toString(),
+                beats.size(), shotCount, totalDurationMs);
+        }).toList();
+    }
+
+    @GetMapping("/api/v1/workflow-runs/{workflowRunId}/custom-story-plan/versions/{planId}")
+    public CustomStoryPlanView getVersion(@PathVariable String workflowRunId, @PathVariable String planId) {
+        var entity = repository.findByIdAndSourceWorkflowRunId(planId, workflowRunId)
+            .orElseThrow(() -> new IllegalArgumentException("Version not found: " + planId));
+        var plan = parsePlanJson(entity.getPlanJson());
+        return new CustomStoryPlanView(entity.getId(), workflowRunId, plan, true,
+            entity.getStatus(), entity.getVersionName(), entity.getCreatedAt().toString());
+    }
+
+    @PostMapping("/api/v1/workflow-runs/{workflowRunId}/custom-story-plan/restore/{planId}")
+    @ResponseStatus(HttpStatus.CREATED)
+    public CustomStoryPlanView restoreVersion(
+        @PathVariable String workflowRunId,
+        @PathVariable String planId,
+        @RequestBody(required = false) RestoreVersionRequest request
+    ) {
+        var source = repository.findByIdAndSourceWorkflowRunId(planId, workflowRunId)
+            .orElseThrow(() -> new IllegalArgumentException("Version not found: " + planId));
+        var workflow = workflowRunRepository.findById(workflowRunId)
+            .orElseThrow(() -> new IllegalArgumentException("Workflow run not found: " + workflowRunId));
+        var existing = repository.findBySourceWorkflowRunIdAndStatus(workflowRunId, STATUS_DRAFT);
+        existing.ifPresent(e -> {
+            e.setStatus(STATUS_SUPERSEDED);
+            repository.save(e);
+        });
+        var versionName = (request != null && request.versionName() != null)
+            ? request.versionName()
+            : (source.getVersionName() != null ? source.getVersionName() + " (restored)" : "Restored from " + planId);
+        var plan = parsePlanJson(source.getPlanJson());
+        var entity = repository.save(new CustomStoryPlanEntity(
+            workflow.getProjectId(), workflowRunId, source.getPlanJson(), STATUS_DRAFT, versionName
+        ));
+        return new CustomStoryPlanView(entity.getId(), workflowRunId, plan, true,
+            entity.getStatus(), entity.getVersionName(), entity.getCreatedAt().toString());
+    }
+
+    @DeleteMapping("/api/v1/workflow-runs/{workflowRunId}/custom-story-plan/versions/{planId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteVersion(@PathVariable String workflowRunId, @PathVariable String planId) {
+        var entity = repository.findByIdAndSourceWorkflowRunId(planId, workflowRunId)
+            .orElseThrow(() -> new IllegalArgumentException("Version not found: " + planId));
+        if (STATUS_DRAFT.equals(entity.getStatus())) {
+            throw new IllegalArgumentException("Cannot delete the active DRAFT version. Save a new version first.");
+        }
+        repository.delete(entity);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void validatePlan(Map<String, Object> plan) {
+        var beats = plan.get("beats");
+        if (!(beats instanceof List<?> beatList) || beatList.isEmpty()) {
+            throw new IllegalArgumentException("Plan must have a non-empty beats array");
+        }
+        for (var beatObj : beatList) {
+            if (!(beatObj instanceof Map<?, ?> beatMap)) {
+                throw new IllegalArgumentException("Each beat must be an object");
+            }
+            var role = beatMap.get("role");
+            if (!(role instanceof String roleStr) || !VALID_ROLES.contains(roleStr)) {
+                throw new IllegalArgumentException("Beat has invalid role: " + role);
+            }
+            var shots = beatMap.get("shots");
+            if (shots instanceof List<?> shotList) {
+                for (var shotObj : shotList) {
+                    if (!(shotObj instanceof Map<?, ?> shotMap)) {
+                        throw new IllegalArgumentException("Each shot must be an object");
+                    }
+                    if (shotMap.get("shotId") == null || shotMap.get("sourceAssetId") == null) {
+                        throw new IllegalArgumentException("Shot is missing required fields (shotId, sourceAssetId)");
+                    }
+                }
+            }
+        }
+    }
+
+    private String toJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to serialize JSON", e);
+        }
+    }
+
+    private Map<String, Object> parsePlanJson(String json) {
+        try {
+            return objectMapper.readValue(json, new TypeReference<>() {});
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to parse plan JSON", e);
+        }
+    }
+
+    private Map<String, Object> parseMetadata(String json) {
+        try {
+            return objectMapper.readValue(json, new TypeReference<>() {});
+        } catch (Exception e) {
+            return Map.of();
+        }
+    }
+
+    private long toLong(Object value, long fallback) {
+        if (value instanceof Number n) return n.longValue();
+        if (value instanceof String s) {
+            try { return Long.parseLong(s); } catch (NumberFormatException e) { return fallback; }
+        }
+        return fallback;
+    }
+
+    public record CustomStoryPlanView(
+        String id, String sourceWorkflowRunId, Map<String, Object> plan,
+        boolean custom, String status, String versionName, String createdAt
+    ) {}
+
+    public record SaveCustomStoryPlanRequest(@NotNull Map<String, Object> plan, String versionName) {}
+
+    public record ApplyResponse(String workflowRunId, String statusUrl) {}
+
+    public record VersionSummary(
+        String id, String versionName, String status, String createdAt,
+        int beatCount, int shotCount, long totalDurationMs
+    ) {}
+
+    public record RestoreVersionRequest(String versionName) {}
+}

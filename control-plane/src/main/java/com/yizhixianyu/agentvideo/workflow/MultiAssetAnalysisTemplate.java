@@ -10,9 +10,19 @@ import java.util.Map;
 public class MultiAssetAnalysisTemplate {
 
     public WorkflowDefinition create(ProxyQuality quality) {
+        return create(quality, null);
+    }
+
+    public WorkflowDefinition create(ProxyQuality quality, String durationPrompt) {
+        var storyParams = new java.util.LinkedHashMap<String, Object>();
+        storyParams.put("targetDurationMs", 30000);
+        storyParams.put("maxShots", 18);
+        if (durationPrompt != null && !durationPrompt.isBlank()) {
+            storyParams.put("durationPrompt", durationPrompt.strip());
+        }
         return new WorkflowDefinition(
             "MULTI_ASSET_ANALYSIS",
-            4,
+            6,
             List.of(
                 new WorkflowDefinition.Node(
                     "video_probe", "video.probe", "1.0.0",
@@ -32,15 +42,7 @@ public class MultiAssetAnalysisTemplate {
                     WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of("sampleFrames", 3)
                 ),
                 new WorkflowDefinition.Node(
-                    "vision_scene_classify", "vision.scene-classify", "1.0.0",
-                    WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()
-                ),
-                new WorkflowDefinition.Node(
-                    "vision_object_detect", "vision.object-detect", "1.0.0",
-                    WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()
-                ),
-                new WorkflowDefinition.Node(
-                    "vision_person_detect", "vision.person-detect", "1.0.0",
+                    "vision_vlm_analyze", "vision.vlm-analyze", "1.0.0",
                     WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()
                 ),
                 new WorkflowDefinition.Node(
@@ -52,7 +54,7 @@ public class MultiAssetAnalysisTemplate {
                     "story_plan", "planning.story-template", "1.0.0",
                     WorkflowDefinition.NodeScope.WORKFLOW,
                     WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT,
-                    Map.of("targetDurationMs", 30000, "maxShots", 12)
+                    storyParams
                 ),
                 new WorkflowDefinition.Node(
                     "highlight_selection", "decision.highlight-select", "1.0.0",
@@ -64,6 +66,11 @@ public class MultiAssetAnalysisTemplate {
                     WorkflowDefinition.NodeScope.WORKFLOW,
                     WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT,
                     timelineParameters(quality)
+                ),
+                new WorkflowDefinition.Node(
+                    "video_render", "video.render", "1.0.0",
+                    WorkflowDefinition.NodeScope.WORKFLOW,
+                    WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()
                 )
             ),
             List.of(
@@ -71,16 +78,14 @@ public class MultiAssetAnalysisTemplate {
                 new WorkflowDefinition.Edge("video_proxy_generate", "video_shot_detect"),
                 new WorkflowDefinition.Edge("video_proxy_generate", "vision_quality_score"),
                 new WorkflowDefinition.Edge("video_shot_detect", "vision_quality_score"),
-                new WorkflowDefinition.Edge("video_shot_detect", "vision_scene_classify"),
-                new WorkflowDefinition.Edge("video_shot_detect", "vision_object_detect"),
-                new WorkflowDefinition.Edge("video_shot_detect", "vision_person_detect"),
+                new WorkflowDefinition.Edge("video_shot_detect", "vision_vlm_analyze"),
                 new WorkflowDefinition.Edge("vision_quality_score", "shot_ranking"),
                 new WorkflowDefinition.Edge("shot_ranking", "story_plan"),
-                new WorkflowDefinition.Edge("vision_scene_classify", "story_plan"),
-                new WorkflowDefinition.Edge("vision_object_detect", "story_plan"),
-                new WorkflowDefinition.Edge("vision_person_detect", "story_plan"),
+                new WorkflowDefinition.Edge("vision_vlm_analyze", "story_plan"),
                 new WorkflowDefinition.Edge("story_plan", "highlight_selection"),
-                new WorkflowDefinition.Edge("highlight_selection", "timeline_compose")
+                new WorkflowDefinition.Edge("shot_ranking", "highlight_selection"),
+                new WorkflowDefinition.Edge("highlight_selection", "timeline_compose"),
+                new WorkflowDefinition.Edge("timeline_compose", "video_render")
             )
         );
     }

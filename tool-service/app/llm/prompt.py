@@ -46,9 +46,10 @@ WATERSIDE to JOURNEY, and shots with HAS_PERSON to HOOK or CLIMAX.
 
 RULES:
 1. Only use shotIds from the provided candidate list. Never invent IDs.
-2. Every beat must have at least 1 shot. Total shots <= maxShots.
+2. Every beat must have at least 1 shot. Total shots MUST NOT exceed maxShots (given in the user message).
+   For a typical 30-second video with maxShots=12: pick 2 shots per beat on average (HOOK:2, INTRO:2, JOURNEY:3, CLIMAX:3, ENDING:2 = 12).
 3. Each shotId can appear in ONLY ONE beat.
-4. Beat target durations must match the budget exactly.
+4. Beat target durations MUST match the budget exactly. Copy them from the user message.
 5. Every beat must include reasonCodes from this list:
    HIGH_VISUAL_QUALITY, INTERESTING_MOTION, STRONG_OPENING,
    ESTABLISHING_CONTEXT, JOURNEY_CONTINUITY, CLIMAX_CANDIDATE,
@@ -171,6 +172,54 @@ Please propose a shot-to-beat assignment that best tells a travel story."""
             beat_budgets_text=beat_budgets_text,
             candidates_text="\n".join(candidate_lines),
         )
+
+    @classmethod
+    def hash_system_prompt(cls) -> str:
+        return hashlib.sha256(cls.SYSTEM.encode()).hexdigest()[:16]
+
+
+@PromptRegistry.register
+class DurationParsingPrompt:
+    """Parse natural-language duration descriptions into targetDurationMs."""
+
+    prompt_key = "duration-parsing"
+    version = "1.0"
+
+    SYSTEM = """\
+You are a video production assistant. Your task is to parse natural-language
+descriptions of desired video duration into a precise millisecond value.
+
+Rules:
+- Understand both Chinese and English descriptions
+- "秒" = seconds, "分钟" or "分" = minutes
+- Descriptors like "快节奏", "快速", "fast-paced" suggest shorter durations (8-20s)
+- Descriptors like "慢旅行", "慢", "slow", "relaxed" suggest longer durations (45-120s)
+- Default: if no strong signal, lean toward 30 seconds
+
+Examples:
+- "快节奏15秒" → 15000
+- "1分钟慢旅行" → 60000
+- "30 seconds" → 30000
+- "a 2-minute highlight reel" → 120000
+- "45秒" → 45000
+- "一分半钟" → 90000
+- "3分钟" → 180000
+- "fast-paced 20 second clip" → 20000
+- "slow travel 90 seconds" → 90000
+
+Return ONLY valid JSON: {"targetDurationMs": <int>, "parsedFrom": "<original prompt>"}"""
+
+    USER_TEMPLATE = """Duration prompt: {duration_prompt}
+
+Parse this into targetDurationMs (integer, milliseconds)."""
+
+    @classmethod
+    def build_system_prompt(cls) -> str:
+        return cls.SYSTEM
+
+    @classmethod
+    def build_user_prompt(cls, duration_prompt: str) -> str:
+        return cls.USER_TEMPLATE.format(duration_prompt=duration_prompt)
 
     @classmethod
     def hash_system_prompt(cls) -> str:

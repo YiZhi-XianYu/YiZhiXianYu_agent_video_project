@@ -1,4 +1,8 @@
-const state = { projectId: null, assetId: null, assetIds: [], assets: [], workflowRunId: null, timer: null };
+const state = { projectId: null, assetId: null, assetIds: [], assets: [], workflowRunId: null, timer: null,
+    editMode: false, customPlan: null, lockedShotIds: new Set(), customPlanId: null,
+    customPlanLoaded: false, renderWorkflowRunId: null, renderTimer: null,
+    versions: [], versionsLoaded: false, dirty: false,
+    compareMode: false, compareVersionId: null, compareVersionPlan: null, cachedTasks: [] };
 
 const el = (id) => document.getElementById(id);
 
@@ -87,10 +91,13 @@ el("upload-video").addEventListener("click", async () => {
 el("start-workflow").addEventListener("click", async () => {
     clearInterval(state.timer);
     try {
+        const durationPrompt = el("duration-prompt").value.trim();
+        const body = { assetIds: state.assetIds, quality: el("proxy-quality").value };
+        if (durationPrompt) body.durationPrompt = durationPrompt;
         const accepted = await request(`/api/v1/projects/${state.projectId}/multi-asset-analysis-runs`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ assetIds: state.assetIds, quality: el("proxy-quality").value })
+            body: JSON.stringify(body)
         });
         state.workflowRunId = accepted.workflowRunId;
         el("workflow-result").textContent = `Workflow 已创建：${accepted.workflowRunId}，输出 ${el("proxy-quality").value}`;
@@ -100,6 +107,12 @@ el("start-workflow").addEventListener("click", async () => {
         state.timer = setInterval(refreshRun, 1200);
     } catch (error) { showError(error); }
 });
+
+el("toggle-edit-mode").addEventListener("click", () => toggleEditMode());
+el("save-custom-plan").addEventListener("click", () => saveCustomPlan());
+el("apply-custom-plan").addEventListener("click", () => applyCustomPlan());
+el("toggle-version-panel").addEventListener("click", () => toggleVersionPanel());
+el("close-diff").addEventListener("click", () => closeDiff());
 
 async function refreshRun() {
     if (!state.workflowRunId) return;
@@ -129,6 +142,8 @@ function renderRun(run) {
     if (proxyArtifacts.length) renderProxies(proxyArtifacts);
     renderShots(run.tasks || []);
     renderDecisions(run.tasks || []);
+    const renderedArtifact = (run.tasks || []).flatMap(t => t.artifacts || []).find(a => a.type === "RENDERED_VIDEO");
+    if (renderedArtifact) renderRenderedVideo(renderedArtifact);
 }
 
 async function loadProjects(selectedId = null) {
@@ -318,11 +333,36 @@ function renderDecisions(tasks) {
     const storyData = story ? parseMetadata(story) : {};
     const highlightData = highlights ? parseMetadata(highlights) : {};
     const timelineData = parseMetadata(timeline);
-    el("timeline-duration").textContent = `${(timelineData.durationMs / 1000).toFixed(2)}s`;
+
+    state.cachedTasks = tasks;
+
+    // Load custom plan once
+    if (story && !state.customPlanLoaded) {
+        state.customPlanLoaded = true;
+        loadCustomPlan(storyData);
+    }
+
+    const beats = (state.editMode && state.customPlan) ? state.customPlan.beats : (storyData.beats || []);
+    const effectiveTimeline = (state.editMode && state.customPlan) ? buildClientTimeline(beats) : timelineData;
+
+    el("timeline-duration").textContent = `${(effectiveTimeline.durationMs / 1000).toFixed(2)}s`;
+
+    // Show/hide edit toolbar
+    el("edit-toolbar").hidden = !timeline;
+    el("toggle-edit-mode").textContent = state.editMode ? "退出编辑" : "Edit Shots";
+    el("save-custom-plan").hidden = !state.editMode;
+    el("save-version-name").hidden = !state.editMode;
+    el("apply-custom-plan").hidden = !state.editMode;
+    el("toggle-version-panel").hidden = !state.editMode;
+    el("toggle-version-panel").textContent = (!el("version-panel").hidden) ? "Hide Versions" : "Versions";
+    if (!state.editMode) {
+        el("version-panel").hidden = true;
+    }
+
     const summary = [
         ["跨素材候选", `${rankingData.shotCount ?? 0} shots`],
         ["入选高光", `${highlightData.selectedShotCount ?? 0} shots`],
-        ["Timeline", `${timelineData.canvas?.width ?? "-"}×${timelineData.canvas?.height ?? "-"} @ ${timelineData.canvas?.fps ?? "-"} FPS`]
+        ["Timeline", `${effectiveTimeline.canvas?.width ?? "-"}×${effectiveTimeline.canvas?.height ?? "-"} @ ${effectiveTimeline.canvas?.fps ?? "-"} FPS`]
     ];
     el("decision-summary").replaceChildren(...summary.map(([label, value]) => {
         const item = document.createElement("div");
@@ -334,59 +374,158 @@ function renderDecisions(tasks) {
         const isLlm = llmAudit.finalSource === "LLM";
         const color = isLlm ? "#e67e22" : "#888";
         const text = isLlm ? "AI 生成" : "确定性算法";
-        
-        // 主 badge
         const sourceBadge = document.createElement("div");
         sourceBadge.innerHTML = `<span>故事来源</span><strong style="color:${color}">${text}</strong>`;
         el("decision-summary").appendChild(sourceBadge);
-        
-        // 如果 LLM 参与过（含失败回退），显示详细审计
         if (llmAudit.provider && llmAudit.provider !== "none") {
             const auditDetail = document.createElement("div");
             const wasLLM = llmAudit.finalSource === "LLM";
             const wasFallback = llmAudit.finalSource === "DETERMINISTIC_FALLBACK";
-
             let statusText = "";
-            if (wasLLM) {
-                statusText = "通过校验，已采用";
-            } else if (wasFallback && llmAudit.validationErrors.length > 0) {
-                statusText = "校验失败: " + llmAudit.validationErrors.slice(0, 2).join("; ");
-            } else if (wasFallback) {
-                statusText = "LLM 调用异常，已回退";
-            }
-
-            auditDetail.innerHTML = `<span>LLM审计</span>
-                <small>${llmAudit.provider}/${llmAudit.model} · ${llmAudit.durationMs}ms · candidates=${llmAudit.inputCandidateCount}</small>
-                <small style="color:${wasLLM ? '#27ae60' : '#e74c3c'}">${statusText}</small>`;
+            if (wasLLM) { statusText = "通过校验，已采用"; }
+            else if (wasFallback && llmAudit.validationErrors.length > 0) { statusText = "校验失败: " + llmAudit.validationErrors.slice(0, 2).join("; "); }
+            else if (wasFallback) { statusText = "LLM 调用异常，已回退"; }
+            auditDetail.innerHTML = `<span>LLM审计</span><small>${llmAudit.provider}/${llmAudit.model} · ${llmAudit.durationMs}ms · candidates=${llmAudit.inputCandidateCount}</small><small style="color:${wasLLM ? '#27ae60' : '#e74c3c'}">${statusText}</small>`;
             el("decision-summary").appendChild(auditDetail);
         }
     }
-    el("story-beats").replaceChildren(...(storyData.beats || []).map(beat => {
+
+    // Build available shots map for replace dropdown
+    const availableShots = state.editMode ? getAvailableShots(rankingData, beats) : [];
+
+    el("story-beats").replaceChildren(...beats.map((beat, beatIndex) => {
         const item = document.createElement("article");
         item.className = "story-beat";
-        const sourceLabel = (llmAudit && llmAudit.finalSource === "LLM") 
-            ? "✨ " : "⚙ ";
-        const roleNames = { HOOK: "开场", INTRO: "介绍", JOURNEY: "旅程", CLIMAX: "高潮", ENDING: "收尾" };
-        item.innerHTML = `<strong>${sourceLabel}${beat.role}</strong><span>${(beat.actualDurationMs / 1000).toFixed(2)}s / ${(beat.targetDurationMs / 1000).toFixed(2)}s</span><small>${beat.shots?.length ?? 0} shots</small>`;
-        if (beat.shots?.length) {
+        const sourceLabel = (llmAudit && llmAudit.finalSource === "LLM") ? "✨ " : "⚙ ";
+        const beatShots = beat.shots || [];
+        const actualDur = beatShots.reduce((sum, s) => sum + (s.selectedDurationMs || (s.sourceOutMs - s.sourceInMs) || 0), 0);
+        const targetDur = beat.targetDurationMs || 0;
+        item.innerHTML = `<strong>${sourceLabel}${beat.role}</strong><span>${(actualDur / 1000).toFixed(2)}s / ${(targetDur / 1000).toFixed(2)}s</span><small>${beatShots.length} shots</small>`;
+        if (beatShots.length || state.editMode) {
             const shotList = document.createElement("div");
             shotList.className = "beat-shot-list";
-            beat.shots.forEach(shot => {
+
+            if (state.editMode && availableShots.length > 0) {
+                shotList.appendChild(createAddShotRow(availableShots, beatShots, beat, 0, tasks));
+            }
+
+            beatShots.forEach((shot, shotIndex) => {
                 const shotRow = document.createElement("div");
-                shotRow.className = "beat-shot-row";
+                const isLocked = state.lockedShotIds.has(shot.shotId);
+                shotRow.className = `beat-shot-row${state.editMode ? " editing" : ""}${isLocked ? " shot-locked" : ""}`;
                 const asset = state.assets.find(a => a.id === shot.sourceAssetId);
                 const srcLabel = asset?.fileName || shot.sourceAssetId?.slice(0, 8) || "?";
+                const selDur = shot.selectedDurationMs || (shot.sourceOutMs - shot.sourceInMs) || 0;
                 const timeRange = `${(shot.sourceInMs / 1000).toFixed(1)}s–${(shot.sourceOutMs / 1000).toFixed(1)}s`;
-                shotRow.innerHTML = `<code>#${shot.rank}</code><span class="beat-shot-asset">${srcLabel}</span><span class="beat-shot-time">${timeRange}</span>`;
+                shotRow.innerHTML = `<code>#${shot.rank || shotIndex + 1}</code><span class="beat-shot-asset">${srcLabel}</span><span class="beat-shot-time">${timeRange}</span>`;
+
+                if (state.editMode) {
+                    const actions = document.createElement("span");
+                    actions.className = "shot-actions";
+
+                    const lockBtn = document.createElement("button");
+                    lockBtn.textContent = isLocked ? "解锁" : "锁定";
+                    lockBtn.title = isLocked ? "Unlock shot" : "Lock shot";
+                    lockBtn.addEventListener("click", () => {
+                        if (isLocked) state.lockedShotIds.delete(shot.shotId);
+                        else state.lockedShotIds.add(shot.shotId);
+                        renderDecisions(tasks);
+                    });
+                    actions.appendChild(lockBtn);
+
+                    if (!isLocked) {
+                        if (shotIndex > 0) {
+                            const upBtn = document.createElement("button");
+                            upBtn.textContent = "↑";
+                            upBtn.title = "Move up";
+                            upBtn.addEventListener("click", () => {
+                                state.dirty = true;
+                                [beatShots[shotIndex - 1], beatShots[shotIndex]] = [beatShots[shotIndex], beatShots[shotIndex - 1]];
+                                renderDecisions(tasks);
+                            });
+                            actions.appendChild(upBtn);
+                        }
+                        if (shotIndex < beatShots.length - 1) {
+                            const downBtn = document.createElement("button");
+                            downBtn.textContent = "↓";
+                            downBtn.title = "Move down";
+                            downBtn.addEventListener("click", () => {
+                                state.dirty = true;
+                                [beatShots[shotIndex], beatShots[shotIndex + 1]] = [beatShots[shotIndex + 1], beatShots[shotIndex]];
+                                renderDecisions(tasks);
+                            });
+                            actions.appendChild(downBtn);
+                        }
+
+                        const replaceSelect = document.createElement("select");
+                        replaceSelect.className = "beat-shot-replace-select";
+                        replaceSelect.title = "Replace shot";
+                        const defaultOpt = document.createElement("option");
+                        defaultOpt.value = "";
+                        defaultOpt.textContent = "替换...";
+                        replaceSelect.appendChild(defaultOpt);
+                        availableShots.forEach(av => {
+                            const opt = document.createElement("option");
+                            opt.value = av.shotId;
+                            const avAsset = state.assets.find(a => a.id === av.sourceAssetId);
+                            const avLabel = avAsset?.fileName || av.sourceAssetId?.slice(0, 8) || "?";
+                            opt.textContent = `#${av.rank} ${avLabel} ${(av.durationMs / 1000).toFixed(1)}s`;
+                            replaceSelect.appendChild(opt);
+                        });
+                        replaceSelect.addEventListener("change", () => {
+                            if (!replaceSelect.value) return;
+                            const newShot = availableShots.find(s => s.shotId === replaceSelect.value);
+                            if (!newShot) return;
+                            state.dirty = true;
+                            beatShots[shotIndex] = {
+                                shotId: newShot.shotId,
+                                sourceAssetId: newShot.sourceAssetId,
+                                sourceProxyArtifactId: newShot.sourceProxyArtifactId || "",
+                                startMs: newShot.startMs || 0,
+                                endMs: newShot.endMs || newShot.durationMs || 0,
+                                sourceInMs: newShot.startMs || 0,
+                                sourceOutMs: newShot.endMs || newShot.durationMs || 0,
+                                selectedDurationMs: newShot.durationMs || 0,
+                                rank: newShot.rank || 0,
+                                storyRole: beat.role,
+                                qualityScore: newShot.qualityScore || 0,
+                                selectionReasons: ["MANUAL_REPLACEMENT"],
+                            };
+                            replaceSelect.value = "";
+                            renderDecisions(tasks);
+                        });
+                        actions.appendChild(replaceSelect);
+
+                        const removeBtn = document.createElement("button");
+                        removeBtn.className = "shot-remove-btn";
+                        removeBtn.textContent = "✕";
+                        removeBtn.title = "Remove shot";
+                        removeBtn.addEventListener("click", () => {
+                            state.dirty = true;
+                            beatShots.splice(shotIndex, 1);
+                            renderDecisions(tasks);
+                        });
+                        actions.appendChild(removeBtn);
+                    }
+
+                    shotRow.appendChild(actions);
+                }
                 shotList.appendChild(shotRow);
             });
+
+            if (state.editMode && availableShots.length > 0) {
+                shotList.appendChild(createAddShotRow(availableShots, beatShots, beat, beatShots.length, tasks));
+            }
+
             item.appendChild(shotList);
         }
         return item;
     }));
-    if (timelineData.tracks?.[0]?.clips?.length) {
-        const totalMs = timelineData.durationMs || 30000;
-        el("timeline-track").replaceChildren(...timelineData.tracks[0].clips.map(clip => {
+
+    // Render timeline: from custom plan in edit mode, from artifact otherwise
+    if (effectiveTimeline.tracks?.[0]?.clips?.length) {
+        const totalMs = effectiveTimeline.durationMs || 30000;
+        el("timeline-track").replaceChildren(...effectiveTimeline.tracks[0].clips.map(clip => {
             const block = document.createElement("div");
             block.className = `timeline-clip role-${clip.storyRole}`;
             block.style.width = `${Math.max((clip.timelineOutMs - clip.timelineInMs) / totalMs * 100, 2)}%`;
@@ -400,6 +539,8 @@ function renderDecisions(tasks) {
             block.title = `${clip.storyRole} · #${clip.selectionRank} · ${srcLabel}\n源 ${srcIn}s–${srcOut}s  时间线 ${tIn}s–${tOut}s`;
             return block;
         }));
+    } else {
+        el("timeline-track").replaceChildren();
     }
 }
  
@@ -478,4 +619,442 @@ function renderProxies(proxies) {
         section.appendChild(info);
         return section;
     }));
+}
+
+function renderRenderedVideo(artifact) {
+    const section = el("rendered-video-section");
+    section.hidden = false;
+    el("rendered-video").src = artifact.contentUrl;
+    el("render-download").href = artifact.contentUrl;
+}
+
+// ---------- P2: Manual Shot Editing ----------
+
+async function loadCustomPlan(storyData) {
+    try {
+        const result = await request(`/api/v1/workflow-runs/${state.workflowRunId}/custom-story-plan`);
+        if (result.custom && result.plan) {
+            state.customPlan = result.plan;
+            state.customPlanId = result.id;
+            return;
+        }
+    } catch (e) { /* no saved plan */ }
+    if (storyData && storyData.beats) {
+        state.customPlan = JSON.parse(JSON.stringify(storyData));
+    }
+}
+
+async function toggleEditMode() {
+    if (state.editMode) {
+        state.editMode = false;
+        el("edit-status").textContent = "";
+        el("version-panel").hidden = true;
+        el("diff-panel").hidden = true;
+        state.compareMode = false;
+        state.compareVersionId = null;
+        state.compareVersionPlan = null;
+        const run = await request(`/api/v1/workflow-runs/${state.workflowRunId}`);
+        renderRun(run);
+        return;
+    }
+    if (!state.customPlan) {
+        el("edit-status").textContent = "Loading...";
+        try {
+            const result = await request(`/api/v1/workflow-runs/${state.workflowRunId}/custom-story-plan`);
+            if (result.custom && result.plan) {
+                state.customPlan = result.plan;
+                state.customPlanId = result.id;
+            }
+        } catch (e) { /* will clone below if still null */ }
+        if (!state.customPlan) {
+            const run = await request(`/api/v1/workflow-runs/${state.workflowRunId}`);
+            const tasks = run.tasks || [];
+            const artifacts = tasks.flatMap(t => t.artifacts || []);
+            const story = artifacts.find(a => a.type === "STORY_PLAN");
+            if (story) {
+                const storyData = parseMetadata(story);
+                if (storyData && storyData.beats) {
+                    state.customPlan = JSON.parse(JSON.stringify(storyData));
+                }
+            }
+            if (!state.customPlan) {
+                el("edit-status").textContent = "No story plan found";
+                return;
+            }
+        }
+        el("edit-status").textContent = "";
+    }
+    state.editMode = true;
+    const run = await request(`/api/v1/workflow-runs/${state.workflowRunId}`);
+    renderRun(run);
+    loadVersions();
+}
+
+async function saveCustomPlan() {
+    if (!state.customPlan) return;
+    try {
+        const versionName = el("save-version-name").value.trim() || null;
+        const result = await request(`/api/v1/workflow-runs/${state.workflowRunId}/custom-story-plan`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ plan: state.customPlan, versionName: versionName })
+        });
+        state.customPlanId = result.id;
+        state.dirty = false;
+        el("save-version-name").value = "";
+        el("edit-status").textContent = "Plan saved";
+        setTimeout(() => { if (el("edit-status").textContent === "Plan saved") el("edit-status").textContent = ""; }, 2000);
+        await loadVersions();
+    } catch (error) {
+        el("edit-status").textContent = "Save failed: " + (error.message || "unknown");
+    }
+}
+
+async function applyCustomPlan() {
+    if (!state.customPlan) return;
+    if (!state.customPlanId) {
+        await saveCustomPlan();
+        if (!state.customPlanId) return;
+    }
+    try {
+        el("edit-status").textContent = "Applying & rendering...";
+        const result = await request(`/api/v1/workflow-runs/${state.workflowRunId}/custom-story-plan/apply`, {
+            method: "POST"
+        });
+        state.renderWorkflowRunId = result.workflowRunId;
+        clearInterval(state.renderTimer);
+        state.renderTimer = setInterval(pollRenderWorkflow, 2000);
+        el("edit-status").textContent = "Render started: " + result.workflowRunId;
+    } catch (error) {
+        el("edit-status").textContent = "Apply failed: " + (error.message || "unknown");
+    }
+}
+
+async function pollRenderWorkflow() {
+    if (!state.renderWorkflowRunId) return;
+    try {
+        const run = await request(`/api/v1/workflow-runs/${state.renderWorkflowRunId}`);
+        if (["SUCCEEDED", "FAILED"].includes(run.status)) {
+            clearInterval(state.renderTimer);
+            if (run.status === "SUCCEEDED") {
+                el("edit-status").textContent = "Render complete";
+                const artifacts = (run.tasks || []).flatMap(t => t.artifacts || []);
+                const rendered = artifacts.find(a => a.type === "RENDERED_VIDEO");
+                if (rendered) renderRenderedVideo(rendered);
+            } else {
+                el("edit-status").textContent = "Render failed: " + (run.errorMessage || "unknown");
+            }
+        } else {
+            el("edit-status").textContent = "Rendering... " + run.progress + "%";
+        }
+    } catch (error) {
+        el("edit-status").textContent = "Render poll error";
+    }
+}
+
+function getAvailableShots(rankingData, beats) {
+    if (!rankingData.shots) return [];
+    const usedIds = new Set();
+    (beats || []).forEach(beat => (beat.shots || []).forEach(shot => {
+        if (!state.lockedShotIds.has(shot.shotId)) usedIds.add(shot.shotId);
+    }));
+    return rankingData.shots.filter(s => !usedIds.has(s.shotId));
+}
+
+function buildClientTimeline(beats) {
+    const clips = [];
+    let timelineIn = 0;
+    (beats || []).forEach(beat => {
+        (beat.shots || []).forEach(shot => {
+            const duration = shot.selectedDurationMs || (shot.sourceOutMs - shot.sourceInMs) || 0;
+            clips.push({
+                clipId: "clip_" + (shot.shotId || ""),
+                shotId: shot.shotId,
+                assetId: shot.sourceAssetId,
+                sourceProxyArtifactId: shot.sourceProxyArtifactId,
+                sourceInMs: shot.sourceInMs,
+                sourceOutMs: shot.sourceOutMs,
+                sourceShotStartMs: shot.startMs || 0,
+                sourceShotEndMs: shot.endMs || 0,
+                timelineInMs: timelineIn,
+                timelineOutMs: timelineIn + duration,
+                playbackRate: 1.0,
+                transitionIn: { type: "CUT", durationMs: 0 },
+                selectionRank: shot.rank || 0,
+                storyRole: beat.role || shot.storyRole,
+                selectionReasons: shot.selectionReasons || [],
+            });
+            timelineIn += duration;
+        });
+    });
+    return {
+        durationMs: timelineIn,
+        canvas: { width: 1920, height: 1080, fps: 30 },
+        tracks: [{ type: "VIDEO", clips: clips }],
+    };
+}
+
+function createAddShotRow(availableShots, beatShots, beat, insertIndex, tasks) {
+    const row = document.createElement("div");
+    row.className = "beat-shot-row beat-shot-add";
+    row.style.justifyContent = "center";
+
+    const addBtn = document.createElement("button");
+    addBtn.textContent = "+";
+    addBtn.title = "Add shot";
+    addBtn.style.cssText = "width:24px;height:24px;padding:0;border-radius:50%;font-size:16px;line-height:1;font-weight:700;background:var(--accent);color:#052019;cursor:pointer;flex-shrink:0;";
+
+    addBtn.addEventListener("click", () => {
+        addBtn.replaceWith(buildAddSelect());
+    });
+
+    function buildAddSelect() {
+        const select = document.createElement("select");
+        select.className = "beat-shot-replace-select";
+        select.style.maxWidth = "200px";
+        const defaultOpt = document.createElement("option");
+        defaultOpt.value = "";
+        defaultOpt.textContent = "+";
+        select.appendChild(defaultOpt);
+        availableShots.forEach(av => {
+            const opt = document.createElement("option");
+            opt.value = av.shotId;
+            const avAsset = state.assets.find(a => a.id === av.sourceAssetId);
+            const avLabel = avAsset?.fileName || av.sourceAssetId?.slice(0, 8) || "?";
+            opt.textContent = `#${av.rank} ${avLabel} ${(av.durationMs / 1000).toFixed(1)}s`;
+            select.appendChild(opt);
+        });
+        select.addEventListener("change", () => {
+            if (!select.value) return;
+            const newShot = availableShots.find(s => s.shotId === select.value);
+            if (!newShot) return;
+            state.dirty = true;
+            beatShots.splice(insertIndex, 0, {
+                shotId: newShot.shotId,
+                sourceAssetId: newShot.sourceAssetId,
+                sourceProxyArtifactId: newShot.sourceProxyArtifactId || "",
+                startMs: newShot.startMs || 0,
+                endMs: newShot.endMs || newShot.durationMs || 0,
+                sourceInMs: newShot.startMs || 0,
+                sourceOutMs: newShot.endMs || newShot.durationMs || 0,
+                selectedDurationMs: newShot.durationMs || 0,
+                rank: newShot.rank || 0,
+                storyRole: beat.role,
+                qualityScore: newShot.qualityScore || 0,
+                selectionReasons: ["MANUAL_ADDITION"],
+            });
+            select.value = "";
+            refreshDecisions();
+        });
+        select.addEventListener("blur", () => {
+            if (!select.value) select.replaceWith(buildAddSelect());
+        });
+        setTimeout(() => select.focus(), 0);
+        return select;
+    }
+
+    row.appendChild(addBtn);
+    return row;
+}
+
+// ---------- P3: Version Management ----------
+
+function refreshDecisions() {
+    if (state.cachedTasks.length) renderDecisions(state.cachedTasks);
+}
+
+async function loadVersions() {
+    try {
+        state.versions = await request(`/api/v1/workflow-runs/${state.workflowRunId}/custom-story-plan/version-list`);
+        state.versionsLoaded = true;
+        renderVersionList();
+    } catch (e) {
+        state.versions = [];
+        state.versionsLoaded = false;
+        el("version-count").textContent = "Load failed: " + (e.message || "unknown");
+    }
+}
+
+function toggleVersionPanel() {
+    if (!el("version-panel").hidden) {
+        el("version-panel").hidden = true;
+        el("diff-panel").hidden = true;
+        state.compareMode = false;
+        state.compareVersionId = null;
+        state.compareVersionPlan = null;
+        el("toggle-version-panel").textContent = "Versions";
+    } else {
+        el("version-panel").hidden = false;
+        el("toggle-version-panel").textContent = "Hide Versions";
+        loadVersions();
+    }
+}
+
+function renderVersionList() {
+    el("version-count").textContent = state.versions.length + " versions";
+    el("version-list").replaceChildren(...state.versions.map(v => {
+        const row = document.createElement("div");
+        row.className = "version-row" + (v.id === state.customPlanId ? " current-draft" : "");
+        const name = document.createElement("span");
+        name.className = "version-name";
+        name.textContent = v.versionName || "Unnamed";
+        const meta = document.createElement("span");
+        meta.className = "version-meta";
+        const statusClass = v.status.toLowerCase();
+        meta.innerHTML = `<span class="version-status status-${statusClass}">${v.status}</span>
+            ${new Date(v.createdAt).toLocaleString("zh-CN", { hour12: false })}
+            · ${v.beatCount} beats · ${v.shotCount} shots · ${(v.totalDurationMs / 1000).toFixed(1)}s`;
+        const actions = document.createElement("span");
+        actions.className = "version-actions";
+        if (v.id !== state.customPlanId) {
+            const loadBtn = document.createElement("button");
+            loadBtn.textContent = "Load";
+            loadBtn.addEventListener("click", () => loadVersion(v.id));
+            actions.appendChild(loadBtn);
+        }
+        const compareBtn = document.createElement("button");
+        compareBtn.textContent = (state.compareMode && state.compareVersionId === v.id) ? "Close" : "Compare";
+        compareBtn.addEventListener("click", () => compareVersion(v.id));
+        actions.appendChild(compareBtn);
+        if (v.status !== "DRAFT") {
+            const deleteBtn = document.createElement("button");
+            deleteBtn.className = "version-delete-btn";
+            deleteBtn.textContent = "Del";
+            deleteBtn.addEventListener("click", () => deleteVersion(v.id));
+            actions.appendChild(deleteBtn);
+        }
+        row.append(name, meta, actions);
+        return row;
+    }));
+}
+
+async function loadVersion(planId) {
+    if (state.dirty) {
+        if (!confirm("You have unsaved edits. Load version anyway?")) return;
+    }
+    try {
+        const result = await request(`/api/v1/workflow-runs/${state.workflowRunId}/custom-story-plan/versions/${planId}`);
+        state.customPlan = JSON.parse(JSON.stringify(result.plan));
+        state.customPlanId = null;
+        state.dirty = true;
+        state.lockedShotIds = new Set();
+        refreshDecisions();
+        el("edit-status").textContent = "Loaded: " + (result.versionName || "Unnamed");
+    } catch (error) {
+        el("edit-status").textContent = "Load failed: " + (error.message || "unknown");
+    }
+}
+
+async function compareVersion(planId) {
+    if (state.compareMode && state.compareVersionId === planId) {
+        closeDiff();
+        return;
+    }
+    try {
+        const result = await request(`/api/v1/workflow-runs/${state.workflowRunId}/custom-story-plan/versions/${planId}`);
+        state.compareMode = true;
+        state.compareVersionId = planId;
+        state.compareVersionPlan = result.plan;
+        renderDiff(result);
+    } catch (error) {
+        el("edit-status").textContent = "Compare failed: " + (error.message || "unknown");
+    }
+}
+
+function closeDiff() {
+    state.compareMode = false;
+    state.compareVersionId = null;
+    state.compareVersionPlan = null;
+    el("diff-panel").hidden = true;
+    renderVersionList();
+}
+
+function renderDiff(result) {
+    const currentBeats = (state.customPlan && state.customPlan.beats) ? state.customPlan.beats : [];
+    const savedBeats = (result.plan && result.plan.beats) ? result.plan.beats : [];
+    const currentSnapshot = JSON.parse(JSON.stringify(currentBeats));
+    const roles = ["HOOK", "INTRO", "JOURNEY", "CLIMAX", "ENDING"];
+
+    let totalAdded = 0, totalRemoved = 0, totalModified = 0, totalUnchanged = 0;
+    const diffBeats = [];
+
+    roles.forEach(role => {
+        const curBeat = currentSnapshot.find(b => b.role === role);
+        const savBeat = savedBeats.find(b => b.role === role);
+        if (!curBeat && !savBeat) return;
+        const curShots = (curBeat && curBeat.shots) ? curBeat.shots : [];
+        const savShots = (savBeat && savBeat.shots) ? savBeat.shots : [];
+        const curShotIds = new Set(curShots.map(s => s.shotId));
+        const savShotIds = new Set(savShots.map(s => s.shotId));
+
+        const shotDiffs = [];
+        savShots.forEach(s => { if (!curShotIds.has(s.shotId)) shotDiffs.push({ type: "removed", shot: s }); });
+        curShots.forEach(s => { if (!savShotIds.has(s.shotId)) { shotDiffs.push({ type: "added", shot: s }); totalAdded++; } });
+        savShots.forEach((s, savIdx) => {
+            if (curShotIds.has(s.shotId)) {
+                const curIdx = curShots.findIndex(c => c.shotId === s.shotId);
+                const cur = curIdx >= 0 ? curShots[curIdx] : null;
+                if (cur && (cur.sourceInMs !== s.sourceInMs || cur.sourceOutMs !== s.sourceOutMs || cur.rank !== s.rank || curIdx !== savIdx)) {
+                    shotDiffs.push({ type: "modified", shot: s, curShot: cur });
+                    totalModified++;
+                } else {
+                    totalUnchanged++;
+                }
+            }
+        });
+        totalRemoved += shotDiffs.filter(d => d.type === "removed").length;
+        if (!curBeat && savBeat) diffBeats.push({ type: "removed", role: role, shotDiffs: shotDiffs });
+        else if (curBeat && !savBeat) diffBeats.push({ type: "added", role: role, shotDiffs: shotDiffs });
+        else if (shotDiffs.length) diffBeats.push({ type: "modified", role: role, shotDiffs: shotDiffs });
+    });
+
+    el("diff-version-name").textContent = result.versionName || "Unnamed";
+    el("diff-panel").hidden = false;
+
+    el("diff-summary").replaceChildren(
+        createDiffSummaryItem("added", totalAdded, "Added"),
+        createDiffSummaryItem("removed", totalRemoved, "Removed"),
+        createDiffSummaryItem("modified", totalModified, "Modified"),
+        createDiffSummaryItem("unchanged", totalUnchanged, "Unchanged")
+    );
+
+    el("diff-list").replaceChildren(...diffBeats.map(db => {
+        const beatDiv = document.createElement("div");
+        beatDiv.className = "diff-beat diff-beat-" + db.type;
+        const header = document.createElement("div");
+        header.className = "diff-beat-header";
+        const typeLabel = db.type === "added" ? "+ADDED" : db.type === "removed" ? "-REMOVED" : "~MODIFIED";
+        header.innerHTML = `<span class="role-label">${db.role}</span> <small>${typeLabel}</small>`;
+        beatDiv.appendChild(header);
+        db.shotDiffs.forEach(sd => {
+            const srow = document.createElement("div");
+            srow.className = "diff-shot-row diff-shot-" + sd.type;
+            const asset = state.assets.find(a => a.id === sd.shot.sourceAssetId);
+            const label = asset ? asset.fileName : (sd.shot.sourceAssetId || "?").slice(0, 8);
+            const dur = sd.shot.selectedDurationMs || (sd.shot.sourceOutMs - sd.shot.sourceInMs) || 0;
+            srow.innerHTML = `<code>#${sd.shot.rank || "?"}</code> ${label} ${(dur / 1000).toFixed(1)}s`;
+            beatDiv.appendChild(srow);
+        });
+        return beatDiv;
+    }));
+}
+
+function createDiffSummaryItem(cls, count, label) {
+    const item = document.createElement("div");
+    item.className = "diff-summary-item diff-" + cls;
+    item.innerHTML = `<span>${count}</span>${label}`;
+    return item;
+}
+
+async function deleteVersion(planId) {
+    if (!confirm("Delete this version? This cannot be undone.")) return;
+    try {
+        await request(`/api/v1/workflow-runs/${state.workflowRunId}/custom-story-plan/versions/${planId}`, {
+            method: "DELETE"
+        });
+        state.versions = state.versions.filter(v => v.id !== planId);
+        renderVersionList();
+    } catch (error) {
+        el("edit-status").textContent = "Delete failed: " + (error.message || "unknown");
+    }
 }

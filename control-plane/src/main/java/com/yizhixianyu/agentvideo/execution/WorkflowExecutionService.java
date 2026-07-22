@@ -9,6 +9,8 @@ import com.yizhixianyu.agentvideo.asset.AssetEntity;
 import com.yizhixianyu.agentvideo.asset.AssetService;
 import com.yizhixianyu.agentvideo.project.ProjectService;
 import com.yizhixianyu.agentvideo.toolclient.ToolServiceClient;
+import com.yizhixianyu.agentvideo.plan.CustomStoryPlanRepository;
+import com.yizhixianyu.agentvideo.plan.TimelineComposer;
 import com.yizhixianyu.agentvideo.workflow.MultiAssetAnalysisTemplate;
 import com.yizhixianyu.agentvideo.workflow.WorkflowDefinition;
 import com.yizhixianyu.agentvideo.workflow.WorkflowDefinitionValidator;
@@ -17,8 +19,14 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -51,6 +59,7 @@ public class WorkflowExecutionService {
     private final long dispatchRecoveryTimeoutMs;
     private final int pollFailureLimit;
     private final ApplicationEventPublisher eventPublisher;
+    private final Path artifactRoot;
 
     public WorkflowExecutionService(
         WorkflowRunRepository workflowRepository,
@@ -70,6 +79,7 @@ public class WorkflowExecutionService {
         @Value("${app.workflow.retry-base-delay-ms:1000}") long retryBaseDelayMs,
         @Value("${app.workflow.dispatch-recovery-timeout-ms:30000}") long dispatchRecoveryTimeoutMs,
         @Value("${app.workflow.poll-failure-limit:10}") int pollFailureLimit,
+        @Value("${app.artifact-root:runtime/artifacts}") Path artifactRoot,
         ApplicationEventPublisher eventPublisher
     ) {
         this.workflowRepository = workflowRepository;
@@ -89,6 +99,7 @@ public class WorkflowExecutionService {
         this.retryBaseDelayMs = Math.max(0, retryBaseDelayMs);
         this.dispatchRecoveryTimeoutMs = Math.max(1000, dispatchRecoveryTimeoutMs);
         this.pollFailureLimit = Math.max(1, pollFailureLimit);
+        this.artifactRoot = artifactRoot.toAbsolutePath().normalize();
         this.eventPublisher = eventPublisher;
     }
 
@@ -118,6 +129,16 @@ public class WorkflowExecutionService {
         List<String> requestedAssetIds,
         ProxyQuality proxyQuality
     ) {
+        return createMultiAssetAnalysisRun(projectId, requestedAssetIds, proxyQuality, null);
+    }
+
+    @Transactional
+    public WorkflowRunEntity createMultiAssetAnalysisRun(
+        String projectId,
+        List<String> requestedAssetIds,
+        ProxyQuality proxyQuality,
+        String durationPrompt
+    ) {
         projectService.getRequired(projectId);
         if (requestedAssetIds == null || requestedAssetIds.isEmpty()) {
             throw new IllegalArgumentException("At least one Asset is required");
@@ -129,7 +150,7 @@ public class WorkflowExecutionService {
         var assets = uniqueAssetIds.stream().map(assetService::getRequired).toList();
         assets.forEach(asset -> requireProjectAsset(projectId, asset));
 
-        var definition = analysisTemplate.create(proxyQuality);
+        var definition = analysisTemplate.create(proxyQuality, durationPrompt);
         definitionValidator.validate(definition);
         var workflow = workflowRepository.save(new WorkflowRunEntity(
             projectId,
@@ -149,6 +170,70 @@ public class WorkflowExecutionService {
         expandTasks(workflow, assets, definition);
         evaluateWorkflow(workflow.getId());
         return workflow;
+    }
+
+    @Transactional
+    public String createCustomRenderRun(String projectId, String sourceWorkflowRunId, Map<String, Object> customPlan) {
+        var sourceWorkflow = workflowRepository.findById(sourceWorkflowRunId)
+            .orElseThrow(() -> new IllegalArgumentException("Source workflow run not found: " + sourceWorkflowRunId));
+        var proxyQuality = sourceWorkflow.getProxyQuality();
+
+        var timelineJson = TimelineComposer.compose(customPlan, proxyQuality);
+
+        var artifactId = "art_" + UUID.randomUUID().toString().replace("-", "");
+        var artifactDir = artifactRoot.resolve(artifactId);
+        try {
+            Files.createDirectories(artifactDir);
+            Files.writeString(artifactDir.resolve("timeline.json"), timelineJson, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to write TIMELINE artifact", e);
+        }
+        var storageUri = artifactDir.resolve("timeline.json").toUri().toString();
+        byte[] contentBytes = timelineJson.getBytes(StandardCharsets.UTF_8);
+        String contentHash;
+        try {
+            var digest = MessageDigest.getInstance("SHA-256");
+            contentHash = HexFormat.of().formatHex(digest.digest(contentBytes));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 not available", e);
+        }
+
+        var renderWorkflow = workflowRepository.save(new WorkflowRunEntity(
+            projectId,
+            sourceWorkflow.getAssetId(),
+            "CUSTOM_PLAN_RENDER",
+            proxyQuality
+        ));
+        renderWorkflow.start();
+
+        var virtualTask = taskRepository.save(new TaskRunEntity(
+            renderWorkflow.getId(), "timeline_compose_virtual", "timeline.compose", "1.0.0", null
+        ));
+        virtualTask.markReady();
+        virtualTask.markDispatching();
+        virtualTask.markRunning();
+        virtualTask.markSucceeded();
+
+        artifactRepository.save(new ArtifactEntity(
+            artifactId, projectId, virtualTask.getId(), "TIMELINE",
+            storageUri, "application/json", contentBytes.length, contentHash, timelineJson
+        ));
+
+        var renderTask = taskRepository.save(new TaskRunEntity(
+            renderWorkflow.getId(),
+            null,
+            "workflow:video_render",
+            "video_render",
+            "video.render",
+            "1.0.0",
+            "UPSTREAM_ARTIFACT",
+            "{}"
+        ));
+
+        dependencyRepository.save(new TaskDependencyEntity(renderTask.getId(), virtualTask.getId()));
+
+        evaluateWorkflow(renderWorkflow.getId());
+        return renderWorkflow.getId();
     }
 
     private void expandTasks(
@@ -297,10 +382,12 @@ public class WorkflowExecutionService {
             case "vision.scene-classify" -> Set.of("SHOT_LIST");
             case "vision.object-detect" -> Set.of("SHOT_LIST");
             case "vision.person-detect" -> Set.of("SHOT_LIST");
+            case "vision.vlm-analyze" -> Set.of("SHOT_LIST");
             case "decision.shot-rank" -> Set.of("SHOT_QUALITY");
             case "planning.story-template" -> Set.of("SHOT_RANKING", "SCENE_TAGS", "OBJECT_TAGS", "PERSON_TAGS");
-            case "decision.highlight-select" -> Set.of("STORY_PLAN");
+            case "decision.highlight-select" -> Set.of("STORY_PLAN", "SHOT_RANKING");
             case "timeline.compose" -> Set.of("HIGHLIGHT_SET");
+            case "video.render" -> Set.of("TIMELINE");
             default -> Set.of();
         };
     }
@@ -316,6 +403,7 @@ public class WorkflowExecutionService {
             case "SCENE_TAGS" -> "scene";
             case "OBJECT_TAGS" -> "object";
             case "PERSON_TAGS" -> "person";
+            case "TIMELINE" -> "timeline";
             default -> "artifact";
         };
     }

@@ -43,7 +43,9 @@ public class WorkflowController {
         @PathVariable String projectId,
         @Valid @RequestBody StartMultiAssetAnalysisRequest request
     ) {
-        var run = workflowService.createMultiAssetAnalysisRun(projectId, request.assetIds(), request.quality());
+        var run = workflowService.createMultiAssetAnalysisRun(
+            projectId, request.assetIds(), request.quality(), request.durationPrompt()
+        );
         return new RunAccepted(run.getId(), run.getStatus().name(), "/api/v1/workflow-runs/" + run.getId());
     }
 
@@ -62,7 +64,8 @@ public class WorkflowController {
 
     public record StartMultiAssetAnalysisRequest(
         @NotNull @Size(min = 1, max = 20) List<@NotBlank String> assetIds,
-        @NotNull ProxyQuality quality
+        @NotNull ProxyQuality quality,
+        String durationPrompt
     ) {}
 
     public record RunAccepted(String workflowRunId, String status, String statusUrl) {

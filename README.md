@@ -2,7 +2,7 @@
 
 Agent 驱动的智能视频制作流水线暑期实训项目。
 
-当前已完成第六阶段本机开发模式的垂直链路：浏览器可选择数据库中的历史项目或创建新项目；Java 根据受约束的 `WorkflowDefinition` v4（11 节点）为每个素材展开 `video.probe -> video.proxy-generate -> video.shot-detect -> (vision.quality-score + vision.scene-classify + vision.object-detect + vision.person-detect)` 分支，再以工作流级节点汇聚执行 `decision.shot-rank (+ 3 个视觉 Tool) -> planning.story-template -> decision.highlight-select -> timeline.compose`。Python 使用 FFmpeg 生成代理视频、镜头列表和关键帧，以 CLIP ViT-B-32 零样本模型输出语义标签（场景/物体/人物），并以确定性 Tool 输出质量指标、跨素材 Ranking、五段式 Story Plan（LLM-assisted with semantic context）、高光集合与声明式 Timeline。项目、素材集合、Workflow、Task 依赖、Tool Execution 和 Artifact 状态保存到 MySQL。
+当前已完成第七阶段：用户在浏览器中编辑 Story Plan 的 shot 分配（替换、排序、锁定、添加、删除），保存多版本方案（自定义版本名），版本 Diff 对比与回退，一键 Apply & Render 生成成片，并支持自然语言输入成片时长（如"快节奏15秒"）。Java 根据受约束的 `WorkflowDefinition` v4（11 节点）为每个素材展开 `video.probe -> video.proxy-generate -> video.shot-detect -> (vision.quality-score + vision.scene-classify + vision.object-detect + vision.person-detect)` 分支，再以工作流级节点汇聚执行 `decision.shot-rank (+ 3 个视觉 Tool) -> planning.story-template -> decision.highlight-select -> timeline.compose`。Python 使用 FFmpeg 生成代理视频、镜头列表和关键帧，以 CLIP ViT-B-32 零样本模型输出语义标签（场景/物体/人物），并以确定性 Tool 输出质量指标、跨素材 Ranking、五段式 Story Plan（LLM-assisted with semantic context）、高光集合与声明式 Timeline。项目、素材集合、Workflow、Task 依赖、Tool Execution、Artifact 和 Custom Story Plan 状态保存到 MySQL。
 
 ## 当前功能
 
@@ -30,10 +30,15 @@ Agent 驱动的智能视频制作流水线暑期实训项目。
 - Highlight Selection 将已验证 Story Plan 编译为不可变高光集合。
 - `TIMELINE` Artifact 使用受约束的结构化视频轨道和 `CUT` 转场，不包含 Shell 或 FFmpeg 字符串。
 - Timeline 在写入 Artifact 前校验画布、Clip 唯一性、Shot 边界、轨道连续性、时长一致性和转场白名单。
+- 用户输入自然语言成片时长（如"快节奏15秒"、"1分钟慢旅行"），LLM 解析为目标毫秒数。
+- 前端编辑 Story Plan：替换 shot、上下排序、锁定保护、添加镜头、删除镜头。
+- 编辑后的方案保存到 `custom_story_plans` 表，支持自定义版本名。
+- 一键 Apply & Render：Java 侧确定性构建 TIMELINE → 调度 video.render 渲染成片。
+- 多版本管理：版本列表、Diff 对比（Added/Removed/Modified/Unchanged）、Load/Switch、Restore 回退、Delete 删除。
 
 ## 快速开始
 
-当前本机运行与交接说明见 [第六阶段交接](docs/sixth-stage-handoff.md)。历史记录保留在 [第五阶段交接](docs/fifth-stage-handoff.md)、[第四阶段交接](docs/fourth-stage-handoff.md)、[第三阶段交接](docs/third-stage-handoff.md)、[第一条垂直链路](docs/first-vertical-slice.md) 和 [第二条垂直链路](docs/second-vertical-slice.md)。
+当前本机运行与交接说明见 [第七阶段交接](docs/seventh-stage-handoff.md)。历史记录保留在 [第六阶段交接](docs/sixth-stage-handoff.md)、[第五阶段交接](docs/fifth-stage-handoff.md)、[第四阶段交接](docs/fourth-stage-handoff.md)、[第三阶段交接](docs/third-stage-handoff.md)、[第一条垂直链路](docs/first-vertical-slice.md) 和 [第二条垂直链路](docs/second-vertical-slice.md)。
 
 ```powershell
 # 终端 1

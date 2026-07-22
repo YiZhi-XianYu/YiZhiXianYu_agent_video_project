@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import logging
 from collections.abc import Callable
 from typing import Any
 
 from app.core.models import ArtifactDescriptor, ToolExecutionRequest
+from app.llm.provider import LlmError, get_provider
 from app.tools.artifact_json import matching_inputs, read_json_artifact, write_json_artifact
 from app.tools.timeline_validator import TimelineValidator
+
+logger = logging.getLogger(__name__)
 
 
 class ShotRankingTool:
@@ -56,35 +61,245 @@ class ShotRankingTool:
         return [write_json_artifact("SHOT_RANKING", "shot-ranking.json", payload, payload)]
 
 
+HIGHLIGHT_REVIEW_SYSTEM = """You are a professional video editor reviewing a Story Plan. Your job is to verify and optionally improve shot selections.
+
+You will receive:
+1. The current Story Plan with selected shots for each beat (HOOK, INTRO, JOURNEY, CLIMAX, ENDING)
+2. A ranked candidate pool of ALL available shots with their quality scores and visual tags
+
+Review criteria:
+- VISUAL DIVERSITY: Adjacent shots should not look identical (different scenes, colors, compositions)
+- ASSET BALANCE: Shots from different source videos should be well-distributed
+- BEAT FIT: HOOK should be visually striking, ENDING should feel calm/complete, CLIMAX should be the most impressive
+- QUALITY: Prefer higher qualityScore, clarity, and motionInterest
+- EMOTIONAL ARC: The sequence should have a natural rise and fall in energy
+
+You may suggest up to 3 changes by replacing specific shots with better alternatives from the candidate pool.
+You may also confirm the current plan with no changes.
+
+Return JSON: {"changes": [{"beatIndex": 0, "oldShotId": "s1", "newShotId": "s5", "reason": "..."}], "confidence": 0.85, "notes": "..."}"""
+
+HIGHLIGHT_REVIEW_USER = """Story Plan:
+{story_json}
+
+Candidate Pool ({candidate_count} shots):
+{ranking_json}
+
+Review the selection. Suggest improvements or confirm it is good."""
+
+
 class HighlightSelectionTool:
     name = "decision.highlight-select"
     version = "1.0.0"
 
     def manifest(self) -> dict[str, Any]:
-        return _manifest(self, "Compile a deterministic Story Plan into a highlight set", ["STORY_PLAN"], ["HIGHLIGHT_SET"])
+        return _manifest(self, "Compile a Story Plan into highlights with optional LLM refinement", ["STORY_PLAN"], ["HIGHLIGHT_SET"])
 
     def execute(self, request: ToolExecutionRequest, report_progress: Callable[[int], None] | None = None) -> list[ArtifactDescriptor]:
         story_inputs = matching_inputs(request.inputs, "story")
         if len(story_inputs) != 1:
             raise ValueError("decision.highlight-select requires one STORY_PLAN Artifact")
         story = read_json_artifact(story_inputs[0])
-        selected = [
-            {**shot, "selected": True}
-            for beat in story.get("beats") or []
-            for shot in beat.get("shots") or []
-        ]
+
+        ranking_inputs = matching_inputs(request.inputs, "ranking")
+        ranking_data: dict[str, Any] | None = None
+        if ranking_inputs:
+            ranking_data = read_json_artifact(ranking_inputs[0])
+
+        if report_progress is not None:
+            report_progress(10)
+
+        strategy = "STORY_PLAN_COMPILATION_V1"
+        llm_changes: list[dict[str, Any]] = []
+
+        provider = get_provider()
+        if provider.name != "noop" and ranking_data is not None:
+            try:
+                changes = self._llm_review(provider, story, ranking_data)
+                if changes is not None:
+                    llm_changes = changes
+                    strategy = "LLM_REFINED_V1"
+                    if report_progress is not None:
+                        report_progress(50)
+            except (LlmError, Exception) as exc:
+                logger.warning("LLM highlight review failed, using plan as-is: %s", exc)
+
+        selected = self._compile_shots(story, llm_changes, ranking_data)
+
+        if report_progress is not None:
+            report_progress(70)
+
         used = sum(int(shot["selectedDurationMs"]) for shot in selected)
         payload = {
             "schemaVersion": "1.0",
-            "strategy": "STORY_PLAN_COMPILATION_V1",
+            "strategy": strategy,
             "sourceStoryPlanArtifactId": story_inputs[0].artifact_id,
-            "sourceRankingArtifactId": story["sourceRankingArtifactId"],
+            "sourceRankingArtifactId": story.get("sourceRankingArtifactId", ""),
             "targetDurationMs": story["targetDurationMs"],
             "selectedDurationMs": used,
             "selectedShotCount": len(selected),
+            "llmRefinements": llm_changes,
             "shots": selected,
         }
+
+        if report_progress is not None:
+            report_progress(95)
+
         return [write_json_artifact("HIGHLIGHT_SET", "highlight-set.json", payload, payload)]
+
+    def _llm_review(self, provider: Any, story: dict[str, Any], ranking: dict[str, Any]) -> list[dict[str, Any]] | None:
+        """Ask LLM to review and optionally refine the shot selection."""
+        # Build compact representations
+        story_beats = []
+        for bi, beat in enumerate(story.get("beats", [])):
+            shots_info = []
+            for shot in beat.get("shots", []):
+                shots_info.append({
+                    "shotId": shot["shotId"],
+                    "qualityScore": shot.get("qualityScore", 0),
+                    "motionInterest": shot.get("motionInterest", 0),
+                    "composition": shot.get("composition", 0),
+                    "durationMs": shot.get("selectedDurationMs", 0),
+                    "sourceAssetId": shot.get("sourceAssetId", ""),
+                    "sceneTags": self._summarize_tags(shot, "scene"),
+                    "objectTags": self._summarize_tags(shot, "object"),
+                })
+            story_beats.append({"beatIndex": bi, "role": beat["role"], "shots": shots_info})
+
+        candidates = []
+        for shot in ranking.get("shots", []):
+            if not shot.get("eligible", True):
+                continue
+            candidates.append({
+                "shotId": shot["shotId"],
+                "qualityScore": shot.get("qualityScore", 0),
+                "motionInterest": shot.get("motionInterest", 0),
+                "composition": shot.get("composition", 0),
+                "durationMs": shot.get("durationMs", 0),
+                "sourceAssetId": shot.get("sourceAssetId", ""),
+                "rank": shot.get("rank", 999),
+                "finalScore": shot.get("finalScore", 0),
+                "sceneTags": self._summarize_tags(shot, "scene"),
+                "objectTags": self._summarize_tags(shot, "object"),
+                "personTags": self._summarize_tags(shot, "person"),
+            })
+
+        user_prompt = HIGHLIGHT_REVIEW_USER.format(
+            story_json=json.dumps(story_beats, ensure_ascii=False, indent=2),
+            candidate_count=len(candidates),
+            ranking_json=json.dumps(candidates[:40], ensure_ascii=False, indent=2),
+        )
+
+        result = provider.generate_json(
+            HIGHLIGHT_REVIEW_SYSTEM, user_prompt, {},
+            temperature=0.3, max_tokens=2048, request_id="highlight-review",
+        )
+
+        if not isinstance(result, dict):
+            return None
+
+        changes = result.get("changes", [])
+        if not isinstance(changes, list) or len(changes) == 0:
+            logger.info("LLM highlight review: no changes suggested (plan confirmed)")
+            return []
+
+        validated = []
+        for c in changes:
+            if isinstance(c, dict) and "oldShotId" in c and "newShotId" in c:
+                validated.append({
+                    "beatIndex": c.get("beatIndex", 0),
+                    "oldShotId": c["oldShotId"],
+                    "newShotId": c["newShotId"],
+                    "reason": c.get("reason", ""),
+                })
+
+        logger.info("LLM highlight review: %d changes suggested", len(validated))
+        return validated
+
+    def _compile_shots(
+        self,
+        story: dict[str, Any],
+        llm_changes: list[dict[str, Any]],
+        ranking_data: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        """Compile story plan shots, applying LLM refinements where valid."""
+        change_map: dict[str, str] = {}
+        for c in llm_changes:
+            change_map[c["oldShotId"]] = c["newShotId"]
+
+        ranking_map: dict[str, dict[str, Any]] = {}
+        if ranking_data is not None:
+            for shot in ranking_data.get("shots", []):
+                ranking_map[shot["shotId"]] = shot
+
+        selected: list[dict[str, Any]] = []
+        used_ids: set[str] = set()
+
+        for beat in story.get("beats", []):
+            for shot in beat.get("shots", []):
+                sid = shot["shotId"]
+                new_id = change_map.get(sid, sid)
+
+                if new_id != sid and new_id in ranking_map and new_id not in used_ids:
+                    replacement = ranking_map[new_id]
+                    repl_start = int(replacement.get("startMs", 0))
+                    repl_end = int(replacement.get("endMs", 10000))
+                    desired_dur = shot.get("selectedDurationMs", 7000)
+                    actual_dur = min(desired_dur, repl_end - repl_start)
+                    shot = {
+                        **replacement,
+                        "storyRole": beat["role"],
+                        "sourceInMs": repl_start,
+                        "sourceOutMs": repl_start + actual_dur,
+                        "selectedDurationMs": actual_dur,
+                        "selectionReasons": [
+                            f"STORY_ROLE_{beat['role']}",
+                            "LLM_REFINED",
+                        ],
+                        "selected": True,
+                    }
+
+                used_ids.add(new_id if new_id != sid else sid)
+                selected.append({**shot, "selected": True})
+
+        # ── Redistribute duration lost from LLM-replaced shots ──
+        target_ms = story.get("targetDurationMs", 0)
+        total_selected = sum(int(s["selectedDurationMs"]) for s in selected)
+        deficit = target_ms - total_selected
+        if deficit > 0:
+            # Extend shots that still have headroom (prefer non-replaced)
+            replaced_ids = set(change_map.values())
+            ordered = sorted(
+                selected,
+                key=lambda s: (0 if s["shotId"] in replaced_ids else 1, s.get("finalScore", 0)),
+                reverse=True,
+            )
+            for shot in ordered:
+                if deficit <= 0:
+                    break
+                shot_end = int(shot["endMs"])
+                capacity = shot_end - int(shot["sourceInMs"]) - shot["selectedDurationMs"]
+                if capacity <= 0:
+                    continue
+                extra = min(deficit, capacity)
+                shot["selectedDurationMs"] += extra
+                shot["sourceOutMs"] = shot["sourceInMs"] + shot["selectedDurationMs"]
+                deficit -= extra
+            if deficit > 0:
+                logger.info(
+                    "Highlight compilation deficit: %d ms (%.1f%% of target), within tolerance",
+                    deficit, deficit / target_ms * 100,
+                )
+
+        return selected
+
+    @staticmethod
+    def _summarize_tags(shot: dict[str, Any], tag_type: str) -> list[str]:
+        """Extract top tag labels from a shot's tag arrays."""
+        tags = shot.get(f"{tag_type}Tags", [])
+        if not tags:
+            return []
+        return [t.get("label", str(t)) if isinstance(t, dict) else str(t) for t in tags[:3]]
 
 
 class TimelineComposeTool:

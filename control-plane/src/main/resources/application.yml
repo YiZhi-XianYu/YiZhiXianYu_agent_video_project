@@ -23,6 +23,7 @@ spring:
 app:
   storage:
     root: ${APP_STORAGE_ROOT:runtime/storage}
+  artifact-root: ${APP_ARTIFACT_ROOT:runtime/artifacts}
   public-base-url: ${APP_PUBLIC_BASE_URL:http://127.0.0.1:8080}
   tool-service:
     base-url: ${TOOL_SERVICE_BASE_URL:http://127.0.0.1:8090}
