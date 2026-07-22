@@ -12,7 +12,7 @@ public class MultiAssetAnalysisTemplate {
     public WorkflowDefinition create(ProxyQuality quality) {
         return new WorkflowDefinition(
             "MULTI_ASSET_ANALYSIS",
-            3,
+            4,
             List.of(
                 new WorkflowDefinition.Node(
                     "video_probe", "video.probe", "1.0.0",
@@ -30,6 +30,18 @@ public class MultiAssetAnalysisTemplate {
                 new WorkflowDefinition.Node(
                     "vision_quality_score", "vision.quality-score", "1.0.0",
                     WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of("sampleFrames", 3)
+                ),
+                new WorkflowDefinition.Node(
+                    "vision_scene_classify", "vision.scene-classify", "1.0.0",
+                    WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()
+                ),
+                new WorkflowDefinition.Node(
+                    "vision_object_detect", "vision.object-detect", "1.0.0",
+                    WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()
+                ),
+                new WorkflowDefinition.Node(
+                    "vision_person_detect", "vision.person-detect", "1.0.0",
+                    WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()
                 ),
                 new WorkflowDefinition.Node(
                     "shot_ranking", "decision.shot-rank", "1.0.0",
@@ -59,8 +71,14 @@ public class MultiAssetAnalysisTemplate {
                 new WorkflowDefinition.Edge("video_proxy_generate", "video_shot_detect"),
                 new WorkflowDefinition.Edge("video_proxy_generate", "vision_quality_score"),
                 new WorkflowDefinition.Edge("video_shot_detect", "vision_quality_score"),
+                new WorkflowDefinition.Edge("video_shot_detect", "vision_scene_classify"),
+                new WorkflowDefinition.Edge("video_shot_detect", "vision_object_detect"),
+                new WorkflowDefinition.Edge("video_shot_detect", "vision_person_detect"),
                 new WorkflowDefinition.Edge("vision_quality_score", "shot_ranking"),
                 new WorkflowDefinition.Edge("shot_ranking", "story_plan"),
+                new WorkflowDefinition.Edge("vision_scene_classify", "story_plan"),
+                new WorkflowDefinition.Edge("vision_object_detect", "story_plan"),
+                new WorkflowDefinition.Edge("vision_person_detect", "story_plan"),
                 new WorkflowDefinition.Edge("story_plan", "highlight_selection"),
                 new WorkflowDefinition.Edge("highlight_selection", "timeline_compose")
             )

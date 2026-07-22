@@ -103,4 +103,27 @@ code { color: var(--blue); }
 .proxy-previews .proxy-preview:first-child { border-top: none; padding-top: 0; }
 .proxy-preview video { width: 100%; max-height: 620px; margin-top: 20px; border-radius: 14px; background: #05090c; }
 .download-link { display: inline-flex; padding: 10px 14px; border-radius: 10px; background: var(--accent); color: #052019; font-weight: 800; text-decoration: none; }
+.semantic-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.semantic-chip { display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 6px; font-size: 10px; font-weight: 700; line-height: 1.5; white-space: nowrap; }
+.semantic-chip.tag-snow { background: #d6eaf8; color: #1a5276; }
+.semantic-chip.tag-old { background: #f5deb3; color: #7d6608; }
+.semantic-chip.tag-modern { background: #d5d8dc; color: #2c3e50; }
+.semantic-chip.tag-countryside, .semantic-chip.tag-forest, .semantic-chip.tag-open, .semantic-chip.tag-plant { background: #d5f5e3; color: #145a32; }
+.semantic-chip.tag-waterside, .semantic-chip.tag-boat { background: #d4e6f1; color: #154360; }
+.semantic-chip.tag-indoor { background: #fdebd0; color: #7e5109; }
+.semantic-chip.tag-market, .semantic-chip.tag-stall { background: #fdedec; color: #922b21; }
+.semantic-chip.tag-temple, .semantic-chip.tag-statue { background: #e8daef; color: #512e5f; }
+.semantic-chip.tag-road, .semantic-chip.tag-vehicle, .semantic-chip.tag-signpost, .semantic-chip.tag-bridge { background: #ebdef0; color: #4a235a; }
+.semantic-chip.tag-sky, .semantic-chip.tag-night { background: #1b2631; color: #aeb6bf; }
+.semantic-chip.tag-person, .semantic-chip.tag-hiking { background: #fadbd8; color: #78281f; }
+.semantic-chip.tag-building { background: #d5dbdb; color: #1b2631; }
+.semantic-chip.tag-food { background: #fdebd0; color: #935116; }
+.semantic-chip.tag-text { background: #d5d8dc; color: #424949; }
+.semantic-chip.tag-animal { background: #fcf3cf; color: #7d6608; }
+.semantic-chip.tag-tent, .semantic-chip.tag-banner, .semantic-chip.tag-lamp { background: #d4e6f1; color: #1b4f72; }
+.semantic-chip.tag-stairs { background: #d5dbdb; color: #2c3e50; }
+.semantic-chip.tag-no { background: #d5d8dc; color: #566573; }
+.semantic-chip.tag-has, .semantic-chip.tag-single, .semantic-chip.tag-small, .semantic-chip.tag-crowd { background: #f5b7b1; color: #641e16; }
+.semantic-chip.tag-close, .semantic-chip.tag-full { background: #f1948a; color: #641e16; }
+.semantic-chip.tag-walking, .semantic-chip.tag-standing, .semantic-chip.tag-sitting, .semantic-chip.tag-interacting { background: #d2b4de; color: #4a235a; }
 @media (max-width: 850px) { .steps { grid-template-columns: 1fr; } .pipeline { grid-template-columns: 1fr; gap: 12px; } .arrow { transform: rotate(90deg); } .artifact-summary, .metadata-grid, .decision-summary, .story-beats { grid-template-columns: 1fr; } .hero { flex-direction: column; } }

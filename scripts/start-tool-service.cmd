@@ -2,9 +2,9 @@
 setlocal
 title Agent Video Pipeline - Python Tool Service
 cd /d "%~dp0..\tool-service"
-set "PYTHON=C:\software\Anaconda\envs\agent-video-pipeline\python.exe"
-if not exist "%PYTHON%" (
-  echo Conda environment not found: %PYTHON%
+where python >nul 2>&1
+if errorlevel 1 (
+  echo Python is not found on PATH. Activate your conda environment first.
   goto :error
 )
 
@@ -18,7 +18,7 @@ if not errorlevel 1 (
 echo Starting Python Tool Service on http://127.0.0.1:8090
 echo Press Ctrl+C to stop it.
 echo.
-"%PYTHON%" -m uvicorn app.main:app --host 127.0.0.1 --port 8090
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8090
 if errorlevel 1 goto :error
 exit /b 0
 

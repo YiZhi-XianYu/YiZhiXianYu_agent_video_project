@@ -294,8 +294,11 @@ public class WorkflowExecutionService {
         return switch (toolName) {
             case "video.shot-detect" -> Set.of("VIDEO_PROXY");
             case "vision.quality-score" -> Set.of("VIDEO_PROXY", "SHOT_LIST");
+            case "vision.scene-classify" -> Set.of("SHOT_LIST");
+            case "vision.object-detect" -> Set.of("SHOT_LIST");
+            case "vision.person-detect" -> Set.of("SHOT_LIST");
             case "decision.shot-rank" -> Set.of("SHOT_QUALITY");
-            case "planning.story-template" -> Set.of("SHOT_RANKING");
+            case "planning.story-template" -> Set.of("SHOT_RANKING", "SCENE_TAGS", "OBJECT_TAGS", "PERSON_TAGS");
             case "decision.highlight-select" -> Set.of("STORY_PLAN");
             case "timeline.compose" -> Set.of("HIGHLIGHT_SET");
             default -> Set.of();
@@ -310,6 +313,9 @@ public class WorkflowExecutionService {
             case "SHOT_RANKING" -> "ranking";
             case "STORY_PLAN" -> "story";
             case "HIGHLIGHT_SET" -> "highlights";
+            case "SCENE_TAGS" -> "scene";
+            case "OBJECT_TAGS" -> "object";
+            case "PERSON_TAGS" -> "person";
             default -> "artifact";
         };
     }

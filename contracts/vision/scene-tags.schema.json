@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yizhixianyu.com/contracts/vision/scene-tags.schema.json",
+  "title": "Vision Scene Classification Tags",
+  "type": "object",
+  "required": ["schemaVersion", "modelName", "sourceAssetId", "sourceShotListArtifactId", "shotCount", "shots"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "modelName": { "type": "string" },
+    "sourceAssetId": { "type": "string" },
+    "sourceShotListArtifactId": { "type": "string" },
+    "shotCount": { "type": "integer", "minimum": 0 },
+    "shots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["shotId", "sourceAssetId", "keyframeArtifactId", "index", "sceneTags"],
+        "additionalProperties": false,
+        "properties": {
+          "shotId": { "type": "string", "pattern": "^shot_[a-f0-9]+$" },
+          "sourceAssetId": { "type": "string" },
+          "keyframeArtifactId": { "type": "string" },
+          "index": { "type": "integer", "minimum": 0 },
+          "sceneTags": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+              "type": "object",
+              "required": ["label", "labelZh", "confidence"],
+              "additionalProperties": false,
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "enum": [
+                    "SNOW_MOUNTAIN", "OLD_TOWN", "MODERN_CITY", "COUNTRYSIDE",
+                    "WATERSIDE", "FOREST", "INDOOR", "MARKET", "TEMPLE",
+                    "ROAD", "SKY_DOMINANT", "NIGHT_SCENE", "PERSON_CLOSEUP",
+                    "HIKING_TRAIL", "OPEN_FIELD"
+                  ]
+                },
+                "labelZh": { "type": "string" },
+                "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

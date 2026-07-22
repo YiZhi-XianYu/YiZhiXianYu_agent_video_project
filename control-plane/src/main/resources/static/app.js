@@ -228,6 +228,18 @@ function renderShots(tasks) {
         .filter(artifact => artifact.type === "SHOT_RANKING")
         .flatMap(artifact => parseMetadata(artifact).shots || [])
         .map(shot => [shot.shotId, shot]));
+    const sceneByShot = new Map(tasks.flatMap(task => task.artifacts || [])
+        .filter(artifact => artifact.type === "SCENE_TAGS")
+        .flatMap(artifact => parseMetadata(artifact).shots || [])
+        .map(shot => [shot.shotId, shot.sceneTags || []]));
+    const objectByShot = new Map(tasks.flatMap(task => task.artifacts || [])
+        .filter(artifact => artifact.type === "OBJECT_TAGS")
+        .flatMap(artifact => parseMetadata(artifact).shots || [])
+        .map(shot => [shot.shotId, shot.objectTags || []]));
+    const personByShot = new Map(tasks.flatMap(task => task.artifacts || [])
+        .filter(artifact => artifact.type === "PERSON_TAGS")
+        .flatMap(artifact => parseMetadata(artifact).shots || [])
+        .map(shot => [shot.shotId, shot.personTags || []]));
     const selectedIds = new Set(tasks.flatMap(task => task.artifacts || [])
         .filter(artifact => artifact.type === "HIGHLIGHT_SET")
         .flatMap(artifact => parseMetadata(artifact).shots || [])
@@ -259,6 +271,22 @@ function renderShots(tasks) {
             card.append(title, range, detail);
             const quality = qualityByShot.get(shot.shotId);
             const ranking = rankingByShot.get(shot.shotId);
+            const sceneTags = sceneByShot.get(shot.shotId) || [];
+            const objectTags = objectByShot.get(shot.shotId) || [];
+            const personTags = personByShot.get(shot.shotId) || [];
+            const allTags = [...sceneTags, ...objectTags, ...personTags];
+            if (allTags.length) {
+                const tagRow = document.createElement("div");
+                tagRow.className = "semantic-tags";
+                allTags.forEach(tag => {
+                    const chip = document.createElement("span");
+                    chip.className = `semantic-chip tag-${tag.label ? tag.label.split("_")[0].toLowerCase() : "none"}`;
+                    chip.textContent = tag.labelZh || tag.label;
+                    chip.title = `${tag.label} · ${(tag.confidence * 100).toFixed(0)}%`;
+                    tagRow.appendChild(chip);
+                });
+                card.append(tagRow);
+            }
             if (quality) {
                 const total = document.createElement("strong");
                 total.className = "score-total";

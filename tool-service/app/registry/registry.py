@@ -6,6 +6,9 @@ from app.tools.video_proxy_generate import VideoProxyGenerateTool
 from app.tools.video_probe import VideoProbeTool
 from app.tools.video_shot_detect import VideoShotDetectTool
 from app.tools.vision_quality_score import VisionQualityScoreTool
+from app.tools.vision_scene_classify import VisionSceneClassifyTool
+from app.tools.vision_object_detect import VisionObjectDetectTool
+from app.tools.vision_person_detect import VisionPersonDetectTool
 from app.tools.shot_decisions import HighlightSelectionTool, ShotRankingTool, TimelineComposeTool
 from app.tools.story_plan import StoryPlanTool
 
@@ -27,6 +30,7 @@ class ToolRegistry:
     def __init__(self) -> None:
         tools: list[Tool] = [
             VideoProbeTool(), VideoProxyGenerateTool(), VideoShotDetectTool(), VisionQualityScoreTool(),
+            VisionSceneClassifyTool(), VisionObjectDetectTool(), VisionPersonDetectTool(),
             ShotRankingTool(), StoryPlanTool(), HighlightSelectionTool(), TimelineComposeTool(),
         ]
         self._tools = {(tool.name, tool.version): tool for tool in tools}

@@ -34,7 +34,7 @@
         "role": { "type": "string" },
         "targetDurationMs": { "type": "integer", "minimum": 600, "maximum": 120000 },
         "shotIds": { "type": "array", "minItems": 1, "maxItems": 20, "uniqueItems": true, "items": { "type": "string", "pattern": "^shot_[a-f0-9]+$" } },
-        "reasonCodes": { "type": "array", "maxItems": 10, "items": { "enum": ["HIGH_VISUAL_QUALITY", "INTERESTING_MOTION", "STRONG_OPENING", "ESTABLISHING_CONTEXT", "JOURNEY_CONTINUITY", "CLIMAX_CANDIDATE", "CALM_ENDING", "ASSET_DIVERSITY"] } }
+        "reasonCodes": { "type": "array", "maxItems": 10, "items": { "enum": ["HIGH_VISUAL_QUALITY", "INTERESTING_MOTION", "STRONG_OPENING", "ESTABLISHING_CONTEXT", "JOURNEY_CONTINUITY", "CLIMAX_CANDIDATE", "CALM_ENDING", "ASSET_DIVERSITY", "SCENE_MATCH", "PERSON_PRESENCE", "SEMANTIC_RELEVANCE"] } }
       }
     },
     "hook": { "allOf": [{ "$ref": "#/$defs/beatBase" }, { "properties": { "role": { "const": "HOOK" } } }] },

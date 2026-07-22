@@ -38,7 +38,7 @@ class StoryPlanTool:
             "supportsCancellation": False,
             "deterministic": False,
             "cacheable": False,
-            "inputTypes": ["SHOT_RANKING"],
+            "inputTypes": ["SHOT_RANKING", "SCENE_TAGS", "OBJECT_TAGS", "PERSON_TAGS"],
             "outputTypes": ["STORY_PLAN"],
         }
 
@@ -60,6 +60,8 @@ class StoryPlanTool:
         if len(candidates) < 5:
             candidates = list(ranking.get("shots") or [])
 
+        semantic_by_shot = _build_semantic_map(request.inputs)
+
         audit = LlmAuditRecord(
             provider="none",
             model="none",
@@ -71,7 +73,7 @@ class StoryPlanTool:
         provider = get_provider()
         if provider is not None and provider.name != "noop":
             llm_result = _try_llm_story_plan(
-                provider, ranking, candidates, target_duration, max_shots, audit
+                provider, ranking, candidates, target_duration, max_shots, audit, semantic_by_shot
             )
             if llm_result is not None:
                 llm_result["llmAudit"] = audit.to_dict()
@@ -224,6 +226,7 @@ class LlmStoryProposalValidator:
     ALLOWED_REASON_CODES = {
         "HIGH_VISUAL_QUALITY", "INTERESTING_MOTION", "STRONG_OPENING", "ESTABLISHING_CONTEXT",
         "JOURNEY_CONTINUITY", "CLIMAX_CANDIDATE", "CALM_ENDING", "ASSET_DIVERSITY",
+        "SCENE_MATCH", "PERSON_PRESENCE", "SEMANTIC_RELEVANCE",
     }
 
     @classmethod
@@ -285,6 +288,7 @@ def _try_llm_story_plan(
     target_duration: int,
     max_shots: int,
     audit: LlmAuditRecord,
+    semantic_by_shot: dict[str, dict[str, list[str]]] | None = None,
 ) -> dict[str, Any] | None:
     """Attempt LLM story proposal. Returns None if LLM fails or validation fails."""
     audit.start()
@@ -295,7 +299,7 @@ def _try_llm_story_plan(
         budgets = _beat_budgets(target_duration)
         system = StoryProposalPrompt.build_system_prompt()
         user = StoryProposalPrompt.build_user_prompt(
-            candidates, target_duration, budgets, asset_count, max_shots,
+            candidates, target_duration, budgets, asset_count, max_shots, semantic_by_shot,
         )
         audit.system_prompt_hash = StoryProposalPrompt.hash_system_prompt()
 
@@ -559,3 +563,62 @@ def _source_in_for_role(role: str, shot: dict[str, Any], duration: int) -> int:
     if role in {"JOURNEY", "CLIMAX"}:
         return start + max(0, (end - start - duration) // 2)
     return start
+
+
+def _build_semantic_map(inputs: dict[str, Any]) -> dict[str, dict[str, list[str]]]:
+    """Read SCENE_TAGS, OBJECT_TAGS, and PERSON_TAGS artifacts and build a
+    per-shotId semantic context dict for LLM prompt injection."""
+    sem: dict[str, dict[str, list[str]]] = {}
+
+    scene_inputs = matching_inputs(inputs, "scene")
+    for inp in scene_inputs:
+        try:
+            data = read_json_artifact(inp)
+            for shot in data.get("shots") or []:
+                sid = shot.get("shotId")
+                if not sid:
+                    continue
+                if sid not in sem:
+                    sem[sid] = {}
+                sem[sid]["scene"] = [
+                    f"{tag['label']}({tag['confidence']:.2f})"
+                    for tag in shot.get("sceneTags", [])
+                ]
+        except Exception:
+            continue
+
+    object_inputs = matching_inputs(inputs, "object")
+    for inp in object_inputs:
+        try:
+            data = read_json_artifact(inp)
+            for shot in data.get("shots") or []:
+                sid = shot.get("shotId")
+                if not sid:
+                    continue
+                if sid not in sem:
+                    sem[sid] = {}
+                sem[sid]["object"] = [
+                    f"{tag['label']}({tag['confidence']:.2f})"
+                    for tag in shot.get("objectTags", [])
+                ]
+        except Exception:
+            continue
+
+    person_inputs = matching_inputs(inputs, "person")
+    for inp in person_inputs:
+        try:
+            data = read_json_artifact(inp)
+            for shot in data.get("shots") or []:
+                sid = shot.get("shotId")
+                if not sid:
+                    continue
+                if sid not in sem:
+                    sem[sid] = {}
+                sem[sid]["person"] = [
+                    f"{tag['label']}({tag['confidence']:.2f})"
+                    for tag in shot.get("personTags", [])
+                ]
+        except Exception:
+            continue
+
+    return sem

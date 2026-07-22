@@ -21,8 +21,8 @@ class WorkflowDefinitionValidatorTest {
 
         assertThatCode(() -> validator.validate(definition))
             .doesNotThrowAnyException();
-        assertThat(definition.definitionVersion()).isEqualTo(3);
-        assertThat(definition.nodes()).hasSize(8);
+        assertThat(definition.definitionVersion()).isEqualTo(4);
+        assertThat(definition.nodes()).hasSize(11);
         assertThat(definition.nodes().stream()
             .filter(node -> node.scope() == WorkflowDefinition.NodeScope.WORKFLOW)).hasSize(4);
     }

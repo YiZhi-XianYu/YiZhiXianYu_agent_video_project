@@ -1,6 +1,7 @@
 name: agent-video-pipeline
 channels:
   - defaults
+  - pytorch
 dependencies:
   - python=3.12
   - pip
@@ -11,4 +12,7 @@ dependencies:
       - pydantic-settings==2.10.1
       - pytest==8.4.1
       - python-dotenv
+      - torch>=2.0.0
+      - transformers>=4.30.0
+      - pillow>=10.0.0
 

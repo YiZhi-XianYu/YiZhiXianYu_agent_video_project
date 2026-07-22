@@ -27,7 +27,7 @@ echo Starting Java Control Plane on http://127.0.0.1:8080
 echo MySQL user: %MYSQL_USER%
 echo Press Ctrl+C to stop it.
 echo.
-call "C:\software\IDEA\IntelliJ IDEA 2025.2.2\plugins\maven\lib\maven3\bin\mvn.cmd" spring-boot:run
+call mvn spring-boot:run
 if errorlevel 1 goto :error
 exit /b 0
 
