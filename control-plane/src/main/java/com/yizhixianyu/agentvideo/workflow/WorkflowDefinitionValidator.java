@@ -26,7 +26,11 @@ public class WorkflowDefinitionValidator {
         "planning.story-template@1.0.0",
         "decision.highlight-select@1.0.0",
         "timeline.compose@1.0.0",
+        "timeline.compose@1.1.0",
         "video.render@1.0.0",
+        "video.render@1.1.0",
+        "audio.bgm-select@1.0.0",
+        "audio.speech-transcribe@1.0.0",
         "vision.vlm-analyze@1.0.0"
     );
 
