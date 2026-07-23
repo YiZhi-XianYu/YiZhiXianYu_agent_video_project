@@ -523,11 +523,16 @@ function renderDecisions(tasks) {
     }));
 
     // Render timeline: from custom plan in edit mode, from artifact otherwise
-    if (effectiveTimeline.tracks?.[0]?.clips?.length) {
+    const videoTrack = effectiveTimeline.tracks?.find(t => t.type === "VIDEO");
+    if (videoTrack?.clips?.length) {
         const totalMs = effectiveTimeline.durationMs || 30000;
-        el("timeline-track").replaceChildren(...effectiveTimeline.tracks[0].clips.map(clip => {
+        el("timeline-track").replaceChildren(...videoTrack.clips.map(clip => {
             const block = document.createElement("div");
+            const trans = clip.transitionIn || {};
+            const transType = trans.type || "CUT";
             block.className = `timeline-clip role-${clip.storyRole}`;
+            if (transType === "CROSS_DISSOLVE") block.classList.add("transition-cross-dissolve");
+            if (transType === "FADE") block.classList.add("transition-fade");
             block.style.width = `${Math.max((clip.timelineOutMs - clip.timelineInMs) / totalMs * 100, 2)}%`;
             const asset = state.assets.find(a => a.id === clip.assetId);
             const srcLabel = asset?.fileName || clip.assetId?.slice(0, 8) || "?";
@@ -535,13 +540,22 @@ function renderDecisions(tasks) {
             const tOut = (clip.timelineOutMs / 1000).toFixed(1);
             const srcIn = (clip.sourceInMs / 1000).toFixed(1);
             const srcOut = (clip.sourceOutMs / 1000).toFixed(1);
-            block.innerHTML = `<span>#${clip.selectionRank} ${srcLabel}</span><small>${srcIn}s → ${srcOut}s</small><small>T+${tIn}s–${tOut}s</small>`;
-            block.title = `${clip.storyRole} · #${clip.selectionRank} · ${srcLabel}\n源 ${srcIn}s–${srcOut}s  时间线 ${tIn}s–${tOut}s`;
+            const transLabel = transType !== "CUT" ? ` [${transType}]` : "";
+            block.innerHTML = `<span>#${clip.selectionRank} ${srcLabel}${transLabel}</span><small>${srcIn}s → ${srcOut}s</small><small>T+${tIn}s–${tOut}s</small>`;
+            block.title = `${clip.storyRole} · #${clip.selectionRank} · ${srcLabel} · ${transType}\n源 ${srcIn}s–${srcOut}s  时间线 ${tIn}s–${tOut}s`;
             return block;
         }));
     } else {
         el("timeline-track").replaceChildren();
     }
+
+    // Show BGM/Subtitle track indicators
+    const audioTrack = effectiveTimeline.tracks?.find(t => t.type === "AUDIO");
+    const subTrack = effectiveTimeline.tracks?.find(t => t.type === "SUBTITLE");
+    const extras = [];
+    if (audioTrack) extras.push(`🎵 BGM vol:${(audioTrack.source?.volume || 0.3).toFixed(1)}`);
+    if (subTrack) extras.push(`📝 ${subTrack.source?.format || "SRT"}`);
+    el("timeline-extras").textContent = extras.join(" · ") || "";
 }
  
 function showError(error) {
@@ -764,9 +778,19 @@ function getAvailableShots(rankingData, beats) {
 function buildClientTimeline(beats) {
     const clips = [];
     let timelineIn = 0;
+    let clipIndex = 0;
+    let prevRole = null;
     (beats || []).forEach(beat => {
+        const role = beat.role || "";
         (beat.shots || []).forEach(shot => {
             const duration = shot.selectedDurationMs || (shot.sourceOutMs - shot.sourceInMs) || 0;
+            // Transition: first clip FADE, beat boundaries CROSS_DISSOLVE
+            let transition = { type: "CUT", durationMs: 0 };
+            if (clipIndex === 0) {
+                transition = { type: "FADE", durationMs: 300 };
+            } else if (prevRole && role !== prevRole) {
+                transition = { type: "CROSS_DISSOLVE", durationMs: 500 };
+            }
             clips.push({
                 clipId: "clip_" + (shot.shotId || ""),
                 shotId: shot.shotId,
@@ -779,13 +803,15 @@ function buildClientTimeline(beats) {
                 timelineInMs: timelineIn,
                 timelineOutMs: timelineIn + duration,
                 playbackRate: 1.0,
-                transitionIn: { type: "CUT", durationMs: 0 },
+                transitionIn: transition,
                 selectionRank: shot.rank || 0,
-                storyRole: beat.role || shot.storyRole,
+                storyRole: role,
                 selectionReasons: shot.selectionReasons || [],
             });
             timelineIn += duration;
+            clipIndex++;
         });
+        prevRole = role;
     });
     return {
         durationMs: timelineIn,
