@@ -17,6 +17,10 @@ public final class TimelineComposer {
     }
 
     public static String compose(Map<String, Object> customPlan, ProxyQuality quality) {
+        return compose(customPlan, quality, "CROSS_DISSOLVE");
+    }
+
+    public static String compose(Map<String, Object> customPlan, ProxyQuality quality, String transitionStyle) {
         int width = 1920;
         int height = 1080;
         switch (quality) {
@@ -37,10 +41,13 @@ public final class TimelineComposer {
             throw new IllegalArgumentException("Custom plan has no beats");
         }
 
+        int clipIndex = 0;
+        String prevStoryRole = null;
         for (var beat : beats) {
             @SuppressWarnings("unchecked")
             var shots = (List<Map<String, Object>>) beat.get("shots");
             if (shots == null) continue;
+            String storyRole = (String) beat.get("role");
             for (var shot : shots) {
                 int sourceInMs = toInt(shot.get("sourceInMs"));
                 int sourceOutMs = toInt(shot.get("sourceOutMs"));
@@ -55,6 +62,8 @@ public final class TimelineComposer {
                     throw new IllegalArgumentException("Shot " + shot.get("shotId") + " clip extends beyond shot boundary");
                 }
 
+                Map<String, Object> transition = assignTransition(transitionStyle, clipIndex, storyRole, prevStoryRole);
+
                 Map<String, Object> clip = new LinkedHashMap<>();
                 clip.put("clipId", "clip_" + shot.get("shotId"));
                 clip.put("shotId", shot.get("shotId"));
@@ -67,16 +76,18 @@ public final class TimelineComposer {
                 clip.put("timelineInMs", timelineIn);
                 clip.put("timelineOutMs", timelineIn + duration);
                 clip.put("playbackRate", 1.0);
-                clip.put("transitionIn", Map.of("type", "CUT", "durationMs", 0));
+                clip.put("transitionIn", transition);
                 clip.put("selectionRank", shot.getOrDefault("rank", 0));
-                clip.put("storyRole", beat.get("role"));
+                clip.put("storyRole", storyRole);
                 clip.put("selectionReasons", shot.getOrDefault("selectionReasons", List.of()));
                 clips.add(clip);
 
                 identitySource.append(shot.get("sourceAssetId")).append(":")
                     .append(sourceInMs).append(":").append(sourceOutMs).append(";");
                 timelineIn += duration;
+                clipIndex++;
             }
+            prevStoryRole = storyRole;
         }
         identitySource.append(width).append(":").append(height).append(":").append(fps);
 
@@ -85,7 +96,7 @@ public final class TimelineComposer {
         Map<String, Object> timeline = new LinkedHashMap<>();
         timeline.put("timelineId", timelineId);
         timeline.put("version", 1);
-        timeline.put("schemaVersion", "1.0");
+        timeline.put("schemaVersion", "1.1");
         timeline.put("sourceHighlightArtifactId", "custom-plan");
         timeline.put("canvas", Map.of("width", width, "height", height, "fps", fps));
         timeline.put("durationMs", timelineIn);
@@ -97,6 +108,29 @@ public final class TimelineComposer {
         } catch (Exception e) {
             throw new IllegalStateException("Failed to serialize timeline JSON", e);
         }
+    }
+
+    private static Map<String, Object> assignTransition(String style, int clipIndex,
+                                                          String storyRole, String prevStoryRole) {
+        if ("CUT".equals(style)) {
+            return Map.of("type", "CUT", "durationMs", 0);
+        }
+        if ("FADE".equals(style)) {
+            if (clipIndex == 0) {
+                return Map.of("type", "FADE", "durationMs", 300);
+            }
+            return Map.of("type", "CUT", "durationMs", 0);
+        }
+        if ("CROSS_DISSOLVE".equals(style)) {
+            if (clipIndex == 0) {
+                return Map.of("type", "FADE", "durationMs", 300);
+            }
+            if (prevStoryRole != null && !storyRole.equals(prevStoryRole)) {
+                return Map.of("type", "CROSS_DISSOLVE", "durationMs", 500);
+            }
+            return Map.of("type", "CUT", "durationMs", 0);
+        }
+        return Map.of("type", "CUT", "durationMs", 0);
     }
 
     private static int toInt(Object value) {
