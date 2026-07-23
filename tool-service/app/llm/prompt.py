@@ -31,7 +31,7 @@ class StoryProposalPrompt:
     """Prompt for Phase 5: LLM selects shots for the five-beat travel story."""
 
     prompt_key = "story-proposal"
-    version = "1.1"
+    version = "1.2"
 
     SYSTEM = """\
 You are a video editing assistant specialized in travel vlog storytelling.
@@ -39,62 +39,59 @@ You are a video editing assistant specialized in travel vlog storytelling.
 Your task is to select video shots from a ranked candidate list and assign them
 to the five-beat structure: HOOK -> INTRO -> JOURNEY -> CLIMAX -> ENDING.
 
-Each candidate shot now includes semantic tags (scene, object, person) that describe
+Each candidate shot includes semantic tags (scene, object, person) that describe
 what is visually present in the keyframe. Use these tags to make smarter narrative
 choices — for example, assign SNOW_MOUNTAIN to CLIMAX, OLD_TOWN to INTRO/JOURNEY,
 WATERSIDE to JOURNEY, and shots with HAS_PERSON to HOOK or CLIMAX.
+
+IMPORTANT — You only assign shotIds and reasonCodes. Beat durations are computed
+deterministically by the system; you do NOT need to output or calculate them.
 
 RULES:
 1. Only use shotIds from the provided candidate list. Never invent IDs.
 2. Every beat must have at least 1 shot. Total shots MUST NOT exceed maxShots (given in the user message).
    For a typical 30-second video with maxShots=12: pick 2 shots per beat on average (HOOK:2, INTRO:2, JOURNEY:3, CLIMAX:3, ENDING:2 = 12).
 3. Each shotId can appear in ONLY ONE beat.
-4. Beat target durations MUST match the budget exactly. Copy them from the user message.
-5. Every beat must include reasonCodes from this list:
+4. Every beat must include reasonCodes from this list:
    HIGH_VISUAL_QUALITY, INTERESTING_MOTION, STRONG_OPENING,
    ESTABLISHING_CONTEXT, JOURNEY_CONTINUITY, CLIMAX_CANDIDATE,
-   CALM_ENDING, ASSET_DIVERSITY.
-6. Distribute shots across source assets evenly (ASSET_DIVERSITY).
-7. HOOK: high motionInterest, strong opening, preferably with HAS_PERSON or CLOSE_UP.
+   CALM_ENDING, ASSET_DIVERSITY, SCENE_MATCH, PERSON_PRESENCE, SEMANTIC_RELEVANCE.
+5. Distribute shots across source assets evenly (ASSET_DIVERSITY).
+6. HOOK: high motionInterest, strong opening, preferably with HAS_PERSON or CLOSE_UP.
    INTRO: early establishing shots, OLD_TOWN/MODERN_CITY/COUNTRYSIDE preferred.
    JOURNEY: good motionInterest + durationFitness, WATERSIDE/FOREST/HIKING_TRAIL preferred.
    CLIMAX: highest qualityScore, SNOW_MOUNTAIN/TEMPLE/PERSON_CLOSEUP preferred.
    ENDING: stable, calm, later in timeline, SKY_DOMINANT/OPEN_FIELD/NIGHT_SCENE preferred.
-8. Output MUST be valid JSON conforming to the schema described below.
+7. Output MUST be valid JSON conforming to the schema described below.
 
 OUTPUT JSON STRUCTURE (your entire response must be exactly this):
 {
-  "schemaVersion": "1.0",
+  "schemaVersion": "1.1",
   "template": "TRAVEL_JOURNEY_V1",
   "targetDurationMs": <copy the target total duration from the request>,
   "beats": [
     {
       "role": "HOOK",
-      "targetDurationMs": <budget from request>,
       "shotIds": ["<candidate shotId>"],
       "reasonCodes": ["STRONG_OPENING", ...]
     },
     {
       "role": "INTRO",
-      "targetDurationMs": <budget from request>,
       "shotIds": ["<candidate shotId>"],
       "reasonCodes": ["ESTABLISHING_CONTEXT", ...]
     },
     {
       "role": "JOURNEY",
-      "targetDurationMs": <budget from request>,
       "shotIds": ["<candidate shotId>"],
       "reasonCodes": ["JOURNEY_CONTINUITY", "INTERESTING_MOTION", ...]
     },
     {
       "role": "CLIMAX",
-      "targetDurationMs": <budget from request>,
       "shotIds": ["<candidate shotId>"],
       "reasonCodes": ["CLIMAX_CANDIDATE", ...]
     },
     {
       "role": "ENDING",
-      "targetDurationMs": <budget from request>,
       "shotIds": ["<candidate shotId>"],
       "reasonCodes": ["CALM_ENDING", ...]
     }
@@ -104,7 +101,6 @@ OUTPUT JSON STRUCTURE (your entire response must be exactly this):
 }
 
 Beat order is FIXED: HOOK, INTRO, JOURNEY, CLIMAX, ENDING.
-The sum of all beat targetDurationMs MUST equal the top-level targetDurationMs.
 Every shotId MUST be from the candidate list provided in the user message."""
 
     USER_TEMPLATE = """\
