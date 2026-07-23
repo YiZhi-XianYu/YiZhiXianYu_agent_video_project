@@ -11,6 +11,9 @@ from app.tools.vision_object_detect import VisionObjectDetectTool
 from app.tools.vision_person_detect import VisionPersonDetectTool
 from app.tools.shot_decisions import HighlightSelectionTool, ShotRankingTool, TimelineComposeTool
 from app.tools.story_plan import StoryPlanTool
+from app.tools.video_render import VideoRenderTool
+from app.tools.audio_bgm import BgmSelectTool
+from app.tools.audio_transcribe import SpeechTranscribeTool
 
 
 class Tool(Protocol):
@@ -32,6 +35,7 @@ class ToolRegistry:
             VideoProbeTool(), VideoProxyGenerateTool(), VideoShotDetectTool(), VisionQualityScoreTool(),
             VisionSceneClassifyTool(), VisionObjectDetectTool(), VisionPersonDetectTool(),
             ShotRankingTool(), StoryPlanTool(), HighlightSelectionTool(), TimelineComposeTool(),
+            VideoRenderTool(), BgmSelectTool(), SpeechTranscribeTool(),
         ]
         self._tools = {(tool.name, tool.version): tool for tool in tools}
 
