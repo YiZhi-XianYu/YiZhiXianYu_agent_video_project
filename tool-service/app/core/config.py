@@ -24,6 +24,18 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.deepseek.com"
     llm_model: str = "deepseek-chat"
 
+    # Provider-specific keys (fall back to llm_api_key when not set)
+    llm_openai_api_key: str = ""
+    llm_openai_model: str = "gpt-4o"
+    llm_anthropic_api_key: str = ""
+    llm_anthropic_model: str = "claude-sonnet-4-6"
+
+    # BGM library
+    bgm_library_root: Path = Path("runtime/bgm")
+
+    # ASR
+    asr_model_size: str = "small"  # "tiny", "small", "medium", "large-v3"
+
     model_config = SettingsConfigDict(
         env_prefix="TOOL_SERVICE_",
         case_sensitive=False,
