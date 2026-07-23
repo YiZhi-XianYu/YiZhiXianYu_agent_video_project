@@ -93,6 +93,9 @@ code { color: var(--blue); }
 .timeline-clip.role-CLIMAX { background: linear-gradient(135deg, #e67e22, #ca6f1e); }
 .timeline-clip.role-ENDING { background: linear-gradient(135deg, #9b59b6, #7d3c98); }
 .timeline-clip.role-HOOK span, .timeline-clip.role-JOURNEY span, .timeline-clip.role-CLIMAX span, .timeline-clip.role-ENDING span, .timeline-clip.role-INTRO span { color: #fff; }
+.timeline-clip.transition-cross-dissolve { border-left: 3px dashed #f1c40f; }
+.timeline-clip.transition-fade { border-left: 3px dotted #ffffff; }
+.timeline-extras { margin-top: 8px; padding: 6px 14px; border-radius: 8px; background: #0e181f; color: var(--muted); font-size: 12px; min-height: 20px; }
 .metadata-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
 .metadata-grid div { background: #0e181f; padding: 18px; }
 .metadata-grid span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 8px; }
