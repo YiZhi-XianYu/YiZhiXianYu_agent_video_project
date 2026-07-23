@@ -16,20 +16,20 @@ from app.tools.artifact_json import matching_inputs, read_json_artifact
 
 class VideoRenderTool:
     name = "video.render"
-    version = "1.0.0"
+    version = "1.1.0"
 
     def manifest(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "version": self.version,
-            "description": "Compile a validated TIMELINE into an H.264 MP4 final video via FFmpeg concat filter graph",
+            "description": "Compile a validated TIMELINE into an H.264 MP4 final video via FFmpeg with transitions, BGM, and subtitles",
             "executionMode": "ASYNC",
             "resourceClass": "CPU_MEDIUM",
             "timeoutSeconds": 900,
             "supportsCancellation": False,
             "deterministic": True,
             "cacheable": False,
-            "inputTypes": ["TIMELINE"],
+            "inputTypes": ["TIMELINE", "BGM_AUDIO", "SUBTITLE_SRT"],
             "outputTypes": ["RENDERED_VIDEO"],
         }
 
@@ -55,10 +55,25 @@ class VideoRenderTool:
         if report_progress is not None:
             report_progress(5)
 
+        # Optional BGM and subtitle inputs
+        bgm_inputs = matching_inputs(request.inputs, "bgm")
+        srt_inputs = matching_inputs(request.inputs, "subtitle")
+
+        bgm_path: Path | None = None
+        if bgm_inputs:
+            bgm_path = _resolve_extra_path(bgm_inputs[0].uri)
+
+        srt_path: Path | None = None
+        if srt_inputs:
+            srt_path = _resolve_extra_path(srt_inputs[0].uri)
+
         canvas = timeline["canvas"]
         clips = timeline["tracks"][0]["clips"]
-        input_args, filter_complex = _build_filter_graph(clips, canvas, proxy_map, audio_map)
-        command = _assemble_command(input_args, filter_complex)
+        input_args, filter_complex, final_video_label, final_audio_label = _build_filter_graph(
+            clips, canvas, proxy_map, audio_map,
+            bgm_path=bgm_path, srt_path=srt_path,
+        )
+        command = _assemble_command(input_args, filter_complex, final_video_label, final_audio_label)
 
         total_duration_sec = timeline["durationMs"] / 1000.0
 
@@ -100,6 +115,8 @@ class VideoRenderTool:
             "sourceProxyArtifactIds": sorted(proxy_map),
             "videoCodec": "h264",
             "audioCodec": "aac" if probe.get("hasAudio") else None,
+            "hasBgm": bgm_path is not None,
+            "hasSubtitles": srt_path is not None,
             "preset": "veryfast",
             "crf": 20,
         }
@@ -119,6 +136,8 @@ class VideoRenderTool:
         ]
 
 
+# ── Path resolution ─────────────────────────────────────────────────────────
+
 def _resolve_proxy_paths(timeline: dict[str, Any]) -> tuple[dict[str, Path], list[str]]:
     paths: dict[str, Path] = {}
     missing: list[str] = []
@@ -135,6 +154,20 @@ def _resolve_proxy_paths(timeline: dict[str, Any]) -> tuple[dict[str, Path], lis
             missing.append(aid)
     return paths, missing
 
+
+def _resolve_extra_path(uri: str) -> Path | None:
+    """Resolve a BGM or SRT artifact URI to a local path."""
+    from urllib.parse import unquote, urlparse
+    parsed = urlparse(uri)
+    path_str = unquote(parsed.path)
+    # Windows drive letter fix
+    if len(path_str) >= 3 and path_str[0] == "/" and path_str[2] == ":":
+        path_str = path_str[1:]
+    p = Path(path_str)
+    return p if p.is_file() else None
+
+
+# ── Audio probing ───────────────────────────────────────────────────────────
 
 def _probe_audio_map(proxy_map: dict[str, Path]) -> dict[str, bool]:
     result: dict[str, bool] = {}
@@ -155,61 +188,205 @@ def _probe_source_audio(proxy_path: Path) -> bool:
     return process.returncode == 0 and process.stdout.strip() == "audio"
 
 
+# ── Filter graph construction ───────────────────────────────────────────────
+
 def _build_filter_graph(
     clips: list[dict[str, Any]],
     canvas: dict[str, Any],
     proxy_map: dict[str, Path],
     audio_map: dict[str, bool],
-) -> tuple[list[str], str]:
+    *,
+    bgm_path: Path | None = None,
+    srt_path: Path | None = None,
+) -> tuple[list[str], str, str, str]:
+    """Build a transition-aware FFmpeg filter graph.
+
+    Returns (input_paths, filter_complex_string, final_video_label, final_audio_label).
+    """
     unique_sources = list(dict.fromkeys(c["sourceProxyArtifactId"] for c in clips))
     source_to_index = {sid: idx for idx, sid in enumerate(unique_sources)}
     inputs = [str(proxy_map[sid]) for sid in unique_sources]
+    bgm_input_index = len(inputs)  # BGM gets the next index if present
 
     width = canvas["width"]
     height = canvas["height"]
     fps = canvas["fps"]
 
-    video_chains: list[str] = []
-    audio_chains: list[str] = []
+    n = len(clips)
+    clip_durations_sec = [(clip["timelineOutMs"] - clip["timelineInMs"]) / 1000.0 for clip in clips]
 
+    # ── Step 1: Per-clip video intermediates [s0]...[s{N-1}] ──
+    clip_chains: list[str] = []
     for i, clip in enumerate(clips):
         src_idx = source_to_index[clip["sourceProxyArtifactId"]]
         src_in = clip["sourceInMs"] / 1000.0
-        dur = (clip["timelineOutMs"] - clip["timelineInMs"]) / 1000.0
+        dur = clip_durations_sec[i]
 
-        video_chains.append(
+        trans = clip.get("transitionIn", {})
+        trans_type = trans.get("type", "CUT")
+        trans_dur_ms = trans.get("durationMs", 0)
+
+        # Base chain: trim → setpts → scale → pad → fps → format
+        base = (
             f"[{src_idx}:v]"
             f"trim=start={src_in:.3f}:duration={dur:.3f},setpts=PTS-STARTPTS,"
             f"scale={width}:{height}:force_original_aspect_ratio=decrease:force_divisible_by=2,"
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,"
             f"fps={fps},format=yuv420p"
-            f"[v{i}]"
         )
 
+        # FADE: add fade-in filter to the clip
+        if trans_type == "FADE":
+            fade_sec = trans_dur_ms / 1000.0
+            clip_chains.append(f"{base},fade=t=in:d={fade_sec:.3f}[s{i}]")
+        else:
+            clip_chains.append(f"{base}[s{i}]")
+
+    # ── Step 2: Build transition chain ──
+    acc_v_label = "[s0]"
+    acc_v_duration = clip_durations_sec[0]
+    transition_filters: list[str] = []
+    xfade_counter = 0
+
+    for i in range(1, n):
+        trans = clips[i].get("transitionIn", {})
+        trans_type = trans.get("type", "CUT")
+        trans_dur_ms = trans.get("durationMs", 0)
+        trans_dur_sec = trans_dur_ms / 1000.0
+
+        if trans_type in ("CUT", "FADE"):
+            # Simple concat (FADE already applied per-clip)
+            new_label = f"[vc{xfade_counter}]"
+            transition_filters.append(
+                f"{acc_v_label}[s{i}]concat=n=2:v=1:a=0{new_label}"
+            )
+            acc_v_label = new_label
+            acc_v_duration += clip_durations_sec[i]
+            xfade_counter += 1
+        elif trans_type == "CROSS_DISSOLVE":
+            new_label = f"[vf{xfade_counter}]"
+            offset = acc_v_duration - trans_dur_sec
+            if offset < 0:
+                offset = 0.0
+            transition_filters.append(
+                f"{acc_v_label}[s{i}]xfade=transition=fade:"
+                f"duration={trans_dur_sec:.3f}:offset={offset:.3f}{new_label}"
+            )
+            acc_v_label = new_label
+            acc_v_duration = acc_v_duration + clip_durations_sec[i] - trans_dur_sec
+            xfade_counter += 1
+
+    final_video_label = acc_v_label
+
+    # ── Step 3: Per-clip audio intermediates [a0]...[a{N-1}] ──
+    audio_chains: list[str] = []
+    for i, clip in enumerate(clips):
         sid = clip["sourceProxyArtifactId"]
+        src_idx = source_to_index[sid]
+        src_in = clip["sourceInMs"] / 1000.0
+        dur = clip_durations_sec[i]
+
+        trans = clip.get("transitionIn", {})
+        trans_type = trans.get("type", "CUT")
+        trans_dur_ms = trans.get("durationMs", 0)
+
         if audio_map.get(sid, False):
-            audio_chains.append(
+            base_audio = (
                 f"[{src_idx}:a]"
                 f"atrim=start={src_in:.3f}:duration={dur:.3f},asetpts=PTS-STARTPTS"
-                f"[a{i}]"
             )
+            if trans_type == "FADE":
+                fade_sec = trans_dur_ms / 1000.0
+                audio_chains.append(f"{base_audio},afade=t=in:d={fade_sec:.3f}[a{i}]")
+            else:
+                audio_chains.append(f"{base_audio}[a{i}]")
         else:
             audio_chains.append(
-                f"anullsrc=r=48000:cl=stereo:d={dur:.3f}"
-                f"[a{i}]"
+                f"anullsrc=r=48000:cl=stereo:d={dur:.3f}[a{i}]"
             )
 
-    n = len(clips)
-    v_labels = "".join(f"[v{j}]" for j in range(n))
-    a_labels = "".join(f"[a{j}]" for j in range(n))
-    concat_v = f"{v_labels}concat=n={n}:v=1:a=0[outv]"
-    concat_a = f"{a_labels}concat=n={n}:v=0:a=1[outa]"
+    # ── Step 4: Audio transition chain ──
+    acc_a_label = "[a0]"
+    acc_a_duration = clip_durations_sec[0]
+    audio_xfade_counter = 0
 
-    filter_complex = "; ".join(video_chains + audio_chains + [concat_v, concat_a])
-    return inputs, filter_complex
+    for i in range(1, n):
+        trans = clips[i].get("transitionIn", {})
+        trans_type = trans.get("type", "CUT")
+        trans_dur_ms = trans.get("durationMs", 0)
+        trans_dur_sec = trans_dur_ms / 1000.0
+
+        if trans_type in ("CUT", "FADE"):
+            new_label = f"[ac{audio_xfade_counter}]"
+            transition_filters.append(
+                f"{acc_a_label}[a{i}]concat=n=2:v=0:a=1{new_label}"
+            )
+            acc_a_label = new_label
+            acc_a_duration += clip_durations_sec[i]
+            audio_xfade_counter += 1
+        elif trans_type == "CROSS_DISSOLVE":
+            new_label = f"[af{audio_xfade_counter}]"
+            transition_filters.append(
+                f"{acc_a_label}[a{i}]acrossfade="
+                f"d={trans_dur_sec:.3f}:c1=tri:c2=tri{new_label}"
+            )
+            acc_a_label = new_label
+            acc_a_duration = acc_a_duration + clip_durations_sec[i] - trans_dur_sec
+            audio_xfade_counter += 1
+
+    final_audio_label = acc_a_label
+
+    # ── Step 5: BGM mixing (optional) ──
+    if bgm_path is not None and bgm_path.is_file():
+        inputs.append(str(bgm_path))
+        total_dur = sum(clip_durations_sec)
+
+        # Check BGM track from timeline metadata if available
+        bgm_volume = 0.3
+        for track in _find_extra_tracks(clips):
+            pass  # BGM settings are on the command args, not clips
+
+        transition_filters.append(
+            f"[{bgm_input_index}:a]atrim=0:duration={total_dur:.3f},"
+            f"volume={bgm_volume}[bgm]"
+        )
+        transition_filters.append(
+            f"[{final_audio_label}][bgm]amix=inputs=2:duration=first:"
+            f"dropout_transition=0[outa_mixed]"
+        )
+        final_audio_label = "[outa_mixed]"
+
+    # ── Step 6: Subtitle burning (optional) ──
+    if srt_path is not None and srt_path.is_file():
+        # Escape backslashes and colons for FFmpeg subtitles filter on Windows
+        srt_escaped = str(srt_path).replace("\\", "/").replace(":", "\\:")
+        transition_filters.append(
+            f"[{final_video_label}]subtitles='{srt_escaped}':"
+            f"force_style='FontSize=24,PrimaryColour=&H00FFFFFF,"
+            f"OutlineColour=&H00000000,Outline=1,Shadow=1,MarginV=50'[outv_sub]"
+        )
+        final_video_label = "[outv_sub]"
+
+    # ── Assemble ──
+    all_filters = clip_chains + audio_chains + transition_filters
+    filter_complex = "; ".join(all_filters)
+
+    return inputs, filter_complex, final_video_label, final_audio_label
 
 
-def _assemble_command(input_paths: list[str], filter_complex: str) -> list[str]:
+def _find_extra_tracks(clips: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Stub for extracting non-VIDEO track metadata from timeline. (Used for BGM volume lookup.)"""
+    return []
+
+
+# ── Command assembly ────────────────────────────────────────────────────────
+
+def _assemble_command(
+    input_paths: list[str],
+    filter_complex: str,
+    final_video_label: str,
+    final_audio_label: str,
+) -> list[str]:
     cmd = [
         settings.ffmpeg_path, "-hide_banner", "-loglevel", "error", "-y",
         "-progress", "pipe:1", "-nostats",
@@ -218,13 +395,15 @@ def _assemble_command(input_paths: list[str], filter_complex: str) -> list[str]:
         cmd.extend(["-i", p])
     cmd.extend(["-filter_complex", filter_complex])
     cmd.extend([
-        "-map", "[outv]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-map", final_video_label, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
         "-pix_fmt", "yuv420p",
     ])
-    cmd.extend(["-map", "[outa]", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"])
+    cmd.extend(["-map", final_audio_label, "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"])
     cmd.extend(["-movflags", "+faststart"])
     return cmd
 
+
+# ── Progress / probe helpers ────────────────────────────────────────────────
 
 def _transcode_progress(out_time: str, duration_seconds: float) -> int:
     try:
