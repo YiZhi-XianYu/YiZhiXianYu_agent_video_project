@@ -2,7 +2,7 @@
 
 Agent 驱动的智能视频制作流水线暑期实训项目。
 
-当前已完成第七阶段：用户在浏览器中编辑 Story Plan 的 shot 分配（替换、排序、锁定、添加、删除），保存多版本方案（自定义版本名），版本 Diff 对比与回退，一键 Apply & Render 生成成片，并支持自然语言输入成片时长（如"快节奏15秒"）。Java 根据受约束的 `WorkflowDefinition` v4（11 节点）为每个素材展开 `video.probe -> video.proxy-generate -> video.shot-detect -> (vision.quality-score + vision.scene-classify + vision.object-detect + vision.person-detect)` 分支，再以工作流级节点汇聚执行 `decision.shot-rank (+ 3 个视觉 Tool) -> planning.story-template -> decision.highlight-select -> timeline.compose`。Python 使用 FFmpeg 生成代理视频、镜头列表和关键帧，以 CLIP ViT-B-32 零样本模型输出语义标签（场景/物体/人物），并以确定性 Tool 输出质量指标、跨素材 Ranking、五段式 Story Plan（LLM-assisted with semantic context）、高光集合与声明式 Timeline。项目、素材集合、Workflow、Task 依赖、Tool Execution、Artifact 和 Custom Story Plan 状态保存到 MySQL。
+当前已完成第八阶段：LLM 优化（strict structured output 支持 GPT-4o / Claude Sonnet 4/4.6，Schema v1.1 简化）、FADE/CROSS_DISSOLVE 转场、BGM 背景音乐混音、ASR 语音转写字幕。用户可在浏览器中编辑 Story Plan 的 shot 分配（替换、排序、锁定、添加、删除），保存多版本方案（自定义版本名），版本 Diff 对比与回退，一键 Apply & Render 生成带有转场效果、背景音乐和字幕的成片。Java 根据受约束的 `WorkflowDefinition` v7（12 节点）为每个素材展开 `video.probe -> video.proxy-generate -> video.shot-detect -> (vision.quality-score + vision.scene-classify + vision.object-detect + vision.person-detect)` 分支，再以工作流级节点汇聚执行 `decision.shot-rank (+ 3 个视觉 Tool) -> planning.story-template -> decision.highlight-select -> timeline.compose`，并并行执行 `audio.bgm-select` 和 `audio.speech-transcribe` 后汇入 `video.render`。Python 使用 FFmpeg 生成代理视频、镜头列表和关键帧，以 CLIP ViT-B-32 零样本模型输出语义标签（场景/物体/人物），以确定性 Tool 输出质量指标、跨素材 Ranking、五段式 Story Plan（LLM-assisted with semantic context）、高光集合、声明式 Timeline（v1.1 支持 FADE/CROSS_DISSOLVE 转场 + AUDIO/SUBTITLE 轨），faster-whisper 输出 SRT 字幕，并通过 xfade/acrossfade/amix/subtitles 滤镜图渲染最终成片。项目、素材集合、Workflow、Task 依赖、Tool Execution、Artifact 和 Custom Story Plan 状态保存到 MySQL。
 
 ## 当前功能
 
@@ -26,21 +26,31 @@ Agent 驱动的智能视频制作流水线暑期实训项目。
 - 每个 Shot 输出清晰度、曝光、稳定性、构图与总质量分，并保留 Proxy、Shot List、关键帧血缘。
 - 每个 Shot 输出 CLIP 语义标签：场景分类（15 类）、物体检测（15 类）、人物检测（有人/无人 + 人数 + 景别 + 活动姿态）。
 - 跨素材 Ranking 保存评分分解、运动兴趣、时长适配、近重复/素材均衡/时间邻近惩罚、排名和原因码。
-- Story Plan 使用固定 `HOOK -> INTRO -> JOURNEY -> CLIMAX -> ENDING` 模板，LLM 结合语义标签和数值评分进行 shot-to-beat 选择，失败时自动回退确定性算法。
+- Story Plan 使用固定 `HOOK -> INTRO -> JOURNEY -> CLIMAX -> ENDING` 模板，LLM 结合语义标签和数值评分进行 shot-to-beat 选择（支持 strict structured output：GPT-4o / Claude），失败时自动回退确定性算法。
 - Highlight Selection 将已验证 Story Plan 编译为不可变高光集合。
-- `TIMELINE` Artifact 使用受约束的结构化视频轨道和 `CUT` 转场，不包含 Shell 或 FFmpeg 字符串。
-- Timeline 在写入 Artifact 前校验画布、Clip 唯一性、Shot 边界、轨道连续性、时长一致性和转场白名单。
+- `TIMELINE` Artifact v1.1 使用受约束的结构化视频轨道、`CUT`/`FADE`/`CROSS_DISSOLVE` 转场、可选 `AUDIO` 轨（BGM）和 `SUBTITLE` 轨（SRT），不包含 Shell 或 FFmpeg 字符串。
+- Timeline 在写入 Artifact 前校验画布、Clip 唯一性、Shot 边界、轨道连续性、时长一致性、转场类型/时长（CUT 0ms / FADE 200–2000ms / CROSS_DISSOLVE 200–2000ms）和转场白名单。
 - 用户输入自然语言成片时长（如"快节奏15秒"、"1分钟慢旅行"），LLM 解析为目标毫秒数。
 - 前端编辑 Story Plan：替换 shot、上下排序、锁定保护、添加镜头、删除镜头。
 - 编辑后的方案保存到 `custom_story_plans` 表，支持自定义版本名。
 - 一键 Apply & Render：Java 侧确定性构建 TIMELINE → 调度 video.render 渲染成片。
 - 多版本管理：版本列表、Diff 对比（Added/Removed/Modified/Unchanged）、Load/Switch、Restore 回退、Delete 删除。
+- LLM Story Proposal Schema v1.1：移除 beat 级别 `targetDurationMs`（编译器确定性计算），LLM 只需分配 `shotIds` + `reasonCodes`，提升采纳率。
+- 可插拔 LLM Provider：DeepSeek（`json_object`）/ OpenAI GPT-4o（`json_schema` + `strict: true`）/ Claude（`tool_use` + `input_schema`），通过 `.env` 切换。
+- FADE 转场（淡入 200–2000ms）+ CROSS_DISSOLVE 转场（交叉溶解 200–2000ms），启发式分配：首个 Clip FADE、段落边界 CROSS_DISSOLVE、段内 CUT。
+- FFmpeg 滤镜图从纯 `concat` 升级为 `xfade`/`acrossfade`/`fade`/`afade` 链，支持转场叠加。
+- `audio.bgm-select` Tool：段落角色 → 心情映射（HOOK→energetic, CLIMAX→epic 等），从 `runtime/bgm/` 曲库选择 BGM，渲染时 `amix` 混音（默认 volume 0.3）。
+- `audio.speech-transcribe` Tool：基于 faster-whisper 将视频语音转写为 SRT 字幕（带时间线偏移），渲染时 `subtitles` 滤镜烧录。
+- 渲染元数据记录 `hasBgm`、`hasSubtitles`，前端时间线展示转场类型指示器和 BGM/字幕状态条。
 
 ## 快速开始
 
-当前本机运行与交接说明见 [第七阶段交接](docs/seventh-stage-handoff.md)。历史记录保留在 [第六阶段交接](docs/sixth-stage-handoff.md)、[第五阶段交接](docs/fifth-stage-handoff.md)、[第四阶段交接](docs/fourth-stage-handoff.md)、[第三阶段交接](docs/third-stage-handoff.md)、[第一条垂直链路](docs/first-vertical-slice.md) 和 [第二条垂直链路](docs/second-vertical-slice.md)。
+当前本机运行与交接说明见 [第八阶段交接](docs/eighth-stage-handoff.md)。历史记录保留在 [第七阶段交接](docs/seventh-stage-handoff.md)、[第六阶段交接](docs/sixth-stage-handoff.md)、[第五阶段交接](docs/fifth-stage-handoff.md)、[第四阶段交接](docs/fourth-stage-handoff.md)、[第三阶段交接](docs/third-stage-handoff.md)、[第一条垂直链路](docs/first-vertical-slice.md) 和 [第二条垂直链路](docs/second-vertical-slice.md)。
 
 ```powershell
+# 安装新依赖（第八阶段新增 faster-whisper）
+pip install faster-whisper>=1.0.0
+
 # 终端 1
 scripts\start-tool-service.cmd
 
