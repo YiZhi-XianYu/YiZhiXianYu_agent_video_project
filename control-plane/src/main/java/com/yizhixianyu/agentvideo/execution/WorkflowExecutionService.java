@@ -207,7 +207,7 @@ public class WorkflowExecutionService {
         renderWorkflow.start();
 
         var virtualTask = taskRepository.save(new TaskRunEntity(
-            renderWorkflow.getId(), "timeline_compose_virtual", "timeline.compose", "1.0.0", null
+            renderWorkflow.getId(), "timeline_compose_virtual", "timeline.compose", "1.1.0", null
         ));
         virtualTask.markReady();
         virtualTask.markDispatching();
@@ -225,7 +225,7 @@ public class WorkflowExecutionService {
             "workflow:video_render",
             "video_render",
             "video.render",
-            "1.0.0",
+            "1.1.0",
             "UPSTREAM_ARTIFACT",
             "{}"
         ));

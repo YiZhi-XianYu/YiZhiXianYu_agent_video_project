@@ -62,7 +62,7 @@ public class MultiAssetAnalysisTemplate {
                     WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()
                 ),
                 new WorkflowDefinition.Node(
-                    "timeline_compose", "timeline.compose", "1.0.0",
+                    "timeline_compose", "timeline.compose", "1.1.0",
                     WorkflowDefinition.NodeScope.WORKFLOW,
                     WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT,
                     timelineParameters(quality)
@@ -78,7 +78,7 @@ public class MultiAssetAnalysisTemplate {
                     WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()
                 ),
                 new WorkflowDefinition.Node(
-                    "video_render", "video.render", "1.0.0",
+                    "video_render", "video.render", "1.1.0",
                     WorkflowDefinition.NodeScope.WORKFLOW,
                     WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()
                 )

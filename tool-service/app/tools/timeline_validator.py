@@ -149,10 +149,10 @@ def _validate_video_clips(track: dict[str, Any]) -> tuple[list[str], int]:
                     f"{prefix}.transitionIn.durationMs {transition_dur} is out of range "
                     f"for {transition_type} (allowed: {rules['min']}–{rules['max']})"
                 )
-            # First clip must be CUT (no fade/dissolve INTO the first clip)
-            if index == 0 and transition_type != "CUT":
+            # First clip: CUT or FADE (fade-from-black) allowed; CROSS_DISSOLVE rejected (needs prior clip)
+            if index == 0 and transition_type == "CROSS_DISSOLVE":
                 errors.append(
-                    f"{prefix} is the first clip and must use CUT transition (cannot fade/dissolve into first clip)"
+                    f"{prefix} is the first clip and must use CUT or FADE transition (CROSS_DISSOLVE requires a preceding clip)"
                 )
             # Transition duration must not exceed or equal clip duration
             if transition_dur >= clip_duration:
