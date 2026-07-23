@@ -16,7 +16,7 @@ def test_manifest():
     tool = VideoRenderTool()
     m = tool.manifest()
     assert m["name"] == "video.render"
-    assert m["version"] == "1.0.0"
+    assert m["version"] == "1.1.0"
     assert "TIMELINE" in m["inputTypes"]
     assert "RENDERED_VIDEO" in m["outputTypes"]
     assert m["cacheable"] is False
@@ -29,30 +29,35 @@ def test_build_filter_graph_single_clip():
         "sourceOutMs": 3000,
         "timelineInMs": 0,
         "timelineOutMs": 3000,
+        "transitionIn": {"type": "CUT", "durationMs": 0},
     }]
     canvas = {"width": 1280, "height": 720, "fps": 30}
     proxy_map = {"art_abc": Path("/tmp/art_abc/video-proxy.mp4")}
     audio_map = {"art_abc": True}
 
-    inputs, fc = _build_filter_graph(clips, canvas, proxy_map, audio_map)
+    inputs, fc, v_label, a_label = _build_filter_graph(clips, canvas, proxy_map, audio_map)
 
     assert len(inputs) == 1
     assert "[0:v]" in fc
     assert "trim=start=0.000:duration=3.000" in fc
     assert "scale=1280:720" in fc
-    assert "concat=n=1:v=1:a=0[outv]" in fc
-    assert "concat=n=1:v=0:a=1[outa]" in fc
+    assert "[s0]" in fc
     assert "[0:a]atrim=start=0.000:duration=3.000" in fc
+    assert v_label == "[s0]"
+    assert a_label == "[a0]"
 
 
-def test_build_filter_graph_multi_clip_two_sources():
+def test_build_filter_graph_multi_clip_cut():
     clips = [
         {"sourceProxyArtifactId": "art_abc", "sourceInMs": 0, "sourceOutMs": 2000,
-         "timelineInMs": 0, "timelineOutMs": 2000},
+         "timelineInMs": 0, "timelineOutMs": 2000,
+         "transitionIn": {"type": "CUT", "durationMs": 0}},
         {"sourceProxyArtifactId": "art_def", "sourceInMs": 500, "sourceOutMs": 3500,
-         "timelineInMs": 2000, "timelineOutMs": 5000},
+         "timelineInMs": 2000, "timelineOutMs": 5000,
+         "transitionIn": {"type": "CUT", "durationMs": 0}},
         {"sourceProxyArtifactId": "art_abc", "sourceInMs": 4000, "sourceOutMs": 6000,
-         "timelineInMs": 5000, "timelineOutMs": 7000},
+         "timelineInMs": 5000, "timelineOutMs": 7000,
+         "transitionIn": {"type": "CUT", "durationMs": 0}},
     ]
     canvas = {"width": 1920, "height": 1080, "fps": 30}
     proxy_map = {
@@ -61,14 +66,15 @@ def test_build_filter_graph_multi_clip_two_sources():
     }
     audio_map = {"art_abc": True, "art_def": True}
 
-    inputs, fc = _build_filter_graph(clips, canvas, proxy_map, audio_map)
+    inputs, fc, v_label, a_label = _build_filter_graph(clips, canvas, proxy_map, audio_map)
 
     assert len(inputs) == 2
-    assert "concat=n=3:v=1:a=0[outv]" in fc
-    assert "concat=n=3:v=0:a=1[outa]" in fc
+    assert "concat=n=2:v=1:a=0" in fc
     assert "[0:v]" in fc
     assert "[1:v]" in fc
-    assert "[v0][v1][v2]" in fc
+    assert "[s0]" in fc
+    assert "[s1]" in fc
+    assert "[s2]" in fc
     assert "scale=1920:1080" in fc
 
 
@@ -77,12 +83,13 @@ def test_build_filter_graph_no_audio():
         "sourceProxyArtifactId": "art_abc",
         "sourceInMs": 1000, "sourceOutMs": 4000,
         "timelineInMs": 0, "timelineOutMs": 3000,
+        "transitionIn": {"type": "CUT", "durationMs": 0},
     }]
     canvas = {"width": 1280, "height": 720, "fps": 30}
     proxy_map = {"art_abc": Path("/tmp/art_abc/video-proxy.mp4")}
     audio_map = {"art_abc": False}
 
-    _inputs, fc = _build_filter_graph(clips, canvas, proxy_map, audio_map)
+    _inputs, fc, _v, _a = _build_filter_graph(clips, canvas, proxy_map, audio_map)
 
     assert "anullsrc=r=48000:cl=stereo:d=3.000[a0]" in fc
     assert "atrim" not in fc
@@ -91,9 +98,11 @@ def test_build_filter_graph_no_audio():
 def test_build_filter_graph_mixed_audio():
     clips = [
         {"sourceProxyArtifactId": "art_with", "sourceInMs": 0, "sourceOutMs": 2000,
-         "timelineInMs": 0, "timelineOutMs": 2000},
+         "timelineInMs": 0, "timelineOutMs": 2000,
+         "transitionIn": {"type": "CUT", "durationMs": 0}},
         {"sourceProxyArtifactId": "art_without", "sourceInMs": 0, "sourceOutMs": 2000,
-         "timelineInMs": 2000, "timelineOutMs": 4000},
+         "timelineInMs": 2000, "timelineOutMs": 4000,
+         "transitionIn": {"type": "CUT", "durationMs": 0}},
     ]
     canvas = {"width": 1280, "height": 720, "fps": 30}
     proxy_map = {
@@ -102,11 +111,57 @@ def test_build_filter_graph_mixed_audio():
     }
     audio_map = {"art_with": True, "art_without": False}
 
-    _inputs, fc = _build_filter_graph(clips, canvas, proxy_map, audio_map)
+    _inputs, fc, _v, _a = _build_filter_graph(clips, canvas, proxy_map, audio_map)
 
     assert "[0:a]atrim" in fc
     assert "anullsrc" in fc
-    assert "concat=n=2:v=1:a=0[outv]" in fc
+
+
+def test_build_filter_graph_with_fade():
+    clips = [
+        {"sourceProxyArtifactId": "art_a", "sourceInMs": 0, "sourceOutMs": 3000,
+         "timelineInMs": 0, "timelineOutMs": 3000,
+         "transitionIn": {"type": "CUT", "durationMs": 0}},
+        {"sourceProxyArtifactId": "art_a", "sourceInMs": 5000, "sourceOutMs": 8000,
+         "timelineInMs": 3000, "timelineOutMs": 6000,
+         "transitionIn": {"type": "FADE", "durationMs": 300}},
+    ]
+    canvas = {"width": 1920, "height": 1080, "fps": 30}
+    proxy_map = {"art_a": Path("/tmp/art_a/video-proxy.mp4")}
+    audio_map = {"art_a": True}
+
+    _inputs, fc, _v, _a = _build_filter_graph(clips, canvas, proxy_map, audio_map)
+
+    # First clip: no fade
+    assert "[s0]" in fc
+    # Second clip: fade filter in video chain
+    assert "fade=t=in:d=0.300[s1]" in fc
+    # Audio fade for second clip
+    assert "afade=t=in:d=0.300[a1]" in fc
+    # Connection is still concat (FADE doesn't use xfade)
+    assert "concat=n=2:v=1:a=0" in fc
+
+
+def test_build_filter_graph_with_cross_dissolve():
+    clips = [
+        {"sourceProxyArtifactId": "art_a", "sourceInMs": 0, "sourceOutMs": 3000,
+         "timelineInMs": 0, "timelineOutMs": 3000,
+         "transitionIn": {"type": "CUT", "durationMs": 0}},
+        {"sourceProxyArtifactId": "art_a", "sourceInMs": 5000, "sourceOutMs": 8000,
+         "timelineInMs": 3000, "timelineOutMs": 6000,
+         "transitionIn": {"type": "CROSS_DISSOLVE", "durationMs": 500}},
+    ]
+    canvas = {"width": 1920, "height": 1080, "fps": 30}
+    proxy_map = {"art_a": Path("/tmp/art_a/video-proxy.mp4")}
+    audio_map = {"art_a": True}
+
+    _inputs, fc, _v, _a = _build_filter_graph(clips, canvas, proxy_map, audio_map)
+
+    # xfade for cross-dissolve
+    assert "xfade=transition=fade:duration=0.500" in fc
+    assert "offset=2.500" in fc  # 3.0 - 0.5 = 2.5
+    # acrossfade for audio
+    assert "acrossfade=d=0.500" in fc
 
 
 def test_resolve_proxy_paths_finds_and_misses(monkeypatch, tmp_path):
