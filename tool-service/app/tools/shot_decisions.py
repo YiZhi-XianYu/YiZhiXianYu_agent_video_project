@@ -304,10 +304,10 @@ class HighlightSelectionTool:
 
 class TimelineComposeTool:
     name = "timeline.compose"
-    version = "1.0.0"
+    version = "1.1.0"
 
     def manifest(self) -> dict[str, Any]:
-        return _manifest(self, "Compose a validated declarative video Timeline", ["HIGHLIGHT_SET"], ["TIMELINE"])
+        return _manifest(self, "Compose a validated declarative video Timeline with transitions", ["HIGHLIGHT_SET"], ["TIMELINE"])
 
     def execute(self, request: ToolExecutionRequest, report_progress: Callable[[int], None] | None = None) -> list[ArtifactDescriptor]:
         highlight_inputs = matching_inputs(request.inputs, "highlights")
@@ -317,14 +317,20 @@ class TimelineComposeTool:
         width = int(request.parameters.get("width", 1920))
         height = int(request.parameters.get("height", 1080))
         fps = int(request.parameters.get("fps", 30))
+        transition_style = str(request.parameters.get("transitionStyle", "CUT"))
         if width < 320 or height < 240 or fps < 1 or fps > 120:
             raise ValueError("Invalid Timeline canvas")
         clips = []
         timeline_in = 0
+        prev_story_role = None
         for shot in highlights.get("shots") or []:
             duration = int(shot["sourceOutMs"]) - int(shot["sourceInMs"])
             if duration <= 0 or int(shot["sourceOutMs"]) > int(shot["endMs"]):
                 raise ValueError("Highlight clip is outside its Shot range")
+
+            story_role = shot.get("storyRole", "")
+            transition = _assign_transition(transition_style, len(clips), story_role, prev_story_role)
+
             clips.append({
                 "clipId": f"clip_{shot['shotId']}",
                 "shotId": shot["shotId"],
@@ -337,12 +343,13 @@ class TimelineComposeTool:
                 "timelineInMs": timeline_in,
                 "timelineOutMs": timeline_in + duration,
                 "playbackRate": 1.0,
-                "transitionIn": {"type": "CUT", "durationMs": 0},
+                "transitionIn": transition,
                 "selectionRank": shot["rank"],
-                "storyRole": shot["storyRole"],
+                "storyRole": story_role,
                 "selectionReasons": shot["selectionReasons"],
             })
             timeline_in += duration
+            prev_story_role = story_role
         identity_source = ";".join(
             f"{clip['assetId']}:{clip['sourceInMs']}:{clip['sourceOutMs']}" for clip in clips
         ) + f":{width}:{height}:{fps}"
@@ -350,7 +357,7 @@ class TimelineComposeTool:
         payload = {
             "timelineId": f"tl_{identity}",
             "version": 1,
-            "schemaVersion": "1.0",
+            "schemaVersion": "1.1",
             "sourceHighlightArtifactId": highlight_inputs[0].artifact_id,
             "canvas": {"width": width, "height": height, "fps": fps},
             "durationMs": timeline_in,
@@ -361,6 +368,36 @@ class TimelineComposeTool:
             raise ValueError("Timeline validation failed: " + "; ".join(errors))
         payload["validation"] = {"valid": True, "errors": []}
         return [write_json_artifact("TIMELINE", "timeline.json", payload, payload)]
+
+
+def _assign_transition(
+    style: str,
+    clip_index: int,
+    story_role: str,
+    prev_story_role: str | None,
+) -> dict[str, Any]:
+    """Heuristic transition assignment based on style, position, and beat boundaries.
+
+    - "CUT": all transitions are CUT (backward-compatible default)
+    - "FADE": first clip gets FADE (300ms), rest CUT
+    - "CROSS_DISSOLVE": beat boundaries get CROSS_DISSOLVE (500ms), within-beat get CUT
+    """
+    if style == "CUT":
+        return {"type": "CUT", "durationMs": 0}
+    if style == "FADE":
+        if clip_index == 0:
+            return {"type": "FADE", "durationMs": 300}
+        return {"type": "CUT", "durationMs": 0}
+    if style == "CROSS_DISSOLVE":
+        # First clip: FADE for a gentle opening
+        if clip_index == 0:
+            return {"type": "FADE", "durationMs": 300}
+        # Beat boundary: CROSS_DISSOLVE for narrative flow
+        if prev_story_role is not None and story_role != prev_story_role:
+            return {"type": "CROSS_DISSOLVE", "durationMs": 500}
+        return {"type": "CUT", "durationMs": 0}
+    # Unknown style: default to CUT
+    return {"type": "CUT", "durationMs": 0}
 
 
 def _manifest(tool: Any, description: str, inputs: list[str], outputs: list[str]) -> dict[str, Any]:
