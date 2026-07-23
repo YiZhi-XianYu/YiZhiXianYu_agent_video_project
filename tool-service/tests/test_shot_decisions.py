@@ -103,7 +103,31 @@ def test_story_proposal_validator_rejects_unknown_and_duplicate_shots() -> None:
     assert any("duplicated" in error for error in errors)
 
 
-def test_llm_story_proposal_validator_enforces_candidate_ids_and_budget() -> None:
+def test_llm_story_proposal_validator_enforces_candidate_ids_and_no_duplicates() -> None:
+    proposal = {
+        "schemaVersion": "1.1",
+        "template": "TRAVEL_JOURNEY_V1",
+        "targetDurationMs": 30000,
+        "confidence": 0.8,
+        "assumptions": [],
+        "beats": [
+            {"role": "HOOK", "shotIds": ["s1"], "reasonCodes": ["STRONG_OPENING"]},
+            {"role": "INTRO", "shotIds": ["s2"], "reasonCodes": ["ESTABLISHING_CONTEXT"]},
+            {"role": "JOURNEY", "shotIds": ["s3", "s4"], "reasonCodes": ["JOURNEY_CONTINUITY"]},
+            {"role": "CLIMAX", "shotIds": ["s4", "unknown"], "reasonCodes": ["CLIMAX_CANDIDATE"]},
+            {"role": "ENDING", "shotIds": ["s5"], "reasonCodes": ["CALM_ENDING"]},
+        ],
+    }
+
+    errors = LlmStoryProposalValidator.validate(proposal, {"s1", "s2", "s3", "s4", "s5"}, 30000, 10)
+
+    assert "beats[3] references an unknown shotId: unknown" in errors
+    assert "shotId is duplicated across beats: s4" in errors
+    # Duration sum is NOT checked here — _compile_llm_proposal handles it deterministically
+
+
+def test_llm_story_proposal_validator_accepts_v1_0_legacy_format() -> None:
+    """Backward-compatibility: v1.0 proposals with beat-level targetDurationMs are still accepted."""
     proposal = {
         "schemaVersion": "1.0",
         "template": "TRAVEL_JOURNEY_V1",
@@ -113,17 +137,41 @@ def test_llm_story_proposal_validator_enforces_candidate_ids_and_budget() -> Non
         "beats": [
             {"role": "HOOK", "targetDurationMs": 3500, "shotIds": ["s1"], "reasonCodes": ["STRONG_OPENING"]},
             {"role": "INTRO", "targetDurationMs": 4500, "shotIds": ["s2"], "reasonCodes": ["ESTABLISHING_CONTEXT"]},
-            {"role": "JOURNEY", "targetDurationMs": 9000, "shotIds": ["s3", "s4"], "reasonCodes": ["JOURNEY_CONTINUITY"]},
-            {"role": "CLIMAX", "targetDurationMs": 9000, "shotIds": ["s4", "unknown"], "reasonCodes": ["CLIMAX_CANDIDATE"]},
-            {"role": "ENDING", "targetDurationMs": 3000, "shotIds": ["s5"], "reasonCodes": ["CALM_ENDING"]},
+            {"role": "JOURNEY", "targetDurationMs": 9000, "shotIds": ["s3"], "reasonCodes": ["JOURNEY_CONTINUITY"]},
+            {"role": "CLIMAX", "targetDurationMs": 9000, "shotIds": ["s4"], "reasonCodes": ["CLIMAX_CANDIDATE"]},
+            {"role": "ENDING", "targetDurationMs": 4000, "shotIds": ["s5"], "reasonCodes": ["CALM_ENDING"]},
         ],
     }
 
     errors = LlmStoryProposalValidator.validate(proposal, {"s1", "s2", "s3", "s4", "s5"}, 30000, 10)
+    # Should pass — v1.0 is still accepted, and duration arithmetic is not validated here
+    assert len(errors) == 0
 
-    assert "beats[3] references an unknown shotId: unknown" in errors
-    assert "shotId is duplicated across beats: s4" in errors
-    assert "beat durations do not exactly fill targetDurationMs" in errors
+
+def test_llm_story_proposal_validator_rejects_hallucinated_shot_count() -> None:
+    """Early-reject proposals with wildly excessive shot counts."""
+    proposal = {
+        "schemaVersion": "1.1",
+        "template": "TRAVEL_JOURNEY_V1",
+        "targetDurationMs": 30000,
+        "confidence": 0.8,
+        "assumptions": [],
+        "beats": [
+            {"role": "HOOK", "shotIds": ["s1"] * 10, "reasonCodes": ["STRONG_OPENING"] * 10},
+            {"role": "INTRO", "shotIds": ["s2"] * 10, "reasonCodes": ["ESTABLISHING_CONTEXT"] * 10},
+            {"role": "JOURNEY", "shotIds": ["s3"] * 10, "reasonCodes": ["JOURNEY_CONTINUITY"] * 10},
+            {"role": "CLIMAX", "shotIds": ["s4"] * 10, "reasonCodes": ["CLIMAX_CANDIDATE"] * 10},
+            {"role": "ENDING", "shotIds": ["s5"] * 10, "reasonCodes": ["CALM_ENDING"] * 10},
+        ],
+    }
+
+    errors = LlmStoryProposalValidator.validate(
+        proposal,
+        {"s1", "s2", "s3", "s4", "s5"},
+        30000,
+        max_shots=10,
+    )
+    assert any("far exceeding maxShots" in e for e in errors)
 
 
 def test_timeline_validator_rejects_gaps_and_source_overflow() -> None:
@@ -154,6 +202,112 @@ def test_timeline_validator_rejects_gaps_and_source_overflow() -> None:
     assert "clips[0] source range exceeds its Shot" in errors
     assert "clips[0] does not start at the previous Clip boundary" in errors
     assert "Timeline duration does not match the VIDEO track" in errors
+
+
+def test_timeline_validator_accepts_fade_and_cross_dissolve() -> None:
+    timeline = {
+        "canvas": {"width": 1280, "height": 720, "fps": 30},
+        "durationMs": 6500,
+        "tracks": [{"type": "VIDEO", "clips": [
+            {
+                "clipId": "clip-a", "shotId": "shot-a", "assetId": "a1",
+                "sourceProxyArtifactId": "p1",
+                "sourceInMs": 0, "sourceOutMs": 3000,
+                "sourceShotStartMs": 0, "sourceShotEndMs": 5000,
+                "timelineInMs": 0, "timelineOutMs": 3000,
+                "playbackRate": 1.0,
+                "transitionIn": {"type": "CUT", "durationMs": 0},
+                "selectionRank": 1, "storyRole": "HOOK", "selectionReasons": [],
+            },
+            {
+                "clipId": "clip-b", "shotId": "shot-b", "assetId": "a2",
+                "sourceProxyArtifactId": "p2",
+                "sourceInMs": 1000, "sourceOutMs": 4500,
+                "sourceShotStartMs": 0, "sourceShotEndMs": 5000,
+                "timelineInMs": 3000, "timelineOutMs": 6500,
+                "playbackRate": 1.0,
+                "transitionIn": {"type": "CROSS_DISSOLVE", "durationMs": 500},
+                "selectionRank": 2, "storyRole": "INTRO", "selectionReasons": [],
+            },
+        ]}],
+    }
+    errors = TimelineValidator.validate(timeline)
+    assert len(errors) == 0
+
+
+def test_timeline_validator_rejects_fade_below_minimum() -> None:
+    timeline = {
+        "canvas": {"width": 1280, "height": 720, "fps": 30},
+        "durationMs": 5000,
+        "tracks": [{"type": "VIDEO", "clips": [
+            {
+                "clipId": "clip-a", "shotId": "shot-a", "assetId": "a1",
+                "sourceProxyArtifactId": "p1",
+                "sourceInMs": 0, "sourceOutMs": 2000,
+                "sourceShotStartMs": 0, "sourceShotEndMs": 5000,
+                "timelineInMs": 0, "timelineOutMs": 2000,
+                "playbackRate": 1.0,
+                "transitionIn": {"type": "CUT", "durationMs": 0},
+                "selectionRank": 1, "storyRole": "HOOK", "selectionReasons": [],
+            },
+            {
+                "clipId": "clip-b", "shotId": "shot-b", "assetId": "a2",
+                "sourceProxyArtifactId": "p2",
+                "sourceInMs": 0, "sourceOutMs": 3000,
+                "sourceShotStartMs": 0, "sourceShotEndMs": 5000,
+                "timelineInMs": 2000, "timelineOutMs": 5000,
+                "playbackRate": 1.0,
+                "transitionIn": {"type": "FADE", "durationMs": 100},
+                "selectionRank": 2, "storyRole": "INTRO", "selectionReasons": [],
+            },
+        ]}],
+    }
+    errors = TimelineValidator.validate(timeline)
+    assert any("out of range" in e and "FADE" in e for e in errors)
+
+
+def test_timeline_validator_rejects_cross_dissolve_on_first_clip() -> None:
+    timeline = {
+        "canvas": {"width": 1280, "height": 720, "fps": 30},
+        "durationMs": 3000,
+        "tracks": [{"type": "VIDEO", "clips": [
+            {
+                "clipId": "clip-a", "shotId": "shot-a", "assetId": "a1",
+                "sourceProxyArtifactId": "p1",
+                "sourceInMs": 0, "sourceOutMs": 3000,
+                "sourceShotStartMs": 0, "sourceShotEndMs": 5000,
+                "timelineInMs": 0, "timelineOutMs": 3000,
+                "playbackRate": 1.0,
+                "transitionIn": {"type": "CROSS_DISSOLVE", "durationMs": 500},
+                "selectionRank": 1, "storyRole": "HOOK", "selectionReasons": [],
+            },
+        ]}],
+    }
+    errors = TimelineValidator.validate(timeline)
+    assert any("first clip" in e for e in errors)
+
+
+def test_timeline_validator_accepts_audio_and_subtitle_tracks() -> None:
+    timeline = {
+        "canvas": {"width": 1280, "height": 720, "fps": 30},
+        "durationMs": 3000,
+        "tracks": [
+            {"type": "VIDEO", "clips": [{
+                "clipId": "clip-a", "shotId": "shot-a", "assetId": "a1",
+                "sourceProxyArtifactId": "p1",
+                "sourceInMs": 0, "sourceOutMs": 3000,
+                "sourceShotStartMs": 0, "sourceShotEndMs": 5000,
+                "timelineInMs": 0, "timelineOutMs": 3000,
+                "playbackRate": 1.0,
+                "transitionIn": {"type": "CUT", "durationMs": 0},
+                "selectionRank": 1, "storyRole": "HOOK", "selectionReasons": [],
+            }]},
+            {"type": "AUDIO", "source": {"uri": "file:///bgm.mp3", "volume": 0.3}},
+            {"type": "SUBTITLE", "source": {"uri": "file:///subs.srt", "format": "SRT"}},
+        ],
+    }
+    errors = TimelineValidator.validate(timeline)
+    assert len(errors) == 0
 
 
 def quality_shot(shot_id: str, asset_id: str, start_ms: int, end_ms: int, quality: float, fingerprint: str) -> dict:
