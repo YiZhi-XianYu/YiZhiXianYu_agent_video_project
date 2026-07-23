@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yizhixianyu.com/contracts/llm/duration-parsing.schema.json",
+  "title": "Duration Parsing Result",
+  "description": "LLM output for natural-language duration parsing.",
+  "type": "object",
+  "required": ["targetDurationMs", "parsedFrom"],
+  "additionalProperties": false,
+  "properties": {
+    "targetDurationMs": {
+      "type": "integer",
+      "minimum": 5000,
+      "maximum": 300000,
+      "description": "Parsed duration in milliseconds"
+    },
+    "parsedFrom": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "The original prompt that was parsed"
+    }
+  }
+}
