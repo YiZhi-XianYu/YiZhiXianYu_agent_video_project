@@ -22,7 +22,7 @@ public class MultiAssetAnalysisTemplate {
         }
         return new WorkflowDefinition(
             "MULTI_ASSET_ANALYSIS",
-            6,
+            7,
             List.of(
                 new WorkflowDefinition.Node(
                     "video_probe", "video.probe", "1.0.0",
@@ -68,6 +68,16 @@ public class MultiAssetAnalysisTemplate {
                     timelineParameters(quality)
                 ),
                 new WorkflowDefinition.Node(
+                    "bgm_select", "audio.bgm-select", "1.0.0",
+                    WorkflowDefinition.NodeScope.WORKFLOW,
+                    WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()
+                ),
+                new WorkflowDefinition.Node(
+                    "speech_transcribe", "audio.speech-transcribe", "1.0.0",
+                    WorkflowDefinition.NodeScope.WORKFLOW,
+                    WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()
+                ),
+                new WorkflowDefinition.Node(
                     "video_render", "video.render", "1.0.0",
                     WorkflowDefinition.NodeScope.WORKFLOW,
                     WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()
@@ -85,6 +95,10 @@ public class MultiAssetAnalysisTemplate {
                 new WorkflowDefinition.Edge("story_plan", "highlight_selection"),
                 new WorkflowDefinition.Edge("shot_ranking", "highlight_selection"),
                 new WorkflowDefinition.Edge("highlight_selection", "timeline_compose"),
+                new WorkflowDefinition.Edge("timeline_compose", "bgm_select"),
+                new WorkflowDefinition.Edge("timeline_compose", "speech_transcribe"),
+                new WorkflowDefinition.Edge("bgm_select", "video_render"),
+                new WorkflowDefinition.Edge("speech_transcribe", "video_render"),
                 new WorkflowDefinition.Edge("timeline_compose", "video_render")
             )
         );
