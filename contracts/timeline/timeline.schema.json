@@ -2,13 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://yizhixianyu.com/contracts/timeline/timeline.schema.json",
   "title": "Deterministic Video Timeline",
+  "description": "v1.1 — Adds FADE/CROSS_DISSOLVE transitions, optional AUDIO (BGM) and SUBTITLE tracks. Backward-compatible with v1.0 CUT-only timelines.",
   "type": "object",
   "required": ["timelineId", "version", "schemaVersion", "sourceHighlightArtifactId", "canvas", "durationMs", "tracks", "validation"],
   "additionalProperties": false,
   "properties": {
     "timelineId": { "type": "string", "pattern": "^tl_[a-f0-9]{16}$" },
     "version": { "type": "integer", "minimum": 1 },
-    "schemaVersion": { "const": "1.0" },
+    "schemaVersion": { "const": "1.1" },
     "sourceHighlightArtifactId": { "type": "string", "minLength": 1 },
     "canvas": {
       "type": "object",
@@ -24,46 +25,13 @@
     "tracks": {
       "type": "array",
       "minItems": 1,
+      "maxItems": 3,
       "items": {
-        "type": "object",
-        "required": ["type", "clips"],
-        "additionalProperties": false,
-        "properties": {
-          "type": { "const": "VIDEO" },
-          "clips": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": ["clipId", "shotId", "assetId", "sourceProxyArtifactId", "sourceInMs", "sourceOutMs", "sourceShotStartMs", "sourceShotEndMs", "timelineInMs", "timelineOutMs", "playbackRate", "transitionIn", "selectionRank", "storyRole", "selectionReasons"],
-              "additionalProperties": false,
-              "properties": {
-                "clipId": { "type": "string" },
-                "shotId": { "type": "string" },
-                "assetId": { "type": "string" },
-                "sourceProxyArtifactId": { "type": "string" },
-                "sourceInMs": { "type": "integer", "minimum": 0 },
-                "sourceOutMs": { "type": "integer", "minimum": 1 },
-                "sourceShotStartMs": { "type": "integer", "minimum": 0 },
-                "sourceShotEndMs": { "type": "integer", "minimum": 1 },
-                "timelineInMs": { "type": "integer", "minimum": 0 },
-                "timelineOutMs": { "type": "integer", "minimum": 1 },
-                "playbackRate": { "const": 1.0 },
-                "transitionIn": {
-                  "type": "object",
-                  "required": ["type", "durationMs"],
-                  "additionalProperties": false,
-                  "properties": {
-                    "type": { "const": "CUT" },
-                    "durationMs": { "const": 0 }
-                  }
-                },
-                "selectionRank": { "type": "integer", "minimum": 1 },
-                "storyRole": { "enum": ["HOOK", "INTRO", "JOURNEY", "CLIMAX", "ENDING"] },
-                "selectionReasons": { "type": "array", "items": { "type": "string" } }
-              }
-            }
-          }
-        }
+        "oneOf": [
+          { "$ref": "#/$defs/videoTrack" },
+          { "$ref": "#/$defs/audioTrack" },
+          { "$ref": "#/$defs/subtitleTrack" }
+        ]
       }
     },
     "validation": {
@@ -73,6 +41,111 @@
       "properties": {
         "valid": { "const": true },
         "errors": { "type": "array", "maxItems": 0 }
+      }
+    }
+  },
+  "$defs": {
+    "videoTrack": {
+      "type": "object",
+      "required": ["type", "clips"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "VIDEO" },
+        "clips": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["clipId", "shotId", "assetId", "sourceProxyArtifactId", "sourceInMs", "sourceOutMs", "sourceShotStartMs", "sourceShotEndMs", "timelineInMs", "timelineOutMs", "playbackRate", "transitionIn", "selectionRank", "storyRole", "selectionReasons"],
+            "additionalProperties": false,
+            "properties": {
+              "clipId": { "type": "string" },
+              "shotId": { "type": "string" },
+              "assetId": { "type": "string" },
+              "sourceProxyArtifactId": { "type": "string" },
+              "sourceInMs": { "type": "integer", "minimum": 0 },
+              "sourceOutMs": { "type": "integer", "minimum": 1 },
+              "sourceShotStartMs": { "type": "integer", "minimum": 0 },
+              "sourceShotEndMs": { "type": "integer", "minimum": 1 },
+              "timelineInMs": { "type": "integer", "minimum": 0 },
+              "timelineOutMs": { "type": "integer", "minimum": 1 },
+              "playbackRate": { "const": 1.0 },
+              "transitionIn": { "$ref": "#/$defs/transitionIn" },
+              "selectionRank": { "type": "integer", "minimum": 1 },
+              "storyRole": { "enum": ["HOOK", "INTRO", "JOURNEY", "CLIMAX", "ENDING"] },
+              "selectionReasons": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+    "transitionIn": {
+      "type": "object",
+      "required": ["type", "durationMs"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "enum": ["CUT", "FADE", "CROSS_DISSOLVE"] },
+        "durationMs": { "type": "integer", "minimum": 0, "maximum": 2000 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "CUT" } } },
+          "then": { "properties": { "durationMs": { "const": 0 } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "FADE" } } },
+          "then": { "properties": { "durationMs": { "minimum": 200 } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "CROSS_DISSOLVE" } } },
+          "then": { "properties": { "durationMs": { "minimum": 200 } } }
+        }
+      ]
+    },
+    "audioTrack": {
+      "type": "object",
+      "required": ["type", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "AUDIO" },
+        "source": {
+          "type": "object",
+          "required": ["uri", "volume"],
+          "additionalProperties": false,
+          "properties": {
+            "uri": { "type": "string", "minLength": 1 },
+            "startMs": { "type": "integer", "minimum": 0, "default": 0 },
+            "volume": { "type": "number", "minimum": 0, "maximum": 1 },
+            "ducking": {
+              "type": "object",
+              "required": ["enabled"],
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean", "default": true },
+                "duckVolume": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.1 },
+                "attackMs": { "type": "integer", "minimum": 0, "maximum": 1000, "default": 200 },
+                "releaseMs": { "type": "integer", "minimum": 0, "maximum": 2000, "default": 500 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "subtitleTrack": {
+      "type": "object",
+      "required": ["type", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "SUBTITLE" },
+        "source": {
+          "type": "object",
+          "required": ["uri", "format"],
+          "additionalProperties": false,
+          "properties": {
+            "uri": { "type": "string", "minLength": 1 },
+            "format": { "enum": ["SRT", "VTT"] }
+          }
+        }
       }
     }
   }
