@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from app.llm.audit import LlmAuditRecord
@@ -13,6 +15,29 @@ from app.core.models import ArtifactDescriptor, ToolExecutionRequest
 from app.tools.artifact_json import matching_inputs, read_json_artifact, write_json_artifact
 
 logger = logging.getLogger(__name__)
+
+# Path to the shared LLM contract schema for structured output
+_CONTRACTS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "contracts" / "llm"
+
+
+def _load_proposal_schema() -> dict[str, Any]:
+    """Load the story-plan-proposal JSON Schema for strict structured output."""
+    schema_path = _CONTRACTS_DIR / "story-plan-proposal.schema.json"
+    if schema_path.exists():
+        with open(schema_path, encoding="utf-8") as f:
+            return json.load(f)
+    logger.warning("Story proposal schema not found at %s", schema_path)
+    return {}
+
+
+def _load_duration_schema() -> dict[str, Any]:
+    """Load the duration-parsing JSON Schema for strict structured output."""
+    schema_path = _CONTRACTS_DIR / "duration-parsing.schema.json"
+    if schema_path.exists():
+        with open(schema_path, encoding="utf-8") as f:
+            return json.load(f)
+    logger.warning("Duration parsing schema not found at %s", schema_path)
+    return {}
 
 STORY_BEATS = [
     ("HOOK", 0.1167),
@@ -300,15 +325,19 @@ class StoryProposalValidator:
 class LlmStoryProposalValidator:
     """Validates only structural correctness of the LLM raw proposal.
 
-    Timing, shot count, and duration concerns are handled by
-    _compile_llm_proposal — the raw proposal just needs valid shotIds
-    and correct schema structure.
+    Duration arithmetic is handled entirely by _compile_llm_proposal
+    (which uses deterministic _beat_budgets).  The raw proposal only
+    needs valid shotIds, correct schema structure, and no duplicates.
+
+    Schema version: accepts both "1.0" (legacy, with beat-level
+    targetDurationMs) and "1.1" (simplified, shotIds + reasonCodes only).
     """
     ALLOWED_REASON_CODES = {
         "HIGH_VISUAL_QUALITY", "INTERESTING_MOTION", "STRONG_OPENING", "ESTABLISHING_CONTEXT",
         "JOURNEY_CONTINUITY", "CLIMAX_CANDIDATE", "CALM_ENDING", "ASSET_DIVERSITY",
         "SCENE_MATCH", "PERSON_PRESENCE", "SEMANTIC_RELEVANCE",
     }
+    ALLOWED_SCHEMA_VERSIONS = {"1.0", "1.1"}
 
     @classmethod
     def validate(
@@ -319,14 +348,23 @@ class LlmStoryProposalValidator:
         max_shots: int,
     ) -> list[str]:
         errors: list[str] = []
-        if proposal.get("schemaVersion") != "1.0":
-            errors.append("schemaVersion must be 1.0")
+        if proposal.get("schemaVersion") not in cls.ALLOWED_SCHEMA_VERSIONS:
+            errors.append(f"schemaVersion must be one of {sorted(cls.ALLOWED_SCHEMA_VERSIONS)}")
         if proposal.get("template") != "TRAVEL_JOURNEY_V1":
             errors.append("template must be TRAVEL_JOURNEY_V1")
         beats = proposal.get("beats")
         if not isinstance(beats, list) or [beat.get("role") for beat in beats] != StoryProposalValidator.ALLOWED_ROLES:
             errors.append("beats must use the fixed HOOK, INTRO, JOURNEY, CLIMAX, ENDING order")
             return errors
+
+        # Check total shot count does not wildly exceed budget (early reject)
+        total_llm_shots = sum(len(beat.get("shotIds", [])) for beat in beats)
+        if total_llm_shots > max_shots * 3:
+            errors.append(
+                f"LLM proposed {total_llm_shots} shots, far exceeding maxShots={max_shots}; "
+                "likely hallucination"
+            )
+
         seen: set[str] = set()
         for beat_index, beat in enumerate(beats):
             shot_ids = beat.get("shotIds")
@@ -367,8 +405,13 @@ def _try_llm_story_plan(
         )
         audit.system_prompt_hash = StoryProposalPrompt.hash_system_prompt()
 
+        # Load the canonical schema for strict structured output providers.
+        # Non-strict providers (DeepSeek) ignore the schema parameter and use
+        # their own response_format (json_object).
+        proposal_schema = _load_proposal_schema()
+
         raw = provider.generate_json(
-            system, user, {},
+            system, user, proposal_schema,
             temperature=0.3, request_id=audit.request_id,
         )
     except (LlmError, Exception) as exc:
@@ -922,8 +965,9 @@ def _parse_duration_prompt(prompt: str) -> int | None:
     user = DurationParsingPrompt.build_user_prompt(prompt)
 
     try:
+        duration_schema = _load_duration_schema()
         result = provider.generate_json(
-            system, user, {},
+            system, user, duration_schema,
             temperature=0.1, max_tokens=256,
             request_id="duration-parse",
         )
