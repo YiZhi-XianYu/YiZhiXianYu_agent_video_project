@@ -2,13 +2,19 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://yizhixianyu.com/contracts/llm/story-plan-proposal.schema.json",
   "title": "Untrusted LLM Story Plan Proposal",
+  "description": "v1.1 — Beat-level targetDurationMs removed; durations are computed deterministically by the compiler. The LLM only assigns shotIds and reasonCodes per beat.",
   "type": "object",
   "required": ["schemaVersion", "template", "targetDurationMs", "beats", "assumptions", "confidence"],
   "additionalProperties": false,
   "properties": {
-    "schemaVersion": { "const": "1.0" },
+    "schemaVersion": { "const": "1.1" },
     "template": { "const": "TRAVEL_JOURNEY_V1" },
-    "targetDurationMs": { "type": "integer", "minimum": 5000, "maximum": 300000 },
+    "targetDurationMs": {
+      "type": "integer",
+      "minimum": 5000,
+      "maximum": 300000,
+      "description": "Copy the target total duration from the request — not used for beat-level math."
+    },
     "beats": {
       "type": "array",
       "minItems": 5,
@@ -28,19 +34,57 @@
   "$defs": {
     "beatBase": {
       "type": "object",
-      "required": ["role", "targetDurationMs", "shotIds", "reasonCodes"],
+      "required": ["role", "shotIds", "reasonCodes"],
       "additionalProperties": false,
       "properties": {
         "role": { "type": "string" },
-        "targetDurationMs": { "type": "integer", "minimum": 600, "maximum": 120000 },
-        "shotIds": { "type": "array", "minItems": 1, "maxItems": 20, "uniqueItems": true, "items": { "type": "string", "pattern": "^shot_[a-f0-9]+$" } },
-        "reasonCodes": { "type": "array", "maxItems": 10, "items": { "enum": ["HIGH_VISUAL_QUALITY", "INTERESTING_MOTION", "STRONG_OPENING", "ESTABLISHING_CONTEXT", "JOURNEY_CONTINUITY", "CLIMAX_CANDIDATE", "CALM_ENDING", "ASSET_DIVERSITY", "SCENE_MATCH", "PERSON_PRESENCE", "SEMANTIC_RELEVANCE"] } }
+        "shotIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^shot_[a-f0-9]+$" }
+        },
+        "reasonCodes": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "enum": [
+              "HIGH_VISUAL_QUALITY",
+              "INTERESTING_MOTION",
+              "STRONG_OPENING",
+              "ESTABLISHING_CONTEXT",
+              "JOURNEY_CONTINUITY",
+              "CLIMAX_CANDIDATE",
+              "CALM_ENDING",
+              "ASSET_DIVERSITY",
+              "SCENE_MATCH",
+              "PERSON_PRESENCE",
+              "SEMANTIC_RELEVANCE"
+            ]
+          }
+        }
       }
     },
-    "hook": { "allOf": [{ "$ref": "#/$defs/beatBase" }, { "properties": { "role": { "const": "HOOK" } } }] },
-    "intro": { "allOf": [{ "$ref": "#/$defs/beatBase" }, { "properties": { "role": { "const": "INTRO" } } }] },
-    "journey": { "allOf": [{ "$ref": "#/$defs/beatBase" }, { "properties": { "role": { "const": "JOURNEY" } } }] },
-    "climax": { "allOf": [{ "$ref": "#/$defs/beatBase" }, { "properties": { "role": { "const": "CLIMAX" } } }] },
-    "ending": { "allOf": [{ "$ref": "#/$defs/beatBase" }, { "properties": { "role": { "const": "ENDING" } } }] }
+    "hook": {
+      "allOf": [{ "$ref": "#/$defs/beatBase" }],
+      "properties": { "role": { "const": "HOOK" } }
+    },
+    "intro": {
+      "allOf": [{ "$ref": "#/$defs/beatBase" }],
+      "properties": { "role": { "const": "INTRO" } }
+    },
+    "journey": {
+      "allOf": [{ "$ref": "#/$defs/beatBase" }],
+      "properties": { "role": { "const": "JOURNEY" } }
+    },
+    "climax": {
+      "allOf": [{ "$ref": "#/$defs/beatBase" }],
+      "properties": { "role": { "const": "CLIMAX" } }
+    },
+    "ending": {
+      "allOf": [{ "$ref": "#/$defs/beatBase" }],
+      "properties": { "role": { "const": "ENDING" } }
+    }
   }
 }
