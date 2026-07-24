@@ -1,0 +1,72 @@
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: avp-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-agentvideo}
+      MYSQL_DATABASE: agent-video-pipeline
+    ports:
+      - "3307:3306"
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  control-plane:
+    build:
+      context: ./control-plane
+    container_name: avp-control-plane
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      SERVER_PORT: "8080"
+      MYSQL_URL: jdbc:mysql://mysql:3306/agent-video-pipeline?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-agentvideo}
+      TOOL_SERVICE_BASE_URL: http://tool-service:8090
+      APP_PUBLIC_BASE_URL: http://control-plane:8080
+      APP_STORAGE_ROOT: /app/runtime/storage
+      APP_ARTIFACT_ROOT: /app/runtime/artifacts
+    volumes:
+      - control_plane_runtime:/app/runtime
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  tool-service:
+    build:
+      context: ./tool-service
+    container_name: avp-tool-service
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    environment:
+      TOOL_SERVICE_HOST: "0.0.0.0"
+      TOOL_SERVICE_PORT: "8090"
+      TOOL_SERVICE_ARTIFACT_ROOT: /app/runtime/artifacts
+      TOOL_SERVICE_BGM_LIBRARY_ROOT: /app/runtime/bgm
+      TOOL_SERVICE_LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
+      TOOL_SERVICE_LLM_API_KEY: ${LLM_API_KEY:-}
+      TOOL_SERVICE_LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      TOOL_SERVICE_LLM_OPENAI_API_KEY: ${LLM_OPENAI_API_KEY:-}
+      TOOL_SERVICE_LLM_ANTHROPIC_API_KEY: ${LLM_ANTHROPIC_API_KEY:-}
+      TOOL_SERVICE_ASR_MODEL_SIZE: ${ASR_MODEL_SIZE:-small}
+    volumes:
+      - tool_service_runtime:/app/runtime
+      - hf_cache:/app/.cache/huggingface
+    depends_on:
+      - control-plane
+
+volumes:
+  mysql_data:
+  control_plane_runtime:
+  tool_service_runtime:
+  hf_cache:
