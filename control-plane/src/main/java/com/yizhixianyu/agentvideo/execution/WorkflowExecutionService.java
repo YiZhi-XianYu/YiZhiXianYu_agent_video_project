@@ -670,8 +670,9 @@ public class WorkflowExecutionService {
                     var gate = findGateForTask(definition, task, upstream, tasksById);
                     if (gate != null && !workflow.isAutoMode() && !workflow.hasCompletedGate(gate.gateKey())) {
                         workflow.pause(gate.gateKey());
-                        changed = true;
-                        continue;
+                        // The downstream task stays PENDING until the user continues the Gate.
+                        // Return now so this transaction commits instead of evaluating the same Gate forever.
+                        return;
                     }
                     task.markReady();
                     eventPublisher.publishEvent(new WorkflowDispatchRequested(workflowRunId, task.getId()));

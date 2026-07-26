@@ -53,6 +53,7 @@ timeline.compose + audio.bgm-select(optional) + subtitle.compose(optional) -> vi
 - 字幕输入实际绑定为 `TIMELINE` 和零到多个 `SOURCE_TRANSCRIPT`。
 - 自定义 Story Plan Render 继续使用 `timeline.compose@1.1.0` 和 `video.render@1.1.0`。
 - Java Timeline 的 CROSS_DISSOLVE 改为重叠时间轴语义，并在源镜头没有余量时降级 CUT。
+- 修复人工 Gate 触发后的无限评估循环：下游 Task 保持 `PENDING` 时，`evaluateWorkflow()` 现在立即返回并提交事务，不再重复暂停同一 Gate、长期持有 `workflow_runs` 悲观行锁。
 
 ### 3.2 Python Tool Service
 
@@ -93,9 +94,10 @@ timeline.compose + audio.bgm-select(optional) + subtitle.compose(optional) -> vi
 
 ## 4. 测试与验证结果
 
-- Java：`mvn test`，19 个测试全部通过。
+- Java：Docker Maven 环境运行 `mvn test`，20 个测试全部通过。
 - Python：Docker 镜像环境在禁用外部 LLM 的确定性条件下运行 `pytest -q`，64 个测试全部通过。
 - 新增 Java 回归覆盖：已完成 Gate 不重复暂停、终点 Gate、可选依赖失败仍放行 Render、Render 真实输入组装。
+- 新增中间人工 Gate 超时回归：验证进入 `gate_shot_ranking` 后评估在 1 秒内返回、Workflow 正确 `PAUSED` 且下游 Story Plan 保持 `PENDING`。
 - 新增 Python 回归覆盖：v9 的 13 个 Tool 名称/版本和关键 Manifest 输入契约、CLIP 空/无效本地路径回退、字幕标签拼接和 FFmpeg 错误重试分类。
 - 新增 6 个 Python 持久化回归场景：成功输出、失败错误、跨实例幂等键、`QUEUED` 恢复、`RUNNING` 恢复和运行中重复提交防重。
 - 新增 Java 回归覆盖：超长 Tool 错误在 2000 字符字段边界内保留首尾诊断信息。
@@ -107,6 +109,7 @@ timeline.compose + audio.bgm-select(optional) + subtitle.compose(optional) -> vi
 - Tool Service 镜像重新构建并单独部署成功；终态执行 `tex_a00c9e370e7c4a19bbc59187b9b19fc0` 在容器重启后仍以同 ID 返回 `SUCCEEDED` 和完整输出。
 - 运行中执行 `tex_ab4b5f9201c6487982b406e1fbc0f26e` 在 Tool Service 被强制终止后，以原 ID 自动恢复并从 `RUNNING` 收敛到 `SUCCEEDED`；再次提交相同幂等键仍返回该 ID。
 - 容器内 SQLite `PRAGMA integrity_check` 返回 `ok`；验证期间 Java Control Plane 和 MySQL 未重建，系统/Conda 环境未修改。
+- 遗留 Workflow `44419642-9564-49e7-b00a-9e74b8219854` 曾在 52% 因 Gate 无限循环长期持锁；部署修复并仅重建 Control Plane 后，原事务回滚释放锁，Workflow 自动恢复为 `PAUSED / gate_shot_ranking`，未删除数据库记录或 Artifact。
 
 ## 5. 数据库变更
 

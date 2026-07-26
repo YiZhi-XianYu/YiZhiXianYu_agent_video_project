@@ -18,10 +18,12 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.when;
 
@@ -89,6 +91,27 @@ class WorkflowExecutionServiceTest {
         service.continueWorkflow("workflow-1");
         assertThat(workflow.getStatus()).isEqualTo(RunStatus.SUCCEEDED);
         assertThat(workflow.hasCompletedGate("gate_render_review")).isTrue();
+    }
+
+    @Test
+    void intermediateGatePausesAndReturnsWithoutReevaluatingPendingTaskForever() {
+        var workflow = workflow(false);
+        var ranking = succeededTask("ranking", "shot_ranking", "decision.shot-rank");
+        var story = pendingTask("story", "story_plan", "planning.story-template");
+        stubWorkflow(
+            workflow,
+            List.of(ranking, story),
+            List.of(dependency("story", "ranking", WorkflowDefinition.DependencyType.REQUIRED))
+        );
+
+        assertTimeoutPreemptively(
+            Duration.ofSeconds(1),
+            () -> service.recoverWorkflow("workflow-1")
+        );
+
+        assertThat(workflow.getStatus()).isEqualTo(RunStatus.PAUSED);
+        assertThat(workflow.getCurrentGateKey()).isEqualTo("gate_shot_ranking");
+        assertThat(story.getStatus()).isEqualTo(TaskStatus.PENDING);
     }
 
     @Test
