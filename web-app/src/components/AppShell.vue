@@ -1,59 +1,75 @@
 <script setup lang="ts">
-/** 全局布局壳 —— 桌面侧边栏 + 移动端底部导航 */
-import { useRoute } from 'vue-router'
-import { Clapperboard, FolderOpen, Activity, ShieldAlert } from 'lucide-vue-next'
+import { computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { Activity, Clapperboard, FolderOpen, LogOut, ShieldCheck } from 'lucide-vue-next'
+import { useAuthStore } from '@/stores/auth'
+import { useProjectStore } from '@/stores/project'
+import { useWorkflowStore } from '@/stores/workflow'
 
 const route = useRoute()
+const router = useRouter()
+const auth = useAuthStore()
+const projects = useProjectStore()
+const workflow = useWorkflowStore()
 
-interface NavItem {
-  label: string
-  icon: typeof Clapperboard
-  to: string
-  routeNames: string[]
-}
-
-const navItems: NavItem[] = [
-  { label: '项目', icon: FolderOpen, to: '/', routeNames: ['home', 'project-detail'] },
-  { label: 'Workflow', icon: Activity, to: '/workflows', routeNames: ['workflow-list', 'workflow-monitor', 'versions'] },
-  { label: '审计', icon: ShieldAlert, to: '/audit', routeNames: ['audit', 'project-audit'] },
+const navItems = [
+  { label: '项目工作台', caption: '素材与制作入口', icon: FolderOpen, to: '/', names: ['home', 'project-detail'] },
+  { label: 'Workflow', caption: '运行与审核记录', icon: Activity, to: '/workflows', names: ['workflow-list', 'workflow-monitor', 'versions'] },
+  { label: 'LLM 审计', caption: '模型调用与回退', icon: ShieldCheck, to: '/audit', names: ['audit', 'project-audit'] },
 ]
 
-function isActive(item: NavItem): boolean {
-  return item.routeNames.includes(String(route.name ?? ''))
+const pageTitle = computed(() => String(route.meta.title ?? '视频制作工作台'))
+
+function active(names: string[]): boolean {
+  return names.includes(String(route.name ?? ''))
+}
+
+async function logout(): Promise<void> {
+  await auth.logout()
+  projects.reset()
+  workflow.clear()
+  await router.replace('/auth')
 }
 </script>
 
 <template>
-  <div class="flex flex-col md:flex-row h-screen overflow-hidden">
-    <!-- 桌面侧边导航 -->
-    <nav class="hidden md:flex w-16 flex-col items-center py-4 bg-surface-900 border-r border-surface-700 shrink-0">
-      <div class="mb-6"><Clapperboard class="w-6 h-6 text-accent" /></div>
-      <RouterLink
-        v-for="item in navItems" :key="item.label" :title="item.label"
-        :to="item.to"
-        :aria-current="isActive(item) ? 'page' : undefined"
-        :class="['w-10 h-10 rounded-lg flex items-center justify-center mb-2 transition-colors',
-                 isActive(item) ? 'bg-accent/20 text-accent' : 'text-surface-400 hover:text-surface-200 hover:bg-surface-800']">
-        <component :is="item.icon" class="w-5 h-5" />
+  <div class="app-layout">
+    <aside class="app-sidebar">
+      <RouterLink to="/" class="app-brand">
+        <span class="brand-icon"><Clapperboard /></span>
+        <span><strong>FramePilot</strong><small>Agent Video Studio</small></span>
       </RouterLink>
-    </nav>
 
-    <!-- 主内容 -->
-    <main class="flex-1 overflow-y-auto pb-16 md:pb-0">
-      <slot />
-    </main>
+      <nav class="app-nav" aria-label="主导航">
+        <RouterLink
+          v-for="item in navItems"
+          :key="item.to"
+          :to="item.to"
+          :class="{ active: active(item.names) }"
+        >
+          <component :is="item.icon" />
+          <span><strong>{{ item.label }}</strong><small>{{ item.caption }}</small></span>
+        </RouterLink>
+      </nav>
 
-    <!-- 移动端底部导航 -->
-    <nav class="md:hidden fixed bottom-0 inset-x-0 h-14 bg-surface-900 border-t border-surface-700 flex items-center justify-around z-40">
-      <RouterLink
-        v-for="item in navItems" :key="item.label"
-        :to="item.to"
-        :aria-current="isActive(item) ? 'page' : undefined"
-        :class="['flex flex-col items-center text-xs transition-colors',
-                 isActive(item) ? 'text-accent' : 'text-surface-400']">
-        <component :is="item.icon" class="w-5 h-5 mb-0.5" />
-        {{ item.label }}
-      </RouterLink>
-    </nav>
+      <div class="account-card">
+        <div class="account-avatar">{{ auth.user?.displayName?.slice(0, 1).toUpperCase() || 'U' }}</div>
+        <div class="min-w-0 flex-1"><strong>{{ auth.user?.displayName }}</strong><small>{{ auth.user?.email }}</small></div>
+        <button title="退出登录" @click="logout"><LogOut /></button>
+      </div>
+    </aside>
+
+    <div class="app-content">
+      <header class="mobile-header">
+        <RouterLink to="/" class="flex items-center gap-2 font-semibold"><Clapperboard class="h-5 w-5 text-accent" />FramePilot</RouterLink>
+        <span>{{ pageTitle }}</span>
+      </header>
+      <main class="app-main"><slot /></main>
+      <nav class="mobile-nav">
+        <RouterLink v-for="item in navItems" :key="item.to" :to="item.to" :class="{ active: active(item.names) }">
+          <component :is="item.icon" /><span>{{ item.label }}</span>
+        </RouterLink>
+      </nav>
+    </div>
   </div>
 </template>

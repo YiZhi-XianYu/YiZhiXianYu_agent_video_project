@@ -36,6 +36,8 @@ services:
       APP_PUBLIC_BASE_URL: http://control-plane:8080
       APP_STORAGE_ROOT: /app/runtime/storage
       APP_ARTIFACT_ROOT: /app/runtime/artifacts
+      AUTH_SESSION_DAYS: ${AUTH_SESSION_DAYS:-30}
+      AUTH_SECURE_COOKIE: ${AUTH_SECURE_COOKIE:-false}
     volumes:
       - shared_runtime:/app/runtime
     depends_on:

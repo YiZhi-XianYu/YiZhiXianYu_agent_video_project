@@ -1,128 +1,73 @@
- <script setup lang="ts">
- /**
-  * 项目列表页
-  *
-  * 首页：展示历史项目列表，提供创建新项目和选择历史项目的入口。
-  * P1 阶段将实现完整功能，P0 仅验证路由和 API 连通性。
- */
- import { onMounted, ref } from 'vue'
- import { useRouter } from 'vue-router'
- import { useProjectStore } from '@/stores/project'
- import { useUiStore } from '@/stores/ui'
- import { Clapperboard, FolderOpen, Plus, Loader2 } from 'lucide-vue-next'
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { ArrowRight, Clapperboard, FolderOpen, Loader2, Plus, Sparkles } from 'lucide-vue-next'
+import { useProjectStore } from '@/stores/project'
+import { useAuthStore } from '@/stores/auth'
+import { useUiStore } from '@/stores/ui'
 
- const projectStore = useProjectStore()
- const uiStore = useUiStore()
- const router = useRouter()
+const projectStore = useProjectStore()
+const auth = useAuthStore()
+const ui = useUiStore()
+const router = useRouter()
+const newProjectName = ref('')
+const creating = ref(false)
+const greeting = computed(() => auth.user?.displayName || '创作者')
 
- const newProjectName = ref('')
- const creating = ref(false)
+onMounted(() => projectStore.fetchProjects())
 
- onMounted(async () => {
-   await projectStore.fetchProjects()
- })
+async function createProject(): Promise<void> {
+  if (!newProjectName.value.trim()) return
+  creating.value = true
+  try {
+    const project = await projectStore.createProject(newProjectName.value.trim())
+    newProjectName.value = ''
+    ui.showToast('项目已创建', 'success')
+    await router.push(`/projects/${project.id}`)
+  } catch (e) {
+    ui.showToast(e instanceof Error ? e.message : '创建项目失败', 'error')
+  } finally {
+    creating.value = false
+  }
+}
 
- /** 创建项目 */
- async function handleCreate(): Promise<void> {
-   const name = newProjectName.value.trim()
-   if (!name) return
-   creating.value = true
-   try {
-     const project = await projectStore.createProject(name)
-     newProjectName.value = ''
-     uiStore.showToast(`项目「${project.name}」已创建`, 'success')
-     projectStore.setCurrentProject(project.id)
-     await router.push(`/projects/${project.id}`)
-   } catch (e: unknown) {
-     const msg = e instanceof Error ? e.message : '创建项目失败'
-     uiStore.showToast(msg, 'error')
-   } finally {
-     creating.value = false
-   }
- }
-
- function formatDate(dateStr: string): string {
-   const date = new Date(dateStr)
-   return Number.isNaN(date.getTime()) ? '时间未知' : date.toLocaleDateString('zh-CN')
- }
+function formatDate(value: string): string {
+  return new Date(value).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric', year: 'numeric' })
+}
 </script>
 
 <template>
-  <div class="max-w-4xl mx-auto px-6 py-8">
-    <!-- 页头 -->
-    <header class="mb-8">
-      <p class="section-eyebrow mb-2">AGENT VIDEO PIPELINE</p>
-      <h1 class="text-2xl font-bold text-surface-100">
-        智能视频制作流水线
-      </h1>
-      <p class="mt-2 text-sm text-surface-400">
-        上传视频素材，启动自动化分析，在关键节点介入审核，生成高质量成片。
-      </p>
-    </header>
+  <div class="page-shell">
+    <section class="dashboard-hero">
+      <div>
+        <p class="section-eyebrow mb-3">CREATIVE WORKSPACE</p>
+        <h1>{{ greeting }}，开始下一支视频吧。</h1>
+        <p>上传素材，交给 Agent 完成分析、故事规划与渲染；你只需要在关键节点做决定。</p>
+      </div>
+      <div class="hero-stat"><Sparkles /><span><strong>{{ projectStore.projects.length }}</strong><small>个创作项目</small></span></div>
+    </section>
 
-    <!-- 创建项目 -->
-    <div class="card mb-6">
-      <h2 class="section-heading mb-4 flex items-center gap-2">
-        <Plus class="w-5 h-5 text-accent" />
-        创建新项目
-      </h2>
-      <div class="flex gap-3">
-        <input
-          v-model="newProjectName"
-          class="input-field flex-1"
-          placeholder="输入项目名称，例如「云南旅行 Day1」"
-          maxlength="200"
-          @keydown.enter="handleCreate"
-        />
-        <button
-          class="btn-primary"
-          :disabled="!newProjectName.trim() || creating"
-          @click="handleCreate"
-        >
-          <Loader2 v-if="creating" class="w-4 h-4 animate-spin" />
-          <Plus v-else class="w-4 h-4" />
-          创建
+    <section class="create-project-panel">
+      <div><h2>新建视频项目</h2><p>为一次独立的创作建立素材和 Workflow 空间。</p></div>
+      <div class="create-project-form">
+        <input v-model="newProjectName" class="input-field" maxlength="200" placeholder="例如：滇西北旅行短片" @keydown.enter="createProject" />
+        <button class="btn-primary" :disabled="creating || !newProjectName.trim()" @click="createProject">
+          <Loader2 v-if="creating" class="h-4 w-4 animate-spin" /><Plus v-else class="h-4 w-4" />创建项目
         </button>
       </div>
-    </div>
+    </section>
 
-    <!-- 项目列表 -->
-    <div v-if="projectStore.loading" class="flex items-center justify-center py-12 text-surface-400">
-      <Loader2 class="w-5 h-5 animate-spin mr-2" />
-      正在加载项目列表...
-    </div>
-
-    <div v-else-if="projectStore.error" class="card border-danger/30 text-danger text-sm">
-      {{ projectStore.error }}
-      <button class="btn-secondary ml-3 text-xs" @click="projectStore.fetchProjects()">重试</button>
-    </div>
-
-    <div v-else-if="projectStore.projects.length === 0" class="card text-center py-12">
-      <Clapperboard class="w-10 h-10 text-surface-600 mx-auto mb-3" />
-      <p class="text-surface-400 text-sm">还没有项目，创建一个开始吧</p>
-    </div>
-
-    <div v-else class="grid gap-3 sm:grid-cols-2">
-      <RouterLink
-        v-for="proj in projectStore.projects"
-        :key="proj.id"
-        :to="`/projects/${proj.id}`"
-        class="card text-left hover:border-accent/40 transition-colors cursor-pointer group"
-      >
-        <div class="flex items-center gap-3">
-          <div class="w-9 h-9 rounded-lg bg-surface-700 flex items-center justify-center
-                      group-hover:bg-accent/20 transition-colors">
-            <FolderOpen class="w-4 h-4 text-surface-300 group-hover:text-accent" />
-          </div>
-          <div>
-            <p class="text-sm font-medium text-surface-200">{{ proj.name }}</p>
-            <p class="text-xs text-surface-500 mt-0.5">
-              {{ formatDate(proj.createdAt) }}
-            </p>
-          </div>
-        </div>
-      </RouterLink>
-    </div>
+    <section class="mt-9">
+      <div class="section-title-row"><div><p class="section-eyebrow">PROJECTS</p><h2>最近项目</h2></div><span>{{ projectStore.projects.length }} 个</span></div>
+      <div v-if="projectStore.loading" class="loading-panel"><Loader2 class="animate-spin" />正在加载项目...</div>
+      <div v-else-if="projectStore.error" class="error-panel">{{ projectStore.error }} <button @click="projectStore.fetchProjects()">重试</button></div>
+      <div v-else-if="projectStore.projects.length === 0" class="empty-panel"><Clapperboard /><h3>还没有项目</h3><p>在上方输入名称，建立你的第一个视频制作空间。</p></div>
+      <div v-else class="project-grid">
+        <RouterLink v-for="project in projectStore.projects" :key="project.id" :to="`/projects/${project.id}`" class="project-card">
+          <div class="project-cover"><FolderOpen /><span>ACTIVE</span></div>
+          <div class="project-card-body"><p>{{ formatDate(project.createdAt) }}</p><h3>{{ project.name }}</h3><div>进入项目<ArrowRight /></div></div>
+        </RouterLink>
+      </div>
+    </section>
   </div>
 </template>
-

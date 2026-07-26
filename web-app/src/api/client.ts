@@ -89,6 +89,9 @@
    if (contentType.includes('application/json')) {
      const body = await response.json()
      if (!response.ok) {
+       if (response.status === 401 && !response.url.includes('/api/v1/auth/')) {
+         window.dispatchEvent(new Event('avp:unauthorized'))
+       }
        const message = body?.message || body?.detail || body?.error || `HTTP ${response.status}`
        throw new ApiError(message, response.status, body)
      }

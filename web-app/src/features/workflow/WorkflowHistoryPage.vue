@@ -5,6 +5,7 @@ import { useProjectStore } from '@/stores/project'
 import { listWorkflowRuns } from '@/api/workflows'
 import type { Project, WorkflowHistoryItem } from '@/api/types'
 import StatusBadge from '@/components/StatusBadge.vue'
+import ProgressBar from '@/components/ProgressBar.vue'
 import { RUN_STATUS_LABEL } from '@/shared/constants'
 
 interface ProjectRun extends WorkflowHistoryItem {
@@ -42,7 +43,7 @@ function formatDate(value: string): string {
 </script>
 
 <template>
-  <div class="max-w-5xl mx-auto px-6 py-8">
+  <div class="page-shell">
     <header class="mb-8">
       <p class="section-eyebrow mb-2">WORKFLOW HISTORY</p>
       <h1 class="text-2xl font-bold text-surface-100 flex items-center gap-2">
@@ -64,7 +65,7 @@ function formatDate(value: string): string {
         v-for="run in runs"
         :key="run.id"
         :to="`/projects/${run.project.id}/runs/${run.id}`"
-        class="card block hover:border-accent/40 transition-colors"
+      class="card block hover:border-accent/40 transition-colors"
       >
         <div class="flex flex-wrap items-center gap-3">
           <div class="min-w-0 flex-1">
@@ -75,6 +76,7 @@ function formatDate(value: string): string {
           <span class="text-xs text-surface-400">{{ run.progress }}%</span>
           <StatusBadge :status="run.status" :label-map="RUN_STATUS_LABEL" />
         </div>
+        <ProgressBar class="mt-3" :percent="run.progress" size="sm" :variant="run.status === 'SUCCEEDED' ? 'success' : 'accent'" />
         <p v-if="run.errorMessage" class="text-xs text-danger/80 mt-3 line-clamp-2">{{ run.errorMessage }}</p>
       </RouterLink>
     </div>

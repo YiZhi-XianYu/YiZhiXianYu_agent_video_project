@@ -25,6 +25,9 @@ spring:
       max-request-size: 2GB
 
 app:
+  auth:
+    session-days: ${AUTH_SESSION_DAYS:30}
+    secure-cookie: ${AUTH_SECURE_COOKIE:false}
   storage:
     root: ${APP_STORAGE_ROOT:runtime/storage}
   artifact-root: ${APP_ARTIFACT_ROOT:runtime/artifacts}

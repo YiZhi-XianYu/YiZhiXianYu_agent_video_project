@@ -3,11 +3,14 @@ package com.yizhixianyu.agentvideo.api;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yizhixianyu.agentvideo.artifact.ArtifactRepository;
+import com.yizhixianyu.agentvideo.auth.AuthService;
 import com.yizhixianyu.agentvideo.execution.TaskRunRepository;
 import com.yizhixianyu.agentvideo.execution.WorkflowExecutionService;
 import com.yizhixianyu.agentvideo.execution.WorkflowRunRepository;
 import com.yizhixianyu.agentvideo.plan.CustomStoryPlanEntity;
 import com.yizhixianyu.agentvideo.plan.CustomStoryPlanRepository;
+import com.yizhixianyu.agentvideo.project.ProjectService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import org.springframework.http.HttpStatus;
@@ -38,6 +41,8 @@ public class CustomStoryPlanController {
     private final TaskRunRepository taskRunRepository;
     private final ArtifactRepository artifactRepository;
     private final ObjectMapper objectMapper;
+    private final ProjectService projectService;
+    private final AuthService authService;
 
     public CustomStoryPlanController(
         CustomStoryPlanRepository repository,
@@ -45,7 +50,9 @@ public class CustomStoryPlanController {
         WorkflowRunRepository workflowRunRepository,
         TaskRunRepository taskRunRepository,
         ArtifactRepository artifactRepository,
-        ObjectMapper objectMapper
+        ObjectMapper objectMapper,
+        ProjectService projectService,
+        AuthService authService
     ) {
         this.repository = repository;
         this.workflowService = workflowService;
@@ -53,10 +60,13 @@ public class CustomStoryPlanController {
         this.taskRunRepository = taskRunRepository;
         this.artifactRepository = artifactRepository;
         this.objectMapper = objectMapper;
+        this.projectService = projectService;
+        this.authService = authService;
     }
 
     @GetMapping("/api/v1/workflow-runs/{workflowRunId}/custom-story-plan")
-    public CustomStoryPlanView getPlan(@PathVariable String workflowRunId) {
+    public CustomStoryPlanView getPlan(@PathVariable String workflowRunId, HttpServletRequest request) {
+        requireWorkflow(workflowRunId, request);
         var draft = repository.findBySourceWorkflowRunIdAndStatus(workflowRunId, STATUS_DRAFT);
         if (draft.isPresent()) {
             var entity = draft.get();
@@ -83,8 +93,10 @@ public class CustomStoryPlanController {
     @ResponseStatus(HttpStatus.CREATED)
     public CustomStoryPlanView savePlan(
         @PathVariable String workflowRunId,
-        @Valid @RequestBody SaveCustomStoryPlanRequest request
+        @Valid @RequestBody SaveCustomStoryPlanRequest request,
+        HttpServletRequest servletRequest
     ) {
+        requireWorkflow(workflowRunId, servletRequest);
         validatePlan(request.plan());
         var workflow = workflowRunRepository.findById(workflowRunId)
             .orElseThrow(() -> new IllegalArgumentException("Workflow run not found: " + workflowRunId));
@@ -102,7 +114,8 @@ public class CustomStoryPlanController {
 
     @PostMapping("/api/v1/workflow-runs/{workflowRunId}/custom-story-plan/apply")
     @ResponseStatus(HttpStatus.ACCEPTED)
-    public ApplyResponse applyPlan(@PathVariable String workflowRunId) {
+    public ApplyResponse applyPlan(@PathVariable String workflowRunId, HttpServletRequest request) {
+        requireWorkflow(workflowRunId, request);
         var draft = repository.findBySourceWorkflowRunIdAndStatus(workflowRunId, STATUS_DRAFT)
             .orElseThrow(() -> new IllegalArgumentException("No DRAFT custom story plan found. Save a plan first."));
         var plan = parsePlanJson(draft.getPlanJson());
@@ -115,7 +128,8 @@ public class CustomStoryPlanController {
     }
 
     @GetMapping("/api/v1/workflow-runs/{workflowRunId}/custom-story-plan/version-list")
-    public List<VersionSummary> listVersions(@PathVariable String workflowRunId) {
+    public List<VersionSummary> listVersions(@PathVariable String workflowRunId, HttpServletRequest request) {
+        requireWorkflow(workflowRunId, request);
         var all = repository.findBySourceWorkflowRunIdOrderByCreatedAtDesc(workflowRunId);
         return all.stream().map(entity -> {
             var plan = parsePlanJson(entity.getPlanJson());
@@ -139,7 +153,10 @@ public class CustomStoryPlanController {
     }
 
     @GetMapping("/api/v1/workflow-runs/{workflowRunId}/custom-story-plan/versions/{planId}")
-    public CustomStoryPlanView getVersion(@PathVariable String workflowRunId, @PathVariable String planId) {
+    public CustomStoryPlanView getVersion(
+        @PathVariable String workflowRunId, @PathVariable String planId, HttpServletRequest request
+    ) {
+        requireWorkflow(workflowRunId, request);
         var entity = repository.findByIdAndSourceWorkflowRunId(planId, workflowRunId)
             .orElseThrow(() -> new IllegalArgumentException("Version not found: " + planId));
         var plan = parsePlanJson(entity.getPlanJson());
@@ -152,8 +169,10 @@ public class CustomStoryPlanController {
     public CustomStoryPlanView restoreVersion(
         @PathVariable String workflowRunId,
         @PathVariable String planId,
-        @RequestBody(required = false) RestoreVersionRequest request
+        @RequestBody(required = false) RestoreVersionRequest request,
+        HttpServletRequest servletRequest
     ) {
+        requireWorkflow(workflowRunId, servletRequest);
         var source = repository.findByIdAndSourceWorkflowRunId(planId, workflowRunId)
             .orElseThrow(() -> new IllegalArgumentException("Version not found: " + planId));
         var workflow = workflowRunRepository.findById(workflowRunId)
@@ -176,13 +195,22 @@ public class CustomStoryPlanController {
 
     @DeleteMapping("/api/v1/workflow-runs/{workflowRunId}/custom-story-plan/versions/{planId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void deleteVersion(@PathVariable String workflowRunId, @PathVariable String planId) {
+    public void deleteVersion(
+        @PathVariable String workflowRunId, @PathVariable String planId, HttpServletRequest request
+    ) {
+        requireWorkflow(workflowRunId, request);
         var entity = repository.findByIdAndSourceWorkflowRunId(planId, workflowRunId)
             .orElseThrow(() -> new IllegalArgumentException("Version not found: " + planId));
         if (STATUS_DRAFT.equals(entity.getStatus())) {
             throw new IllegalArgumentException("Cannot delete the active DRAFT version. Save a new version first.");
         }
         repository.delete(entity);
+    }
+
+    private void requireWorkflow(String workflowRunId, HttpServletRequest request) {
+        var workflow = workflowRunRepository.findById(workflowRunId)
+            .orElseThrow(() -> new IllegalArgumentException("Workflow run not found: " + workflowRunId));
+        projectService.getRequiredForUser(workflow.getProjectId(), authService.requireUser(request).id());
     }
 
     @SuppressWarnings("unchecked")

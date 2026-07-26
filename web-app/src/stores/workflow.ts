@@ -61,8 +61,7 @@
 
    /** 进度百分比 */
    const progressPercent = computed(() => {
-     if (totalTaskCount.value === 0) return 0
-     return Math.round((completedTaskCount.value / totalTaskCount.value) * 100)
+     return run.value?.progress ?? 0
    })
 
    // ============================================================

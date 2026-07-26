@@ -11,6 +11,7 @@
    body {
      @apply bg-surface-950 text-surface-100 antialiased;
      min-height: 100vh;
+     background-image: radial-gradient(circle at 75% -10%, rgba(37, 99, 235, 0.16), transparent 28%);
    }
 
    /* 滚动条样式（Webkit 浏览器） */
@@ -36,7 +37,7 @@
  @layer components {
    /* 卡片容器 */
    .card {
-     @apply bg-surface-800 border border-surface-700 rounded-lg p-5;
+     @apply bg-surface-800/90 border border-surface-700 rounded-2xl p-5 shadow-xl shadow-black/5;
    }
 
    /* 主按钮 */
@@ -99,3 +100,152 @@
      @apply text-xs font-medium text-surface-400 uppercase tracking-widest;
    }
  }
+
+@layer components {
+  .app-layout { @apply min-h-screen; }
+  .app-sidebar { @apply fixed inset-y-0 left-0 z-40 hidden w-[268px] flex-col border-r border-white/5 bg-surface-900/95 px-4 py-5 backdrop-blur md:flex; }
+  .app-brand { @apply flex items-center gap-3 rounded-xl px-3 py-2 text-surface-100; }
+  .brand-icon { @apply flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-white shadow-lg shadow-accent/20; }
+  .brand-icon svg { @apply h-5 w-5; }
+  .app-brand strong { @apply block text-base font-bold tracking-tight; }
+  .app-brand small { @apply block text-[10px] uppercase tracking-[0.18em] text-surface-500; }
+  .app-nav { @apply mt-9 space-y-2; }
+  .app-nav a { @apply flex items-center gap-3 rounded-xl px-3 py-3 text-surface-400 transition hover:bg-white/5 hover:text-surface-100; }
+  .app-nav a > svg { @apply h-5 w-5 shrink-0; }
+  .app-nav a strong { @apply block text-sm font-medium; }
+  .app-nav a small { @apply mt-0.5 block text-[11px] text-surface-600; }
+  .app-nav a.active { @apply bg-accent/15 text-accent-light ring-1 ring-accent/20; }
+  .app-nav a.active small { @apply text-accent-light/60; }
+  .account-card { @apply mt-auto flex items-center gap-3 rounded-2xl border border-white/5 bg-white/[0.03] p-3; }
+  .account-avatar { @apply flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-accent to-indigo-500 text-sm font-bold; }
+  .account-card strong { @apply block truncate text-xs text-surface-200; }
+  .account-card small { @apply block truncate text-[10px] text-surface-500; }
+  .account-card button { @apply rounded-lg p-2 text-surface-500 transition hover:bg-white/5 hover:text-danger; }
+  .account-card button svg { @apply h-4 w-4; }
+  .app-content { @apply min-w-0 md:ml-[268px]; }
+  .app-main { @apply min-h-screen pb-20 md:pb-0; }
+  .mobile-header { @apply sticky top-0 z-30 flex h-14 items-center justify-between border-b border-surface-700 bg-surface-950/90 px-4 text-xs text-surface-500 backdrop-blur md:hidden; }
+  .mobile-nav { @apply fixed inset-x-0 bottom-0 z-40 flex h-16 items-center justify-around border-t border-surface-700 bg-surface-900/95 backdrop-blur md:hidden; }
+  .mobile-nav a { @apply flex flex-col items-center gap-1 text-[10px] text-surface-500; }
+  .mobile-nav svg { @apply h-5 w-5; }
+  .mobile-nav a.active { @apply text-accent-light; }
+
+  .page-shell { @apply mx-auto w-full max-w-[1180px] px-5 py-7 md:px-8 md:py-10; }
+  .dashboard-hero { @apply grid gap-8 overflow-hidden rounded-3xl border border-accent/15 bg-gradient-to-br from-surface-800 via-surface-900 to-blue-950/60 p-7 md:grid-cols-[1fr_auto] md:p-10; }
+  .dashboard-hero h1 { @apply max-w-2xl text-3xl font-bold leading-tight tracking-tight text-white md:text-4xl; }
+  .dashboard-hero p:not(.section-eyebrow) { @apply mt-4 max-w-2xl text-sm leading-7 text-surface-300; }
+  .hero-stat { @apply flex min-w-40 items-center gap-4 self-center rounded-2xl border border-white/10 bg-white/5 p-5; }
+  .hero-stat > svg { @apply h-7 w-7 text-accent-light; }
+  .hero-stat strong { @apply block text-2xl text-white; }
+  .hero-stat small { @apply text-xs text-surface-400; }
+  .create-project-panel { @apply mt-6 grid items-center gap-5 rounded-2xl border border-surface-700 bg-surface-800/80 p-5 md:grid-cols-[1fr_minmax(380px,0.9fr)]; }
+  .create-project-panel h2 { @apply text-base font-semibold; }
+  .create-project-panel p { @apply mt-1 text-xs text-surface-500; }
+  .create-project-form { @apply flex gap-3; }
+  .section-title-row { @apply flex items-end justify-between; }
+  .section-title-row h2 { @apply mt-1 text-xl font-semibold; }
+  .section-title-row > span { @apply text-xs text-surface-500; }
+  .loading-panel, .error-panel { @apply mt-5 flex items-center justify-center gap-2 rounded-2xl border border-surface-700 bg-surface-800/70 px-5 py-14 text-sm text-surface-400; }
+  .loading-panel svg { @apply h-5 w-5; }
+  .error-panel { @apply border-danger/30 text-danger; }
+  .error-panel button { @apply underline; }
+  .empty-panel { @apply mt-5 flex flex-col items-center rounded-2xl border border-dashed border-surface-700 px-5 py-14 text-center; }
+  .empty-panel svg { @apply mb-3 h-9 w-9 text-surface-600; }
+  .empty-panel h3 { @apply font-medium; }
+  .empty-panel p { @apply mt-1 text-xs text-surface-500; }
+  .project-grid { @apply mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3; }
+  .project-card { @apply overflow-hidden rounded-2xl border border-surface-700 bg-surface-800/80 transition duration-200 hover:-translate-y-1 hover:border-accent/40 hover:shadow-2xl hover:shadow-black/20; }
+  .project-cover { @apply flex h-28 items-center justify-between bg-gradient-to-br from-surface-700 to-blue-950/60 px-5; }
+  .project-cover svg { @apply h-9 w-9 text-accent-light/80; }
+  .project-cover span { @apply rounded-full bg-success/15 px-2 py-1 text-[9px] font-bold tracking-widest text-success; }
+  .project-card-body { @apply p-5; }
+  .project-card-body > p { @apply text-[10px] uppercase tracking-widest text-surface-500; }
+  .project-card-body h3 { @apply mt-2 truncate text-base font-semibold; }
+  .project-card-body > div { @apply mt-5 flex items-center justify-between text-xs text-accent-light; }
+  .project-card-body svg { @apply h-4 w-4; }
+
+  .project-header { @apply mb-9 flex flex-col justify-between gap-6 border-b border-surface-700 pb-8 md:flex-row md:items-end; }
+  .project-header h1 { @apply text-3xl font-bold tracking-tight; }
+  .project-header p:not(.section-eyebrow) { @apply mt-3 text-sm text-surface-400; }
+  .project-summary { @apply flex items-center gap-3 rounded-xl border border-surface-700 bg-surface-800 px-4 py-3; }
+  .project-summary svg { @apply h-5 w-5 text-accent; }
+  .project-summary strong { @apply block text-lg; }
+  .project-summary small { @apply block text-[10px] text-surface-500; }
+  .step-heading { @apply mb-4 flex items-start gap-4; }
+  .step-heading > span { @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/15 text-xs font-bold text-accent-light; }
+  .step-heading h2 { @apply flex items-center gap-2 text-lg font-semibold; }
+  .step-heading h2 svg { @apply h-5 w-5 text-accent; }
+  .step-heading p { @apply mt-1 text-xs text-surface-500; }
+  .project-workspace-grid { @apply grid gap-5 lg:grid-cols-[0.9fr_1.1fr]; }
+  .workspace-card { @apply rounded-2xl border border-surface-700 bg-surface-800/90 p-5; }
+  .card-heading > div { @apply flex items-center gap-3; }
+  .card-heading svg { @apply h-5 w-5 text-accent; }
+  .card-heading h2 { @apply text-sm font-semibold; }
+  .card-heading p { @apply mt-0.5 text-[10px] text-surface-500; }
+  .compact-empty { @apply mt-5 flex flex-col items-center rounded-xl border border-dashed border-surface-700 py-10 text-xs text-surface-500; }
+  .compact-empty svg { @apply mb-2 h-7 w-7; }
+  .asset-list { @apply mt-4 max-h-[310px] space-y-2 overflow-y-auto pr-1; }
+  .asset-row { @apply flex w-full items-center gap-3 rounded-xl border border-transparent bg-surface-900/60 p-3 text-left transition hover:border-accent/30 hover:bg-surface-700/60; }
+  .asset-thumb { @apply relative flex h-11 w-14 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-surface-700; }
+  .asset-thumb > svg { @apply h-5 w-5 text-surface-400; }
+  .asset-thumb i { @apply absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition group-hover:opacity-100; }
+  .asset-thumb i svg { @apply h-4 w-4; }
+  .asset-meta { @apply min-w-0 flex-1; }
+  .asset-meta strong { @apply block truncate text-xs font-medium; }
+  .asset-meta small { @apply mt-1 block text-[10px] text-surface-500; }
+  .row-action { @apply h-4 w-4 text-surface-600; }
+  .modal-backdrop { @apply fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-5 backdrop-blur-sm; }
+  .video-modal { @apply w-full max-w-4xl overflow-hidden rounded-2xl border border-surface-700 bg-surface-900 shadow-2xl; }
+  .video-modal > div { @apply flex items-center justify-between p-4; }
+  .video-modal strong { @apply block max-w-lg truncate text-sm; }
+  .video-modal small { @apply block text-[10px] text-surface-500; }
+  .video-modal button { @apply rounded-lg p-2 hover:bg-white/5; }
+  .video-modal button svg { @apply h-5 w-5; }
+  .video-modal video { @apply aspect-video w-full bg-black; }
+
+  .workflow-overview { @apply rounded-2xl border border-surface-700 bg-surface-800/90 p-6; }
+  .task-list { @apply space-y-3; }
+  .task-row { @apply flex gap-4 rounded-2xl border border-surface-700 bg-surface-800/80 p-4 transition; }
+  .task-row.running, .task-row.dispatching { @apply border-accent/35 bg-accent/[0.05]; }
+  .task-row.failed { @apply border-danger/30; }
+  .task-index { @apply flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-surface-700 text-surface-400; }
+  .task-index svg { @apply h-4 w-4; }
+  .task-row.succeeded .task-index { @apply bg-success/15 text-success; }
+  .task-row.running .task-index, .task-row.dispatching .task-index { @apply bg-accent/15 text-accent-light; }
+  .task-main { @apply min-w-0 flex-1; }
+  .task-title { @apply flex items-start justify-between gap-4; }
+  .task-title strong { @apply block text-sm font-medium; }
+  .task-title small { @apply mt-1 block text-[10px] text-surface-500; }
+  .task-progress-line { @apply mt-3 flex items-center gap-3; }
+  .task-progress-line > span { @apply w-9 text-right text-[10px] text-surface-500; }
+  .task-foot { @apply mt-2 flex flex-wrap gap-4 text-[10px] text-surface-600; }
+  .task-error { @apply mt-3 flex items-start gap-2 rounded-lg bg-danger/10 p-2 text-[11px] text-danger; }
+  .task-error svg { @apply mt-0.5 h-3 w-3 shrink-0; }
+
+  .auth-page { @apply grid min-h-screen lg:grid-cols-[1.1fr_0.9fr]; }
+  .auth-intro { @apply relative hidden flex-col justify-center overflow-hidden bg-gradient-to-br from-blue-950 via-surface-900 to-surface-950 p-14 lg:flex; }
+  .auth-intro::after { content: ''; @apply absolute -bottom-44 -right-40 h-[500px] w-[500px] rounded-full bg-accent/15 blur-3xl; }
+  .brand-mark { @apply mb-12 flex h-14 w-14 items-center justify-center rounded-2xl bg-accent text-white shadow-xl shadow-accent/25; }
+  .auth-intro h1 { @apply max-w-2xl text-5xl font-bold leading-[1.15] tracking-tight text-white; }
+  .auth-copy { @apply mt-6 max-w-xl text-base leading-8 text-surface-300; }
+  .auth-points { @apply mt-10 flex flex-wrap gap-3; }
+  .auth-points span { @apply rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs text-surface-300; }
+  .auth-panel { @apply flex items-center justify-center px-5 py-10; }
+  .auth-card { @apply w-full max-w-md rounded-3xl border border-surface-700 bg-surface-900/80 p-7 shadow-2xl backdrop-blur md:p-9; }
+  .auth-card h2 { @apply text-2xl font-bold; }
+  .auth-card > div > p:not(.section-eyebrow) { @apply mt-2 text-sm text-surface-400; }
+  .auth-tabs { @apply mb-6 grid grid-cols-2 rounded-xl bg-surface-800 p-1; }
+  .auth-tabs button { @apply rounded-lg py-2 text-xs text-surface-500 transition; }
+  .auth-tabs button.active { @apply bg-surface-700 text-white shadow; }
+  .field-group > span { @apply mb-1.5 block text-xs font-medium text-surface-300; }
+  .field-with-icon { @apply flex items-center gap-2 rounded-xl border border-surface-700 bg-surface-800 px-3 transition focus-within:border-accent; }
+  .field-with-icon svg { @apply h-4 w-4 shrink-0 text-surface-500; }
+  .field-with-icon input { @apply h-11 w-full bg-transparent text-sm outline-none placeholder:text-surface-600; }
+  .auth-error { @apply rounded-xl border border-danger/25 bg-danger/10 px-3 py-2 text-xs text-danger; }
+}
+
+@media (max-width: 640px) {
+  .create-project-form { @apply flex-col; }
+  .dashboard-hero h1 { @apply text-2xl; }
+  .task-title { @apply flex-col gap-2; }
+}

@@ -1,5 +1,7 @@
 package com.yizhixianyu.agentvideo.api;
 
+import com.yizhixianyu.agentvideo.auth.AccessDeniedException;
+import com.yizhixianyu.agentvideo.auth.AuthenticationRequiredException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -12,6 +14,16 @@ import java.time.Instant;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
+
+    @ExceptionHandler(AuthenticationRequiredException.class)
+    public ResponseEntity<ApiError> unauthorized(AuthenticationRequiredException exception) {
+        return error(HttpStatus.UNAUTHORIZED, "AUTHENTICATION_REQUIRED", exception);
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ApiError> forbidden(AccessDeniedException exception) {
+        return error(HttpStatus.FORBIDDEN, "ACCESS_DENIED", exception);
+    }
 
     @ExceptionHandler({IllegalArgumentException.class, MethodArgumentNotValidException.class})
     public ResponseEntity<ApiError> badRequest(Exception exception) {

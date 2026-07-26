@@ -9,6 +9,9 @@ import jakarta.persistence.Table;
 @Table(name = "projects")
 public class ProjectEntity extends BaseEntity {
 
+    @Column(nullable = false, length = 40)
+    private String ownerUserId;
+
     @Column(nullable = false, length = 200)
     private String name;
 
@@ -18,9 +21,14 @@ public class ProjectEntity extends BaseEntity {
     protected ProjectEntity() {
     }
 
-    public ProjectEntity(String name) {
+    public ProjectEntity(String ownerUserId, String name) {
+        this.ownerUserId = ownerUserId;
         this.name = name;
         this.status = "ACTIVE";
+    }
+
+    public String getOwnerUserId() {
+        return ownerUserId;
     }
 
     public String getName() {

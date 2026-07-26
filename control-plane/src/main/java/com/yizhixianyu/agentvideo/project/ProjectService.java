@@ -1,5 +1,6 @@
 package com.yizhixianyu.agentvideo.project;
 
+import com.yizhixianyu.agentvideo.auth.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,9 +16,9 @@ public class ProjectService {
     }
 
     @Transactional
-    public ProjectEntity create(String name) {
+    public ProjectEntity create(String ownerUserId, String name) {
         var normalized = name == null || name.isBlank() ? "Untitled video project" : name.trim();
-        return repository.save(new ProjectEntity(normalized));
+        return repository.save(new ProjectEntity(ownerUserId, normalized));
     }
 
     @Transactional(readOnly = true)
@@ -27,7 +28,16 @@ public class ProjectService {
     }
 
     @Transactional(readOnly = true)
-    public List<ProjectEntity> list() {
-        return repository.findAllByOrderByCreatedAtDesc();
+    public ProjectEntity getRequiredForUser(String projectId, String userId) {
+        var project = getRequired(projectId);
+        if (!project.getOwnerUserId().equals(userId)) {
+            throw new AccessDeniedException("无权访问该项目");
+        }
+        return project;
+    }
+
+    @Transactional(readOnly = true)
+    public List<ProjectEntity> list(String ownerUserId) {
+        return repository.findByOwnerUserIdOrderByCreatedAtDesc(ownerUserId);
     }
 }

@@ -90,6 +90,13 @@
      error.value = null
    }
 
+   function reset(): void {
+     projects.value = []
+     assets.value = []
+     currentProjectId.value = null
+     error.value = null
+   }
+
    return {
      // state
      projects,
@@ -106,5 +113,6 @@
      fetchAssets,
      setCurrentProject,
      clearError,
+     reset,
    }
  })

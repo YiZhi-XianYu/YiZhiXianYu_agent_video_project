@@ -5,9 +5,9 @@
  * 实时展示 Workflow DAG 中 Task 状态、整体进度和 Gate 人在回路审核界面。
  * 分层轮询：1.5s 刷新 Workflow 状态，进入 PAUSED 后展示对应审核视图。
  */
-import { onMounted, onUnmounted, watch } from 'vue'
+import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowLeft, Loader2, CheckCircle2, XCircle, PauseCircle } from 'lucide-vue-next'
+import { ArrowLeft, Loader2, CheckCircle2, Download, Film, XCircle, PauseCircle } from 'lucide-vue-next'
 import { useWorkflowStore } from '@/stores/workflow'
 import { useReviewStore } from '@/stores/review'
 import { useUiStore } from '@/stores/ui'
@@ -32,6 +32,17 @@ const router = useRouter()
 const workflowStore = useWorkflowStore()
 const reviewStore = useReviewStore()
 const uiStore = useUiStore()
+
+const renderedVideo = computed(() => workflowStore.tasks
+  .flatMap((task) => task.artifacts)
+  .slice()
+  .reverse()
+  .find((artifact) => artifact.type === 'RENDERED_VIDEO') ?? null)
+
+const renderedVideoDownloadUrl = computed(() => {
+  if (!renderedVideo.value) return ''
+  return `${renderedVideo.value.contentUrl}?download=true`
+})
 
 // ===================== 分层轮询 =====================
 
@@ -80,7 +91,8 @@ async function syncGate(): Promise<void> {
       const payload = await loadArtifactJson('timeline_compose', 'TIMELINE')
       reviewStore.setTimeline(mapTimeline(payload))
     } else if (gate.gateKey === 'gate_render_review') {
-      const artifact = findArtifact('video_render', 'RENDERED_VIDEO')
+      const artifact = renderedVideo.value
+      if (!artifact) throw new Error('缺少 RENDERED_VIDEO Artifact，无法打开当前审核页')
       reviewStore.setRenderedVideo(artifact.contentUrl)
     }
   } catch (error) {
@@ -171,7 +183,7 @@ function goBack(): void {
 </script>
 
 <template>
-  <div class="max-w-5xl mx-auto px-6 py-8">
+  <div class="page-shell workflow-page">
     <!-- 页头 -->
     <header class="flex items-center gap-4 mb-8">
       <button class="w-9 h-9 rounded-lg flex items-center justify-center
@@ -205,7 +217,7 @@ function goBack(): void {
 
     <template v-else>
       <!-- 进度 -->
-      <div class="card mb-6">
+      <div class="workflow-overview mb-8">
         <div class="flex items-center justify-between mb-3">
           <h2 class="section-heading">执行进度</h2>
           <span class="text-sm text-surface-400">
@@ -219,8 +231,8 @@ function goBack(): void {
       </div>
 
       <!-- Task 网格 -->
-      <div class="mb-6">
-        <h2 class="section-heading mb-4">Task 状态</h2>
+      <div class="mb-8">
+        <div class="section-title-row mb-4"><div><p class="section-eyebrow">PROCESS</p><h2>子进程执行进度</h2></div><span>实时刷新</span></div>
         <TaskGrid :tasks="workflowStore.tasks" />
       </div>
 
@@ -258,6 +270,35 @@ function goBack(): void {
       </div>
 
       <!-- 完成状态 -->
+      <section v-if="workflowStore.status === 'SUCCEEDED' && renderedVideo" class="card mb-6 overflow-hidden">
+        <div class="mb-5 flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
+          <div>
+            <p class="section-eyebrow mb-2">FINAL OUTPUT</p>
+            <h2 class="flex items-center gap-2 text-lg font-semibold text-surface-100">
+              <Film class="h-5 w-5 text-accent-light" />
+              最终成片
+            </h2>
+            <p class="mt-2 text-sm text-surface-400">直接预览本次 Workflow 生成的不可变成片 Artifact，或下载原始输出文件。</p>
+          </div>
+          <a :href="renderedVideoDownloadUrl" class="btn-primary shrink-0">
+            <Download class="h-4 w-4" />
+            下载成片
+          </a>
+        </div>
+        <div class="overflow-hidden rounded-xl border border-surface-700 bg-black">
+          <video
+            :src="renderedVideo.contentUrl"
+            controls
+            preload="metadata"
+            class="aspect-video max-h-[70vh] w-full bg-black"
+          />
+        </div>
+        <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-surface-500">
+          <span>{{ renderedVideo.mediaType }}</span>
+          <span>Artifact {{ renderedVideo.externalArtifactId }}</span>
+        </div>
+      </section>
+
       <div v-if="workflowStore.isTerminal" class="card mb-6"
            :class="workflowStore.status === 'SUCCEEDED' ? 'ring-1 ring-success/30' : 'ring-1 ring-danger/30'">
         <div class="flex items-center gap-4">
