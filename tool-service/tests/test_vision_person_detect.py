@@ -26,17 +26,17 @@ def test_summarize_no_person():
 
 def test_summarize_has_person():
     scores = {
-        "画面中有人的存在": 0.88,
-        "只有一个人": 0.75,
-        "一小群人两到五人": 0.12,
-        "一大群人": 0.03,
-        "人物特写面部清晰": 0.82,
-        "人物全身可见": 0.10,
-        "人物在行走": 0.55,
-        "人物在站立": 0.20,
-        "人物就坐": 0.08,
-        "人物在交谈或互动": 0.15,
-        "画面中没有人物": 0.03,
+        "a photo with a person in it": 0.88,
+        "a photo of a single person": 0.75,
+        "a photo of a small group of two to five people": 0.12,
+        "a photo of a large crowd of people": 0.03,
+        "a close-up photo of a person's face": 0.82,
+        "a photo of a person with their full body visible": 0.10,
+        "a photo of a person walking": 0.55,
+        "a photo of a person standing": 0.20,
+        "a photo of a person sitting": 0.08,
+        "a photo of people talking or interacting": 0.15,
+        "a photo with no people in it": 0.03,
     }
     tags = _summarize_person(scores)
     labels = {tag["label"] for tag in tags}

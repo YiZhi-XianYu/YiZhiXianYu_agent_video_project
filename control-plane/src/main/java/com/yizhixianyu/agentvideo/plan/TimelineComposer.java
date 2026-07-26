@@ -63,6 +63,16 @@ public final class TimelineComposer {
                 }
 
                 Map<String, Object> transition = assignTransition(transitionStyle, clipIndex, storyRole, prevStoryRole);
+                int transitionDuration = toInt(transition.get("durationMs"));
+                if ("CROSS_DISSOLVE".equals(transition.get("type"))) {
+                    if (sourceOutMs + transitionDuration <= endMs) {
+                        sourceOutMs += transitionDuration;
+                        duration += transitionDuration;
+                        timelineIn -= transitionDuration;
+                    } else {
+                        transition = Map.of("type", "CUT", "durationMs", 0);
+                    }
+                }
 
                 Map<String, Object> clip = new LinkedHashMap<>();
                 clip.put("clipId", "clip_" + shot.get("shotId"));

@@ -339,7 +339,7 @@ def _build_filter_graph(
     # ── Step 5: BGM mixing (optional) ──
     if bgm_path is not None and bgm_path.is_file():
         inputs.append(str(bgm_path))
-        total_dur = sum(clip_durations_sec)
+        total_dur = acc_a_duration
 
         # Check BGM track from timeline metadata if available
         bgm_volume = 0.3

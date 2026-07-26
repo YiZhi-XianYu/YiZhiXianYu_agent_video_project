@@ -1,0 +1,11 @@
+.git/
+.idea/
+.vscode/
+control-plane/target/
+control-plane/runtime/
+tool-service/runtime/
+web-app/node_modules/
+web-app/src/**/*.js
+web-app/src/**/*.d.ts
+*.log
+.env

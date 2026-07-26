@@ -64,26 +64,35 @@
  export interface WorkflowRun {
    id: string
    projectId: string
+   assetId: string | null
+   workflowType: string
    definitionKey: string
+   definitionVersion: number
+   proxyQuality: '4K' | '2K' | '1080P' | '720P'
    status: RunStatus
+   progress: number
+   errorMessage: string | null
    autoMode: boolean
    currentGateKey: string | null
    gates: GateInfo[]
-   createdAt: string
-   updatedAt: string
  }
 
  /** Task 运行 */
  export interface TaskRun {
    id: string
+   assetId: string | null
+   instanceKey: string | null
    nodeKey: string
    toolName: string
+   toolVersion: string
    status: TaskStatus
+   dependencyTaskRunIds: string[]
+   progress: number
    attempt: number
-   maxAttempts: number
+   retryCount: number
+   nextAttemptAt: string | null
    errorMessage: string | null
-   createdAt: string
-   updatedAt: string
+   artifacts: ArtifactSnapshot[]
  }
 
  /** 创建多素材分析 Workflow 请求 */
@@ -104,12 +113,15 @@
  // Artifact
  // ============================================================
 
- /** Artifact 内容（视频 / JSON / 图片 等） */
- export interface ArtifactContent {
-   artifactId: string
-   contentType: string
-   /** 内容 URL（视频等大文件通过此 URL 访问） */
-   url: string
+ /** Workflow 快照中的不可变 Artifact。 */
+ export interface ArtifactSnapshot {
+   id: string
+   externalArtifactId: string
+   type: string
+   storageUri: string
+   mediaType: string
+   metadataJson: string
+   contentUrl: string
  }
 
  // ============================================================
@@ -130,21 +142,4 @@
    id: string
    versionName: string
    createdAt: string
- }
- // ============================================================
- // Post-Render（字幕烧录）
- // ============================================================
-
- /** 字幕样式配置 */
- export interface SubtitleStyle {
-   fontSize: number
-   fontColor: string
-   position: 'bottom' | 'top'
-   outlineColor: string
- }
-
- /** 触发字幕烧录请求 */
- export interface PostRenderSubtitleRequest {
-   workflowRunId: string
-   style: SubtitleStyle
  }

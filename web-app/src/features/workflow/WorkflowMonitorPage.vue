@@ -20,7 +20,8 @@ import ShotRankingReview from '@/features/review/ShotRankingReview.vue'
 import StoryEditor from '@/features/review/StoryEditor.vue'
 import TimelinePreview from '@/features/review/TimelinePreview.vue'
 import FinalReview from '@/features/review/FinalReview.vue'
-import FinalDownload from '@/features/review/FinalDownload.vue'
+import type { ArtifactSnapshot } from '@/api/types'
+import type { BeatRole, ShotScore, StoryPlan, Timeline, TransitionType } from '@/shared/types'
 
 const props = defineProps<{
   projectId: string
@@ -51,7 +52,7 @@ watch(() => workflowStore.isTerminal, (terminal) => {
 })
 
 // Gate 变化时同步到 review store
-watch(() => workflowStore.currentGate, () => {
+watch(() => workflowStore.run?.currentGateKey, () => {
   syncGate()
 })
 
@@ -63,8 +64,90 @@ onUnmounted(() => {
 
 // ===================== Gate 同步 =====================
 
-function syncGate(): void {
-  reviewStore.activateGate(workflowStore.currentGate)
+async function syncGate(): Promise<void> {
+  const gate = workflowStore.currentGate
+  reviewStore.activateGate(gate)
+  if (!gate) return
+
+  try {
+    if (gate.gateKey === 'gate_shot_ranking') {
+      const payload = await loadArtifactJson('shot_ranking', 'SHOT_RANKING')
+      reviewStore.setShotScores(mapShotScores(payload))
+    } else if (gate.gateKey === 'gate_story_edit') {
+      const payload = await loadArtifactJson('story_plan', 'STORY_PLAN')
+      reviewStore.setStoryPlan(mapStoryPlan(payload))
+    } else if (gate.gateKey === 'gate_timeline_preview') {
+      const payload = await loadArtifactJson('timeline_compose', 'TIMELINE')
+      reviewStore.setTimeline(mapTimeline(payload))
+    } else if (gate.gateKey === 'gate_render_review') {
+      const artifact = findArtifact('video_render', 'RENDERED_VIDEO')
+      reviewStore.setRenderedVideo(artifact.contentUrl)
+    }
+  } catch (error) {
+    uiStore.showToast(error instanceof Error ? error.message : '审核数据加载失败', 'error')
+  }
+}
+
+function findArtifact(nodeKey: string, type: string): ArtifactSnapshot {
+  const artifact = workflowStore.tasks
+    .find((task) => task.nodeKey === nodeKey)
+    ?.artifacts.find((item) => item.type === type)
+  if (!artifact) throw new Error(`缺少 ${type} Artifact，无法打开当前审核页`)
+  return artifact
+}
+
+async function loadArtifactJson(nodeKey: string, type: string): Promise<Record<string, any>> {
+  const artifact = findArtifact(nodeKey, type)
+  return await fetch(artifact.contentUrl).then(async (response) => {
+    if (!response.ok) throw new Error(`${type} Artifact 加载失败：HTTP ${response.status}`)
+    return await response.json() as Record<string, any>
+  })
+}
+
+function mapShotScores(payload: Record<string, any>): ShotScore[] {
+  return (payload.shots ?? []).map((shot: Record<string, any>) => ({
+    shotId: String(shot.shotId),
+    quality: {
+      sharpness: Number(shot.clarity ?? 0) * 100,
+      exposure: Number(shot.exposure ?? 0) * 100,
+      stability: Number(shot.stability ?? 0) * 100,
+      composition: Number(shot.composition ?? 0) * 100,
+      motionInterest: Number(shot.motionInterest ?? 0) * 100,
+      overall: Number(shot.qualityScore ?? 0) * 100,
+    },
+    labels: { scene: [], object: [], person: [] },
+    rankScore: Number(shot.finalScore ?? shot.qualityScore ?? 0) * 100,
+    penalties: (shot.rejectionReasons ?? []).map(String),
+    selected: Boolean(shot.eligible),
+  }))
+}
+
+function mapStoryPlan(payload: Record<string, any>): StoryPlan {
+  return {
+    workflowRunId: props.runId,
+    beats: (payload.beats ?? []).map((beat: Record<string, any>) => ({
+      role: beat.role as BeatRole,
+      shotIds: (beat.shots ?? []).map((shot: Record<string, any>) => String(shot.shotId)),
+      targetDurationMs: Number(beat.targetDurationMs ?? beat.actualDurationMs ?? 0),
+    })),
+    totalDurationMs: Number(payload.targetDurationMs ?? 0),
+  }
+}
+
+function mapTimeline(payload: Record<string, any>): Timeline {
+  const videoTrack = (payload.tracks ?? []).find((track: Record<string, any>) => track.type === 'VIDEO')
+  return {
+    clips: (videoTrack?.clips ?? []).map((clip: Record<string, any>) => ({
+      shotId: String(clip.shotId),
+      sourceInMs: Number(clip.sourceInMs),
+      sourceOutMs: Number(clip.sourceOutMs),
+      durationMs: Number(clip.timelineOutMs) - Number(clip.timelineInMs),
+      transition: (clip.transitionIn?.type ?? 'CUT') as TransitionType,
+      transitionDurationMs: Number(clip.transitionIn?.durationMs ?? 0),
+    })),
+    totalDurationMs: Number(payload.durationMs ?? 0),
+    bgmName: null,
+  }
 }
 
 // ===================== Actions =====================
@@ -76,6 +159,10 @@ async function handleContinue(): Promise<void> {
   } catch {
     // 错误已在 Store 中处理
   }
+}
+
+async function handleRenderConfirm(): Promise<void> {
+  await handleContinue()
 }
 
 function goBack(): void {
@@ -152,11 +239,7 @@ function goBack(): void {
       />
       <FinalReview
         v-if="workflowStore.isPaused && workflowStore.currentGate?.gateKey === 'gate_render_review'"
-        @confirm="handleContinue"
-      />
-      <FinalDownload
-        v-if="workflowStore.isPaused && workflowStore.currentGate?.gateKey === 'gate_final_download'"
-        @confirm="handleContinue"
+        @confirm="handleRenderConfirm"
       />
 
       <!-- 未知 Gate 兜底 -->

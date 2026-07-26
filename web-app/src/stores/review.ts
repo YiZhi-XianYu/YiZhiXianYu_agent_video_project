@@ -6,7 +6,7 @@
  */
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
-import type { ShotScore, StoryPlan, Timeline, SubtitleStyle } from '@/shared/types'
+import type { ShotScore, StoryPlan, Timeline } from '@/shared/types'
 import type { GateInfo } from '@/api/types'
 
 export const useReviewStore = defineStore('review', () => {
@@ -28,16 +28,6 @@ export const useReviewStore = defineStore('review', () => {
 
   // Gate 4：成片预览
   const renderedVideoUrl = ref<string | null>(null)
-  const subtitleStyle = ref<SubtitleStyle>({
-    fontSize: 24,
-    fontColor: '#ffffff',
-    position: 'bottom',
-    outlineColor: '#000000',
-  })
-
-  // Gate 5：最终下载
-  const finalVideoUrl = ref<string | null>(null)
-
   const dirty = ref(false)
 
   // ===================== Actions =====================
@@ -56,7 +46,6 @@ export const useReviewStore = defineStore('review', () => {
     lockedShotIds.value = new Set()
     timeline.value = null
     renderedVideoUrl.value = null
-    finalVideoUrl.value = null
     dirty.value = false
   }
 
@@ -64,7 +53,6 @@ export const useReviewStore = defineStore('review', () => {
   function setStoryPlan(plan: StoryPlan): void { storyPlan.value = plan }
   function setTimeline(tl: Timeline): void { timeline.value = tl }
   function setRenderedVideo(url: string): void { renderedVideoUrl.value = url }
-  function setFinalVideo(url: string): void { finalVideoUrl.value = url }
 
   function toggleForced(shotId: string): void {
     const s = new Set(forcedShotIds.value)
@@ -87,19 +75,13 @@ export const useReviewStore = defineStore('review', () => {
     dirty.value = true
   }
 
-  function updateSubtitleStyle(style: Partial<SubtitleStyle>): void {
-    subtitleStyle.value = { ...subtitleStyle.value, ...style }
-    dirty.value = true
-  }
-
   return {
     currentGate, shotScores, excludedShotIds, forcedShotIds,
     storyPlan, lockedShotIds, timeline,
-    renderedVideoUrl, subtitleStyle, finalVideoUrl, dirty,
+    renderedVideoUrl, dirty,
     activateGate, resetAll,
     setShotScores, setStoryPlan, setTimeline,
-    setRenderedVideo, setFinalVideo,
+    setRenderedVideo,
     toggleForced, toggleExcluded, toggleLockShot,
-    updateSubtitleStyle,
   }
 })

@@ -52,6 +52,10 @@ public class WorkflowRunEntity extends BaseEntity {
     @Column(name = "gates_json", columnDefinition = "LONGTEXT")
     private String gatesJson;
 
+    @Lob
+    @Column(name = "completed_gates_json", columnDefinition = "LONGTEXT")
+    private String completedGatesJson = "[]";
+
     private Instant startedAt;
 
     private Instant completedAt;
@@ -125,6 +129,37 @@ public class WorkflowRunEntity extends BaseEntity {
         }
     }
 
+    public void completeCurrentGate() {
+        if (currentGateKey == null) {
+            return;
+        }
+        var completed = completedGateKeys();
+        completed.add(currentGateKey);
+        completedGatesJson = "[\"" + String.join("\",\"", completed) + "\"]";
+    }
+
+    public boolean hasCompletedGate(String gateKey) {
+        return completedGateKeys().contains(gateKey);
+    }
+
+    private java.util.LinkedHashSet<String> completedGateKeys() {
+        var result = new java.util.LinkedHashSet<String>();
+        if (completedGatesJson == null || completedGatesJson.isBlank()) {
+            return result;
+        }
+        var body = completedGatesJson.strip();
+        if (body.length() < 2) {
+            return result;
+        }
+        for (var item : body.substring(1, body.length() - 1).split(",")) {
+            var value = item.strip().replace("\"", "");
+            if (!value.isBlank()) {
+                result.add(value);
+            }
+        }
+        return result;
+    }
+
     public void succeed() {
         status = RunStatus.SUCCEEDED;
         progress = 100;
@@ -168,6 +203,7 @@ public class WorkflowRunEntity extends BaseEntity {
     public String getCurrentGateKey() { return currentGateKey; }
     public String getGatesJson() { return gatesJson; }
     public void setGatesJson(String gatesJson) { this.gatesJson = gatesJson; }
+    public String getCompletedGatesJson() { return completedGatesJson; }
 
     public int getProgress() {
         return progress;

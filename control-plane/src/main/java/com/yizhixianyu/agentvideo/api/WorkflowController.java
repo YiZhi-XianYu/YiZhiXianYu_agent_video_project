@@ -70,35 +70,7 @@ public class WorkflowController {
     public record StartVideoProxyRequest(@NotBlank String assetId, @NotNull ProxyQuality quality) {
     }
 
-    /** 多素材分析请求。新增 autoMode 字段，默认 false（人在回路开启） */
-    
-    /** 触发字幕后置渲染：对成片做 ASR → 烧录字幕 → 输出最终视频 */
-    @PostMapping("/workflow-runs/{workflowRunId}/post-render/subtitle")
-    @ResponseStatus(HttpStatus.ACCEPTED)
-    public RunAccepted startPostRenderSubtitle(
-        @PathVariable String workflowRunId,
-        @Valid @RequestBody PostRenderSubtitleRequest request
-    ) {
-        var s = request.style();
-        var run = workflowService.createPostRenderSubtitleRun(
-            workflowRunId, s.fontSize(), s.fontColor(), s.position(), s.outlineColor()
-        );
-        return new RunAccepted(run.getId(), run.getStatus().name(), "/api/v1/workflow-runs/" + run.getId());
-    }
-
-    /** 字幕样式配置 */
-    public record PostRenderSubtitleRequest(
-        @NotNull SubtitleStyle style
-    ) {}
-
-    /** 字幕样式 */
-    public record SubtitleStyle(
-        int fontSize,
-        String fontColor,
-        String position,
-        String outlineColor
-    ) {}
-
+    /** 多素材分析请求。autoMode=true 时跳过所有审核 Gate。 */
     public record StartMultiAssetAnalysisRequest(
         @NotNull @Size(min = 1, max = 20) List<@NotBlank String> assetIds,
         @NotNull ProxyQuality quality,

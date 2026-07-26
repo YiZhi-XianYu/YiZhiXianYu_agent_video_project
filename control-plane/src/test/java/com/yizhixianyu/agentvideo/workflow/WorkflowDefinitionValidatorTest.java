@@ -21,10 +21,13 @@ class WorkflowDefinitionValidatorTest {
 
         assertThatCode(() -> validator.validate(definition))
             .doesNotThrowAnyException();
-        assertThat(definition.definitionVersion()).isEqualTo(7);
-        assertThat(definition.nodes()).hasSize(12);
+        assertThat(definition.definitionVersion()).isEqualTo(9);
+        assertThat(definition.nodes()).hasSize(13);
         assertThat(definition.nodes().stream()
             .filter(node -> node.scope() == WorkflowDefinition.NodeScope.WORKFLOW)).hasSize(7);
+        assertThat(definition.edges()).hasSize(19);
+        assertThat(definition.edges().stream()
+            .filter(edge -> edge.dependencyType() == WorkflowDefinition.DependencyType.OPTIONAL)).hasSize(3);
     }
 
     @Test

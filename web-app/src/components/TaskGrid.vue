@@ -36,19 +36,19 @@
    'decision.highlight-select': '高光选择',
    'timeline.compose': '时间线编排',
    'audio.bgm-select': '背景音乐选择',
+   'audio.source-transcribe': '素材语音转写',
+   'subtitle.compose': '字幕编排',
    'video.render': '视频渲染',
-   'audio.transcribe-final': '字幕转写',
-   'video.render-subtitles': '字幕烧录',
  }
 
  /** 按 nodeKey 排序（保持 DAG 拓扑序） */
  const sortedTasks = computed(() => {
    const order = [
      'video_probe', 'video_proxy_generate', 'video_shot_detect',
-     'vision_quality_score', 'vision_vlm_analyze',
+     'vision_quality_score', 'vision_vlm_analyze', 'source_transcribe',
      'shot_ranking', 'story_plan', 'highlight_selection',
-     'timeline_compose', 'bgm_select',
-     'video_render', 'speech_transcribe',
+     'timeline_compose', 'bgm_select', 'subtitle_compose',
+     'video_render',
    ]
    return [...props.tasks].sort((a, b) => {
      const ai = order.indexOf(a.nodeKey)

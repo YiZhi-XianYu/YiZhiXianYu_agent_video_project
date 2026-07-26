@@ -15,8 +15,8 @@ from app.tools.video_render import VideoRenderTool
 from app.tools.audio_bgm import BgmSelectTool
 from app.tools.audio_transcribe import SpeechTranscribeTool
 from app.tools.vision_vlm_analyze import VisionVlmAnalyzeTool
-from app.tools.audio_transcribe_final import TranscribeFinalTool
-from app.tools.video_render_subtitles import RenderSubtitlesTool
+from app.tools.audio_source_transcribe import SourceTranscribeTool
+from app.tools.subtitle_compose import SubtitleComposeTool
 
 
 class Tool(Protocol):
@@ -40,7 +40,7 @@ class ToolRegistry:
             ShotRankingTool(), StoryPlanTool(), HighlightSelectionTool(), TimelineComposeTool(),
             VideoRenderTool(), BgmSelectTool(), SpeechTranscribeTool(),
             VisionVlmAnalyzeTool(),
-            TranscribeFinalTool(), RenderSubtitlesTool(),
+            SourceTranscribeTool(), SubtitleComposeTool(),
         ]
         self._tools = {(tool.name, tool.version): tool for tool in tools}
 

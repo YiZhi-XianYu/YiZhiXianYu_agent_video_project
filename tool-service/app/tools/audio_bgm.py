@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import subprocess
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -51,7 +52,7 @@ class BgmSelectTool:
             "supportsCancellation": False,
             "deterministic": True,
             "cacheable": True,
-            "inputTypes": ["STORY_PLAN"],
+            "inputTypes": ["STORY_PLAN", "TIMELINE"],
             "outputTypes": ["BGM_AUDIO"],
         }
 
@@ -71,15 +72,8 @@ class BgmSelectTool:
         bgm_path = _find_bgm(mood)
 
         if bgm_path is None or not bgm_path.is_file():
-            logger.info("BGM not available for mood '%s' — producing empty selection", mood)
-            payload = {
-                "available": False,
-                "selectedMood": mood,
-                "bgmPath": None,
-                "bgmDurationMs": 0,
-                "message": "No BGM files found in library. Place royalty-free MP3 files in runtime/bgm/",
-            }
-            return [write_bgm_artifact(payload, available=False)]
+            logger.info("BGM not available for mood '%s' — continuing without BGM", mood)
+            return []
 
         duration_ms = _probe_duration(bgm_path)
         payload = {
@@ -101,19 +95,25 @@ def write_bgm_artifact(payload: dict[str, Any], bgm_path: Path | None = None, *,
     output_dir = settings.artifact_root / artifact_id
     output_dir.mkdir(parents=True, exist_ok=False)
 
-    # Write metadata JSON
+    if bgm_path is None or not bgm_path.is_file():
+        raise ValueError("BGM artifact requires an audio file")
+
+    audio_path = output_dir / "bgm-audio.mp3"
+    shutil.copyfile(bgm_path, audio_path)
+
+    # Keep selection and licensing metadata next to the immutable audio.
     meta_path = output_dir / "bgm-selection.json"
     meta_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    uri = meta_path.resolve().as_uri()
-    size = meta_path.stat().st_size
-    content_hash = hashlib.sha256(meta_path.read_bytes()).hexdigest()
+    uri = audio_path.resolve().as_uri()
+    size = audio_path.stat().st_size
+    content_hash = hashlib.sha256(audio_path.read_bytes()).hexdigest()
 
     return ArtifactDescriptor(
         artifactId=artifact_id,
         type="BGM_AUDIO",
         uri=uri,
-        mediaType="application/json",
+        mediaType="audio/mpeg",
         size=size,
         contentHash=content_hash,
         metadata=payload,

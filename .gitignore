@@ -26,4 +26,10 @@ tool-service/runtime/
 
 # Dependencies
 web-app/node_modules/
+web-app/dist/
+web-app/src/**/*.js
+web-app/src/**/*.d.ts
+web-app/src/*.js
+web-app/src/*.d.ts
+control-plane/src/main/resources/static/
 .conda/

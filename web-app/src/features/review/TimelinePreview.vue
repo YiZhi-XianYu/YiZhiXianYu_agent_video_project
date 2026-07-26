@@ -2,10 +2,10 @@
 /**
  * Gate 3：时间线预览
  *
- * 可视化 Timeline 轨道，展示片段顺序和转场效果，BGM 名称和成片时长。
+ * 可视化 Timeline 轨道，展示片段顺序、转场效果和成片时长。
  */
 import { computed } from 'vue'
-import { Clock, Music, CheckCircle2 } from 'lucide-vue-next'
+import { Clock, CheckCircle2 } from 'lucide-vue-next'
 import { useReviewStore } from '@/stores/review'
 import type { TimelineClip } from '@/shared/types'
 
@@ -13,7 +13,6 @@ const emit = defineEmits<{ confirm: [] }>()
 const review = useReviewStore()
 
 const clips = computed<TimelineClip[]>(() => review.timeline?.clips ?? [])
-const bgmName = computed(() => review.timeline?.bgmName ?? '无')
 const totalDuration = computed(() => review.timeline?.totalDurationMs ?? 0)
 
 function formatMs(ms: number): string {
@@ -35,7 +34,7 @@ const transLabel: Record<string, string> = { CUT: '硬切', FADE: '淡入淡出'
           时间线预览
         </h3>
         <p class="text-sm text-surface-400 mt-1">
-          {{ clips.length }} 个片段 · 总时长 {{ formatMs(totalDuration) }} · BGM: {{ bgmName }}
+          {{ clips.length }} 个片段 · 总时长 {{ formatMs(totalDuration) }}
         </p>
       </div>
       <button class="btn-primary shrink-0" @click="emit('confirm')">
@@ -69,12 +68,6 @@ const transLabel: Record<string, string> = { CUT: '硬切', FADE: '淡入淡出'
             {{ transLabel[clip.transition] ?? clip.transition }}
           </div>
         </template>
-      </div>
-
-      <!-- BGM 信息 -->
-      <div class="flex items-center gap-2 mt-3 text-sm text-surface-400">
-        <Music class="w-4 h-4" />
-        <span>BGM: <strong class="text-surface-200">{{ bgmName }}</strong></span>
       </div>
     </div>
   </div>

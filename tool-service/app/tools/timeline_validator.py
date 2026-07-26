@@ -79,7 +79,7 @@ def _validate_video_clips(track: dict[str, Any]) -> tuple[list[str], int]:
 
     clip_ids: set[str] = set()
     shot_ids: set[str] = set()
-    expected_timeline_in = 0
+    previous_timeline_out = 0
 
     for index, clip in enumerate(clips):
         prefix = f"clips[{index}]"
@@ -119,8 +119,6 @@ def _validate_video_clips(track: dict[str, Any]) -> tuple[list[str], int]:
             errors.append(f"{prefix} has an invalid source Shot range")
         if source_in < shot_start or source_out > shot_end or source_out <= source_in:
             errors.append(f"{prefix} source range exceeds its Shot")
-        if timeline_in != expected_timeline_in:
-            errors.append(f"{prefix} does not start at the previous Clip boundary")
         if timeline_out <= timeline_in:
             errors.append(f"{prefix} has an invalid Timeline range")
         clip_duration = timeline_out - timeline_in
@@ -160,6 +158,13 @@ def _validate_video_clips(track: dict[str, Any]) -> tuple[list[str], int]:
                     f"{prefix}.transitionIn duration ({transition_dur}ms) must be less than clip duration ({clip_duration}ms)"
                 )
 
+        expected_timeline_in = previous_timeline_out
+        if index > 0 and transition_type == "CROSS_DISSOLVE":
+            expected_timeline_in -= transition_dur
+        if timeline_in != expected_timeline_in:
+            errors.append(f"{prefix} has an invalid Timeline position for {transition_type}")
+        previous_timeline_out = timeline_out
+
         # ── Metadata ──
         if not isinstance(clip.get("selectionRank"), int) or clip["selectionRank"] < 1:
             errors.append(f"{prefix}.selectionRank must be positive")
@@ -169,7 +174,7 @@ def _validate_video_clips(track: dict[str, Any]) -> tuple[list[str], int]:
             errors.append(f"{prefix}.selectionReasons must be an array")
 
     # ── Total duration ──
-    return errors, expected_timeline_in
+    return errors, previous_timeline_out
 
 
 def _validate_audio_track(track: dict[str, Any]) -> list[str]:

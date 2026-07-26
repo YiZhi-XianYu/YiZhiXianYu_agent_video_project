@@ -10,6 +10,15 @@ public record WorkflowDefinition(
     List<Edge> edges,
     List<Gate> gates
 ) {
+    public WorkflowDefinition(
+        String definitionKey,
+        int definitionVersion,
+        List<Node> nodes,
+        List<Edge> edges
+    ) {
+        this(definitionKey, definitionVersion, nodes, edges, List.of());
+    }
+
     public record Node(
         String nodeKey,
         String toolName,
@@ -29,7 +38,10 @@ public record WorkflowDefinition(
         }
     }
 
-    public record Edge(String from, String to) {
+    public record Edge(String from, String to, DependencyType dependencyType) {
+        public Edge(String from, String to) {
+            this(from, to, DependencyType.REQUIRED);
+        }
     }
 
 
@@ -49,5 +61,10 @@ public record WorkflowDefinition(
     public enum NodeScope {
         ASSET,
         WORKFLOW
+    }
+
+    public enum DependencyType {
+        REQUIRED,
+        OPTIONAL
     }
 }

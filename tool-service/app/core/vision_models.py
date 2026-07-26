@@ -26,7 +26,7 @@ def _load_clip() -> tuple[Any, Any]:
         logger.info("Loading CLIP model %s (this may take a moment on first run)...", _MODEL_NAME)
         from transformers import CLIPModel, CLIPProcessor
 
-        _loc = os.environ.get('CLIP_LOCAL_MODEL_PATH', '') or                '/home/lantwn/.cache/modelscope/models/openai-mirror--clip-vit-base-patch32/snapshots/master'
+        _loc = os.environ.get("CLIP_LOCAL_MODEL_PATH", "")
         _model_dir = _loc if Path(_loc).is_dir() else _MODEL_NAME
         _CLIP_MODEL = CLIPModel.from_pretrained(_model_dir)
         _CLIP_PROCESSOR = CLIPProcessor.from_pretrained(_model_dir)

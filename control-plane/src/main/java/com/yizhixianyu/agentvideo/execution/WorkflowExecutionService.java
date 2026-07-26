@@ -162,6 +162,8 @@ public class WorkflowExecutionService {
             definition.definitionVersion(),
             toJson(definition)
         ));
+        workflow.setAutoMode(autoMode);
+        workflow.setGatesJson(toJson(definition.gates()));
         workflow.start();
 
         for (var index = 0; index < assets.size(); index++) {
@@ -257,14 +259,14 @@ public class WorkflowExecutionService {
             var to = definition.nodes().stream().filter(node -> node.nodeKey().equals(edge.to())).findFirst().orElseThrow();
             if (to.scope() == WorkflowDefinition.NodeScope.ASSET) {
                 for (var asset : assets) {
-                    saveDependency(tasksByInstance, from, from.scope() == WorkflowDefinition.NodeScope.ASSET ? asset : null, to, asset);
+                    saveDependency(tasksByInstance, from, from.scope() == WorkflowDefinition.NodeScope.ASSET ? asset : null, to, asset, edge.dependencyType());
                 }
             } else if (from.scope() == WorkflowDefinition.NodeScope.ASSET) {
                 for (var asset : assets) {
-                    saveDependency(tasksByInstance, from, asset, to, null);
+                    saveDependency(tasksByInstance, from, asset, to, null, edge.dependencyType());
                 }
             } else {
-                saveDependency(tasksByInstance, from, null, to, null);
+                saveDependency(tasksByInstance, from, null, to, null, edge.dependencyType());
             }
         }
     }
@@ -287,10 +289,11 @@ public class WorkflowExecutionService {
         WorkflowDefinition.Node from,
         AssetEntity fromAsset,
         WorkflowDefinition.Node to,
-        AssetEntity toAsset
+        AssetEntity toAsset,
+        WorkflowDefinition.DependencyType dependencyType
     ) {
         dependencyRepository.save(new TaskDependencyEntity(
-            tasks.get(instanceKey(to, toAsset)).getId(), tasks.get(instanceKey(from, fromAsset)).getId()
+            tasks.get(instanceKey(to, toAsset)).getId(), tasks.get(instanceKey(from, fromAsset)).getId(), dependencyType
         ));
     }
 
@@ -384,11 +387,14 @@ public class WorkflowExecutionService {
             case "vision.object-detect" -> Set.of("SHOT_LIST");
             case "vision.person-detect" -> Set.of("SHOT_LIST");
             case "vision.vlm-analyze" -> Set.of("SHOT_LIST");
+            case "audio.source-transcribe" -> Set.of("VIDEO_PROXY");
             case "decision.shot-rank" -> Set.of("SHOT_QUALITY");
             case "planning.story-template" -> Set.of("SHOT_RANKING", "SCENE_TAGS", "OBJECT_TAGS", "PERSON_TAGS");
             case "decision.highlight-select" -> Set.of("STORY_PLAN", "SHOT_RANKING");
             case "timeline.compose" -> Set.of("HIGHLIGHT_SET");
-            case "video.render" -> Set.of("TIMELINE");
+            case "audio.bgm-select" -> Set.of("STORY_PLAN", "TIMELINE");
+            case "subtitle.compose" -> Set.of("TIMELINE", "SOURCE_TRANSCRIPT");
+            case "video.render" -> Set.of("TIMELINE", "BGM_AUDIO", "SUBTITLE_SRT");
             default -> Set.of();
         };
     }
@@ -405,6 +411,9 @@ public class WorkflowExecutionService {
             case "OBJECT_TAGS" -> "object";
             case "PERSON_TAGS" -> "person";
             case "TIMELINE" -> "timeline";
+            case "SOURCE_TRANSCRIPT" -> "transcript";
+            case "BGM_AUDIO" -> "bgm";
+            case "SUBTITLE_SRT" -> "subtitle";
             default -> "artifact";
         };
     }
@@ -534,7 +543,7 @@ public class WorkflowExecutionService {
         }
         try {
             var root = objectMapper.readTree(definitionJson);
-            var gatesNode = root.get("gates");
+            var gatesNode = root.isArray() ? root : root.get("gates");
             if (gatesNode == null || !gatesNode.isArray()) {
                 return List.of();
             }
@@ -574,57 +583,43 @@ public class WorkflowExecutionService {
         return null;
     }
 
-    /** 创建字幕后置渲染 mini Workflow：ASR → 字幕烧录 */
-    @Transactional
-    public WorkflowRunEntity createPostRenderSubtitleRun(
-        String sourceWorkflowRunId,
-        int fontSize, String fontColor, String position, String outlineColor
+    private WorkflowDefinition.Gate findTerminalGate(
+        WorkflowDefinition definition,
+        List<TaskRunEntity> tasks,
+        WorkflowRunEntity workflow
     ) {
-        var source = workflowRepository.findById(sourceWorkflowRunId)
-            .orElseThrow(() -> new IllegalArgumentException("Source workflow not found: " + sourceWorkflowRunId));
-        var projectId = source.getProjectId();
-
-        // 创建 mini Workflow：2 节点（transcribe-final → render-subtitles）
-        var definition = new WorkflowDefinition(
-            "POST_RENDER_SUBTITLE", 1,
-            List.of(
-                new WorkflowDefinition.Node("transcribe_final", "audio.transcribe-final", "1.0.0",
-                    WorkflowDefinition.NodeScope.WORKFLOW,
-                    WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()),
-                new WorkflowDefinition.Node("render_subtitles", "video.render-subtitles", "1.0.0",
-                    WorkflowDefinition.NodeScope.WORKFLOW,
-                    WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT,
-                    Map.of("subtitleStyle", Map.of(
-                        "fontSize", fontSize,
-                        "fontColor", fontColor,
-                        "position", position,
-                        "outlineColor", outlineColor
-                    )))
-            ),
-            List.of(new WorkflowDefinition.Edge("transcribe_final", "render_subtitles")),
-            List.of() // 无 Gate
-        );
-
-        var workflow = workflowRepository.save(new WorkflowRunEntity(
-            projectId, source.getAssetId(), "POST_RENDER_SUBTITLE",
-            source.getProxyQuality(),
-            definition.definitionKey(), definition.definitionVersion(),
-            toJson(definition)
-        ));
-        workflow.setAutoMode(true); // 后置流程自动运行，不暂停
-        workflow.start();
-
-        var asset = assetService.getRequired(source.getAssetId());
-        expandTasks(workflow, List.of(asset), definition);
-        evaluateWorkflow(workflow.getId());
-        return workflow;
+        if (workflow.isAutoMode() || definition == null || definition.gates() == null) {
+            return null;
+        }
+        for (var gate : definition.gates()) {
+            if (workflow.hasCompletedGate(gate.gateKey())) {
+                continue;
+            }
+            var producerSucceeded = tasks.stream().anyMatch(task ->
+                gate.afterNodeKey().equals(task.getNodeKey()) && task.getStatus() == TaskStatus.SUCCEEDED
+            );
+            if (producerSucceeded) {
+                return gate;
+            }
+        }
+        return null;
     }
 
+    private boolean isOptionalEnhancement(TaskRunEntity task) {
+        return Set.of(
+            "audio.source-transcribe",
+            "subtitle.compose",
+            "audio.bgm-select"
+        ).contains(task.getToolName());
+    }
+
+    @Transactional
     public void continueWorkflow(String workflowRunId) {
         var workflow = workflowRepository.findLockedById(workflowRunId).orElseThrow();
         if (workflow.getStatus() != RunStatus.PAUSED) {
             throw new IllegalStateException("Workflow is not paused: " + workflowRunId);
         }
+        workflow.completeCurrentGate();
         workflow.resume();
         evaluateWorkflow(workflowRunId);
     }
@@ -661,14 +656,19 @@ public class WorkflowExecutionService {
                 var upstream = dependencies.getOrDefault(task.getId(), List.of()).stream()
                     .map(item -> tasksById.get(item.getDependsOnTaskRunId()))
                     .toList();
-                if (upstream.stream().anyMatch(item -> item.getStatus() == TaskStatus.FAILED
-                    || item.getStatus() == TaskStatus.SKIPPED)) {
+                var dependencyRows = dependencies.getOrDefault(task.getId(), List.of());
+                var requiredUpstreamFailed = dependencyRows.stream()
+                    .filter(item -> item.getDependencyType() == WorkflowDefinition.DependencyType.REQUIRED)
+                    .map(item -> tasksById.get(item.getDependsOnTaskRunId()))
+                    .anyMatch(item -> item.getStatus() == TaskStatus.FAILED || item.getStatus() == TaskStatus.SKIPPED);
+                var allUpstreamTerminal = upstream.stream().allMatch(this::isTerminal);
+                if (requiredUpstreamFailed) {
                     task.markSkipped("A required upstream Task did not succeed");
                     changed = true;
-                } else if (upstream.stream().allMatch(item -> item.getStatus() == TaskStatus.SUCCEEDED)) {
+                } else if (allUpstreamTerminal) {
                     /* Gate 检查：如果上游 Node 关联了 Gate 且非 auto 模式，暂停 Workflow */
                     var gate = findGateForTask(definition, task, upstream, tasksById);
-                    if (gate != null && !workflow.isAutoMode()) {
+                    if (gate != null && !workflow.isAutoMode() && !workflow.hasCompletedGate(gate.gateKey())) {
                         workflow.pause(gate.gateKey());
                         changed = true;
                         continue;
@@ -681,17 +681,26 @@ public class WorkflowExecutionService {
         }
 
         var terminal = tasks.stream().filter(this::isTerminal).count();
-        var succeeded = tasks.stream().filter(task -> task.getStatus() == TaskStatus.SUCCEEDED).count();
         if (terminal == tasks.size()) {
-            var failed = tasks.stream().filter(task -> task.getStatus() == TaskStatus.FAILED).findFirst();
+            var pendingGate = findTerminalGate(definition, tasks, workflow);
+            if (pendingGate != null) {
+                workflow.pause(pendingGate.gateKey());
+                return;
+            }
+            var failed = tasks.stream()
+                .filter(task -> !isOptionalEnhancement(task))
+                .filter(task -> task.getStatus() == TaskStatus.FAILED)
+                .findFirst();
             if (failed.isPresent()) {
                 workflow.fail(failed.get().getErrorMessage());
-            } else if (succeeded == tasks.size()) {
+            } else if (tasks.stream()
+                .filter(task -> !isOptionalEnhancement(task))
+                .allMatch(task -> task.getStatus() == TaskStatus.SUCCEEDED)) {
                 workflow.succeed();
             } else {
-                workflow.fail("One or more Tasks were skipped");
+                workflow.fail("One or more required Tasks were skipped");
             }
-        } else if (workflow.getStatus() == RunStatus.RUNNING || terminal > 0) {
+        } else if (workflow.getStatus() == RunStatus.RUNNING) {
             workflow.start();
             workflow.updateProgress((int) (terminal * 100 / tasks.size()));
         }

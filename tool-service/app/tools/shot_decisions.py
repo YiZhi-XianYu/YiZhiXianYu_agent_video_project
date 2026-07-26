@@ -93,7 +93,12 @@ class HighlightSelectionTool:
     version = "1.0.0"
 
     def manifest(self) -> dict[str, Any]:
-        return _manifest(self, "Compile a Story Plan into highlights with optional LLM refinement", ["STORY_PLAN"], ["HIGHLIGHT_SET"])
+        return _manifest(
+            self,
+            "Compile a Story Plan into highlights with optional LLM refinement",
+            ["STORY_PLAN", "SHOT_RANKING"],
+            ["HIGHLIGHT_SET"],
+        )
 
     def execute(self, request: ToolExecutionRequest, report_progress: Callable[[int], None] | None = None) -> list[ArtifactDescriptor]:
         story_inputs = matching_inputs(request.inputs, "story")
@@ -324,20 +329,30 @@ class TimelineComposeTool:
         timeline_in = 0
         prev_story_role = None
         for shot in highlights.get("shots") or []:
-            duration = int(shot["sourceOutMs"]) - int(shot["sourceInMs"])
-            if duration <= 0 or int(shot["sourceOutMs"]) > int(shot["endMs"]):
+            source_in = int(shot["sourceInMs"])
+            source_out = int(shot["sourceOutMs"])
+            duration = source_out - source_in
+            if duration <= 0 or source_out > int(shot["endMs"]):
                 raise ValueError("Highlight clip is outside its Shot range")
 
             story_role = shot.get("storyRole", "")
             transition = _assign_transition(transition_style, len(clips), story_role, prev_story_role)
+            transition_duration = int(transition["durationMs"])
+            if transition["type"] == "CROSS_DISSOLVE":
+                if source_out + transition_duration <= int(shot["endMs"]):
+                    source_out += transition_duration
+                    duration += transition_duration
+                    timeline_in -= transition_duration
+                else:
+                    transition = {"type": "CUT", "durationMs": 0}
 
             clips.append({
                 "clipId": f"clip_{shot['shotId']}",
                 "shotId": shot["shotId"],
                 "assetId": shot["sourceAssetId"],
                 "sourceProxyArtifactId": shot["sourceProxyArtifactId"],
-                "sourceInMs": shot["sourceInMs"],
-                "sourceOutMs": shot["sourceOutMs"],
+                "sourceInMs": source_in,
+                "sourceOutMs": source_out,
                 "sourceShotStartMs": shot["startMs"],
                 "sourceShotEndMs": shot["endMs"],
                 "timelineInMs": timeline_in,

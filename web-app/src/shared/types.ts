@@ -121,23 +121,11 @@
  // 版本 Diff
  // ============================================================
 
- /** Diff 条目 */
- export interface DiffEntry {
-   beatRole: BeatRole
-   type: 'added' | 'removed' | 'modified' | 'unchanged'
-   shotId: string
-   oldPosition: number | null
-   newPosition: number | null
- }
-
-// ============================================================
-// 字幕样式
-// ============================================================
-
-/** 字幕样式配置（Gate 4 配置使用） */
-export interface SubtitleStyle {
-  fontSize: number
-  fontColor: string
-  position: 'bottom' | 'top'
-  outlineColor: string
+/** Diff 条目 */
+export interface DiffEntry {
+  beatRole: BeatRole
+  type: 'added' | 'removed' | 'modified' | 'unchanged'
+  shotId: string
+  oldPosition: number | null
+  newPosition: number | null
 }

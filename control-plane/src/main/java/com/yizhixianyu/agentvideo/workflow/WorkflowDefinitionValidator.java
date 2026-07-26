@@ -31,6 +31,8 @@ public class WorkflowDefinitionValidator {
         "video.render@1.1.0",
         "audio.bgm-select@1.0.0",
         "audio.speech-transcribe@1.0.0",
+        "audio.source-transcribe@1.0.0",
+        "subtitle.compose@1.0.0",
         "vision.vlm-analyze@1.0.0"
     );
 
@@ -74,6 +76,9 @@ public class WorkflowDefinitionValidator {
             indegree.put(key, 0);
         });
         for (var edge : definition.edges() == null ? java.util.List.<WorkflowDefinition.Edge>of() : definition.edges()) {
+            if (edge.dependencyType() == null) {
+                throw new IllegalArgumentException("Workflow edge dependency type is required: " + edge);
+            }
             if (!nodes.containsKey(edge.from()) || !nodes.containsKey(edge.to())) {
                 throw new IllegalArgumentException("Workflow edge references an unknown node: " + edge);
             }
@@ -87,6 +92,10 @@ public class WorkflowDefinitionValidator {
             if (nodes.get(edge.from()).scope() == WorkflowDefinition.NodeScope.WORKFLOW
                 && nodes.get(edge.to()).scope() == WorkflowDefinition.NodeScope.ASSET) {
                 throw new IllegalArgumentException("Workflow-scoped nodes cannot feed asset-scoped nodes");
+            }
+            if (edge.dependencyType() == WorkflowDefinition.DependencyType.OPTIONAL
+                && !Set.of("subtitle.compose", "video.render").contains(nodes.get(edge.to()).toolName())) {
+                throw new IllegalArgumentException("Optional dependency is only allowed for enhancement consumers");
             }
         }
 

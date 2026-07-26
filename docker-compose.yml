@@ -21,7 +21,8 @@ services:
 
   control-plane:
     build:
-      context: ./control-plane
+      context: .
+      dockerfile: control-plane/Dockerfile
     container_name: avp-control-plane
     restart: unless-stopped
     ports:
@@ -36,7 +37,7 @@ services:
       APP_STORAGE_ROOT: /app/runtime/storage
       APP_ARTIFACT_ROOT: /app/runtime/artifacts
     volumes:
-      - control_plane_runtime:/app/runtime
+      - shared_runtime:/app/runtime
     depends_on:
       mysql:
         condition: service_healthy
@@ -60,13 +61,12 @@ services:
       TOOL_SERVICE_LLM_ANTHROPIC_API_KEY: ${LLM_ANTHROPIC_API_KEY:-}
       TOOL_SERVICE_ASR_MODEL_SIZE: ${ASR_MODEL_SIZE:-small}
     volumes:
-      - tool_service_runtime:/app/runtime
+      - shared_runtime:/app/runtime
       - hf_cache:/app/.cache/huggingface
     depends_on:
       - control-plane
 
 volumes:
   mysql_data:
-  control_plane_runtime:
-  tool_service_runtime:
+  shared_runtime:
   hf_cache:

@@ -22,7 +22,7 @@ public class MultiAssetAnalysisTemplate {
         }
         return new WorkflowDefinition(
             "MULTI_ASSET_ANALYSIS",
-            8, // 版本号从 7 升级为 8：新增 Gate 人在回路，移除 speech_transcribe
+            9,
             // === Nodes ===
             List.of(
                 new WorkflowDefinition.Node(
@@ -44,6 +44,10 @@ public class MultiAssetAnalysisTemplate {
                 ),
                 new WorkflowDefinition.Node(
                     "vision_vlm_analyze", "vision.vlm-analyze", "1.0.0",
+                    WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()
+                ),
+                new WorkflowDefinition.Node(
+                    "source_transcribe", "audio.source-transcribe", "1.0.0",
                     WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()
                 ),
                 new WorkflowDefinition.Node(
@@ -73,7 +77,11 @@ public class MultiAssetAnalysisTemplate {
                     WorkflowDefinition.NodeScope.WORKFLOW,
                     WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()
                 ),
-                // 注意：speech_transcribe 已从主 DAG 移除，改为 Post-Render 阶段执行
+                new WorkflowDefinition.Node(
+                    "subtitle_compose", "subtitle.compose", "1.0.0",
+                    WorkflowDefinition.NodeScope.WORKFLOW,
+                    WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()
+                ),
                 new WorkflowDefinition.Node(
                     "video_render", "video.render", "1.1.0",
                     WorkflowDefinition.NodeScope.WORKFLOW,
@@ -87,22 +95,33 @@ public class MultiAssetAnalysisTemplate {
                 new WorkflowDefinition.Edge("video_proxy_generate", "vision_quality_score"),
                 new WorkflowDefinition.Edge("video_shot_detect", "vision_quality_score"),
                 new WorkflowDefinition.Edge("video_shot_detect", "vision_vlm_analyze"),
+                new WorkflowDefinition.Edge("video_proxy_generate", "source_transcribe"),
                 new WorkflowDefinition.Edge("vision_quality_score", "shot_ranking"),
                 new WorkflowDefinition.Edge("shot_ranking", "story_plan"),
                 new WorkflowDefinition.Edge("vision_vlm_analyze", "story_plan"),
                 new WorkflowDefinition.Edge("story_plan", "highlight_selection"),
                 new WorkflowDefinition.Edge("shot_ranking", "highlight_selection"),
                 new WorkflowDefinition.Edge("highlight_selection", "timeline_compose"),
+                new WorkflowDefinition.Edge("story_plan", "bgm_select"),
                 new WorkflowDefinition.Edge("timeline_compose", "bgm_select"),
-                new WorkflowDefinition.Edge("bgm_select", "video_render"),
-                new WorkflowDefinition.Edge("timeline_compose", "video_render")
+                new WorkflowDefinition.Edge("timeline_compose", "subtitle_compose"),
+                new WorkflowDefinition.Edge(
+                    "source_transcribe", "subtitle_compose", WorkflowDefinition.DependencyType.OPTIONAL
+                ),
+                new WorkflowDefinition.Edge("timeline_compose", "video_render"),
+                new WorkflowDefinition.Edge(
+                    "bgm_select", "video_render", WorkflowDefinition.DependencyType.OPTIONAL
+                ),
+                new WorkflowDefinition.Edge(
+                    "subtitle_compose", "video_render", WorkflowDefinition.DependencyType.OPTIONAL
+                )
             ),
             // === Gates（人在回路关卡） ===
             List.of(
                 new WorkflowDefinition.Gate("gate_shot_ranking", "shot_ranking", "镜头排序审核", "请检查系统对镜头的质量评分和排名。可手动调整评分、强制入选或排除指定镜头。"),
                 new WorkflowDefinition.Gate("gate_story_edit", "story_plan", "故事安排编辑", "请检查五段式故事安排。可替换、排序、锁定、添加或删除各段落中的镜头。"),
-                new WorkflowDefinition.Gate("gate_timeline_preview", "bgm_select", "时间线与音乐预览", "请预览生成的时间线和背景音乐搭配。确认转场效果和整体节奏。"),
-                new WorkflowDefinition.Gate("gate_render_review", "video_render", "成片预览与字幕配置", "请预览无字幕成片。可配置字幕样式（字号、颜色、位置），确认后生成字幕并渲染最终成片。")
+                new WorkflowDefinition.Gate("gate_timeline_preview", "timeline_compose", "时间线预览", "请预览生成的时间线，确认镜头顺序、转场效果和整体节奏。"),
+                new WorkflowDefinition.Gate("gate_render_review", "video_render", "最终成片预览", "请预览最终成片；BGM 或字幕不可用时，系统会保留可播放的降级版本。")
             )
         );
     }

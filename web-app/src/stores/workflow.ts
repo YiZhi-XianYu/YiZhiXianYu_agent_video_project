@@ -53,7 +53,7 @@
 
    /** 已完成 Task 数量 */
    const completedTaskCount = computed(() =>
-     tasks.value.filter((t) => t.status === 'SUCCEEDED').length,
+     tasks.value.filter((t) => ['SUCCEEDED', 'FAILED', 'SKIPPED'].includes(t.status)).length,
    )
 
    /** Task 总数 */

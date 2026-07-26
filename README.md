@@ -2,7 +2,7 @@
 
 Agent 驱动的智能视频制作流水线暑期实训项目。
 
-当前已完成第八阶段：LLM 优化（strict structured output 支持 GPT-4o / Claude Sonnet 4/4.6，Schema v1.1 简化）、FADE/CROSS_DISSOLVE 转场、BGM 背景音乐混音、ASR 语音转写字幕。用户可在浏览器中编辑 Story Plan 的 shot 分配（替换、排序、锁定、添加、删除），保存多版本方案（自定义版本名），版本 Diff 对比与回退，一键 Apply & Render 生成带有转场效果、背景音乐和字幕的成片。Java 根据受约束的 `WorkflowDefinition` v7（12 节点）为每个素材展开 `video.probe -> video.proxy-generate -> video.shot-detect -> (vision.quality-score + vision.scene-classify + vision.object-detect + vision.person-detect)` 分支，再以工作流级节点汇聚执行 `decision.shot-rank (+ 3 个视觉 Tool) -> planning.story-template -> decision.highlight-select -> timeline.compose`，并并行执行 `audio.bgm-select` 和 `audio.speech-transcribe` 后汇入 `video.render`。Python 使用 FFmpeg 生成代理视频、镜头列表和关键帧，以 CLIP ViT-B-32 零样本模型输出语义标签（场景/物体/人物），以确定性 Tool 输出质量指标、跨素材 Ranking、五段式 Story Plan（LLM-assisted with semantic context）、高光集合、声明式 Timeline（v1.1 支持 FADE/CROSS_DISSOLVE 转场 + AUDIO/SUBTITLE 轨），faster-whisper 输出 SRT 字幕，并通过 xfade/acrossfade/amix/subtitles 滤镜图渲染最终成片。项目、素材集合、Workflow、Task 依赖、Tool Execution、Artifact 和 Custom Story Plan 状态保存到 MySQL。
+当前进入第十阶段：修复第九阶段重构造成的 Workflow、Gate、字幕和前端集成漂移。主链路使用 `WorkflowDefinition` v9（13 个逻辑节点、19 条边、3 条可选依赖），每个素材先执行代理、镜头、质量、VLM 和源时间语音转写；工作流级再执行 Ranking、Story Plan、Highlight、Timeline、BGM、字幕编排和 Render。BGM、源转写或字幕不可用时会安全降级，Render 只强制要求 `TIMELINE`。Java 与 Python 仍只通过 HTTP Tool API 解耦，所有产物保持不可变并保留生产 Task 血缘。当前修复详情和未完成的真实媒体验证见 [第十阶段交接](docs/tenth-stage-handoff.md)。
 
 ## 当前功能
 
@@ -40,24 +40,25 @@ Agent 驱动的智能视频制作流水线暑期实训项目。
 - FADE 转场（淡入 200–2000ms）+ CROSS_DISSOLVE 转场（交叉溶解 200–2000ms），启发式分配：首个 Clip FADE、段落边界 CROSS_DISSOLVE、段内 CUT。
 - FFmpeg 滤镜图从纯 `concat` 升级为 `xfade`/`acrossfade`/`fade`/`afade` 链，支持转场叠加。
 - `audio.bgm-select` Tool：段落角色 → 心情映射（HOOK→energetic, CLIMAX→epic 等），从 `runtime/bgm/` 曲库选择 BGM，渲染时 `amix` 混音（默认 volume 0.3）。
-- `audio.speech-transcribe` Tool：基于 faster-whisper 将视频语音转写为 SRT 字幕（带时间线偏移），渲染时 `subtitles` 滤镜烧录。
+- `audio.source-transcribe` Tool：按素材代理视频生成源时间 `SOURCE_TRANSCRIPT`；`subtitle.compose` 再依据最终 Timeline 映射为 SRT，避免直接对成片二次 ASR/渲染。
+- `video.render@1.1.0` 同时接受 `TIMELINE`、可选 `BGM_AUDIO` 和可选 `SUBTITLE_SRT`；无 BGM、无字幕或素材无音轨时均可降级。
 - 渲染元数据记录 `hasBgm`、`hasSubtitles`，前端时间线展示转场类型指示器和 BGM/字幕状态条。
 
 ## 快速开始
 
-当前本机运行与交接说明见 [第八阶段交接](docs/eighth-stage-handoff.md)。历史记录保留在 [第七阶段交接](docs/seventh-stage-handoff.md)、[第六阶段交接](docs/sixth-stage-handoff.md)、[第五阶段交接](docs/fifth-stage-handoff.md)、[第四阶段交接](docs/fourth-stage-handoff.md)、[第三阶段交接](docs/third-stage-handoff.md)、[第一条垂直链路](docs/first-vertical-slice.md) 和 [第二条垂直链路](docs/second-vertical-slice.md)。
+当前状态与交接说明见 [第十阶段交接](docs/tenth-stage-handoff.md)。历史记录保留在 [第八阶段交接](docs/eighth-stage-handoff.md)、[第七阶段交接](docs/seventh-stage-handoff.md)、[第六阶段交接](docs/sixth-stage-handoff.md)、[第五阶段交接](docs/fifth-stage-handoff.md)、[第四阶段交接](docs/fourth-stage-handoff.md)、[第三阶段交接](docs/third-stage-handoff.md)、[第一条垂直链路](docs/first-vertical-slice.md) 和 [第二条垂直链路](docs/second-vertical-slice.md)。
 
 ```powershell
-# 安装新依赖（第八阶段新增 faster-whisper）
-pip install faster-whisper>=1.0.0
+# 使用已有环境做无服务测试，不会安装或升级依赖
+cd control-plane
+mvn test
 
-# 终端 1
-scripts\start-tool-service.cmd
+cd ..\tool-service
+C:\software\Anaconda\envs\agent-video-pipeline\python.exe -m pytest -q
 
-# 终端 2
-$env:MYSQL_USER = "root"
-$env:MYSQL_PASSWORD = "你的 MySQL 密码"
-scripts\start-control-plane.cmd
+# Docker 配置可先做静态校验；实际启动步骤见第十阶段交接
+cd ..
+docker compose config
 ```
 
 访问 `http://127.0.0.1:8080`。
@@ -72,4 +73,4 @@ scripts\start-control-plane.cmd
 
 Java 控制面采用单 Maven 工程，模块职责文档集中在 [`docs/modules/control-plane`](docs/modules/control-plane/README.md)，不再保留容易与 Maven 子模块混淆的 `control-plane/modules` 目录。
 
-当前链路不使用 Docker。MySQL 使用本机服务，Python 使用项目专用 Conda 环境，本地目录暂时代替对象存储。
+Docker Compose 已提供 MySQL、Java Control Plane 和 Python Tool Service 的隔离运行方案，共享 `runtime` volume 以保证 Tool Artifact 可被 Java 下载。不要把密码、API Key、BGM 文件或本地缓存提交到 Git。

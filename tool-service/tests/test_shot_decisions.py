@@ -200,14 +200,14 @@ def test_timeline_validator_rejects_gaps_and_source_overflow() -> None:
     errors = TimelineValidator.validate(timeline)
 
     assert "clips[0] source range exceeds its Shot" in errors
-    assert "clips[0] does not start at the previous Clip boundary" in errors
+    assert "clips[0] has an invalid Timeline position for CUT" in errors
     assert "Timeline duration does not match the VIDEO track" in errors
 
 
 def test_timeline_validator_accepts_fade_and_cross_dissolve() -> None:
     timeline = {
         "canvas": {"width": 1280, "height": 720, "fps": 30},
-        "durationMs": 6500,
+        "durationMs": 6000,
         "tracks": [{"type": "VIDEO", "clips": [
             {
                 "clipId": "clip-a", "shotId": "shot-a", "assetId": "a1",
@@ -224,7 +224,7 @@ def test_timeline_validator_accepts_fade_and_cross_dissolve() -> None:
                 "sourceProxyArtifactId": "p2",
                 "sourceInMs": 1000, "sourceOutMs": 4500,
                 "sourceShotStartMs": 0, "sourceShotEndMs": 5000,
-                "timelineInMs": 3000, "timelineOutMs": 6500,
+                "timelineInMs": 2500, "timelineOutMs": 6000,
                 "playbackRate": 1.0,
                 "transitionIn": {"type": "CROSS_DISSOLVE", "durationMs": 500},
                 "selectionRank": 2, "storyRole": "INTRO", "selectionReasons": [],
