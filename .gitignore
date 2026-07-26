@@ -23,3 +23,7 @@ tool-service/runtime/
 
 # Environment
 .env
+
+# Dependencies
+web-app/node_modules/
+.conda/
