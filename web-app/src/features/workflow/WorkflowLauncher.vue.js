@@ -31,7 +31,7 @@ async function launch() {
         }
         const run = await createAnalysisRun(props.projectId, request);
         uiStore.showToast('Workflow 已启动', 'success');
-        router.push(`/projects/${props.projectId}/runs/${run.id}`);
+        router.push(`/projects/${props.projectId}/runs/${run.workflowRunId}`);
     }
     catch (e) {
         const msg = e instanceof Error ? e.message : '启动 Workflow 失败';

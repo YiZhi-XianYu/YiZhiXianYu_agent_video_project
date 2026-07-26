@@ -50,7 +50,7 @@ async function launch(): Promise<void> {
     }
     const run = await createAnalysisRun(props.projectId, request)
     uiStore.showToast('Workflow 已启动', 'success')
-    router.push(`/projects/${props.projectId}/runs/${run.id}`)
+    router.push(`/projects/${props.projectId}/runs/${run.workflowRunId}`)
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : '启动 Workflow 失败'
     uiStore.showToast(msg, 'error')

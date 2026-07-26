@@ -497,13 +497,23 @@ public class WorkflowExecutionService {
 
 
     /** 安全反序列化 WorkflowDefinition，忽略格式错误 */
+    /**
+     * 安全反序列化 WorkflowDefinition。
+     * 如果 JSON 中缺少 gates 字段（旧版本定义），返回无 Gate 的 definition 以保持向后兼容。
+     * 反序列化失败时记录警告日志并返回 null，Gate 将不会触发。
+     */
     private WorkflowDefinition safeParseDefinition(WorkflowRunEntity workflow) {
-        if (workflow.getDefinitionJson() == null || workflow.getDefinitionJson().isBlank()) {
+        var json = workflow.getDefinitionJson();
+        if (json == null || json.isBlank()) {
             return null;
         }
         try {
-            return objectMapper.readValue(workflow.getDefinitionJson(), WorkflowDefinition.class);
+            return objectMapper.readValue(json, WorkflowDefinition.class);
         } catch (Exception e) {
+            // 反序列化失败通常是因为 JSON 格式是旧版本的 WorkflowDefinition（缺少 gates 字段）
+            // 此时返回 null，Gate 不会触发，Workflow 将按旧行为全自动运行
+            System.err.println("[WARN] Failed to parse WorkflowDefinition JSON for workflow "
+                + workflow.getId() + ": " + e.getMessage());
             return null;
         }
     }
@@ -513,6 +523,37 @@ public class WorkflowExecutionService {
      * 规则：如果某个上游 Task 完成后应该触发 Gate（即 definition 中有一个 Gate 的 afterNodeKey
      * 等于该上游 Task 的 nodeKey），且该 Gate 的下游 Task 正是当前 task，则返回该 Gate。
      */
+
+    /**
+     * 从 definitionJson 中直接提取 Gate 列表（避免完整 WorkflowDefinition 反序列化失败）。
+     * 使用 Jackson Tree API，即使 Node 结构无法反序列化也能提取 gates。
+     */
+    private List<WorkflowDefinition.Gate> parseGatesFromJson(String definitionJson) {
+        if (definitionJson == null || definitionJson.isBlank()) {
+            return List.of();
+        }
+        try {
+            var root = objectMapper.readTree(definitionJson);
+            var gatesNode = root.get("gates");
+            if (gatesNode == null || !gatesNode.isArray()) {
+                return List.of();
+            }
+            var gates = new java.util.ArrayList<WorkflowDefinition.Gate>();
+            for (var node : gatesNode) {
+                gates.add(new WorkflowDefinition.Gate(
+                    node.get("gateKey").asText(),
+                    node.get("afterNodeKey").asText(),
+                    node.get("label").asText(),
+                    node.get("description").asText()
+                ));
+            }
+            return gates;
+        } catch (Exception e) {
+            System.err.println("[WARN] Failed to parse gates from definition JSON: " + e.getMessage());
+            return List.of();
+        }
+    }
+
     private WorkflowDefinition.Gate findGateForTask(
         WorkflowDefinition definition,
         TaskRunEntity task,
@@ -595,8 +636,20 @@ public class WorkflowExecutionService {
         var dependencies = dependencyRepository.findByTaskRunIdIn(tasksById.keySet().stream().toList()).stream()
             .collect(Collectors.groupingBy(TaskDependencyEntity::getTaskRunId));
 
-        // 解析 WorkflowDefinition，用于 Gate 检查
+        // 解析 WorkflowDefinition 和 gates（优先完整反序列化，失败则直接提取 gates）
         var definition = safeParseDefinition(workflow);
+        if (definition == null || definition.gates() == null || definition.gates().isEmpty()) {
+            // 完整反序列化失败时，尝试直接从 JSON 提取 gates
+            var directGates = parseGatesFromJson(workflow.getDefinitionJson());
+            if (!directGates.isEmpty()) {
+                // 构造一个最小 WorkflowDefinition 仅携带 gates 信息
+                definition = new WorkflowDefinition(
+                    workflow.getDefinitionKey() != null ? workflow.getDefinitionKey() : "",
+                    workflow.getDefinitionVersion() != null ? workflow.getDefinitionVersion() : 0,
+                    List.of(), List.of(), directGates
+                );
+            }
+        }
 
         var changed = true;
         while (changed) {
@@ -656,12 +709,19 @@ public class WorkflowExecutionService {
         var tasks = taskRepository.findByWorkflowRunIdOrderByCreatedAtAsc(workflowRunId);
         var taskIds = tasks.stream().map(TaskRunEntity::getId).toList();
 
-        // 解析 definitionJson 获取 Gate 列表
+        // 解析 gates —— 优先使用 gatesJson 字段（更可靠），fallback 到完整反序列化
         var gates = new java.util.ArrayList<GateDef>();
-        var def = safeParseDefinition(workflow);
-        if (def != null && def.gates() != null) {
-            for (var g : def.gates()) {
+        var gatesJson = workflow.getGatesJson();
+        if (gatesJson != null && !gatesJson.isBlank()) {
+            for (var g : parseGatesFromJson(gatesJson)) {
                 gates.add(new GateDef(g.gateKey(), g.label(), g.description()));
+            }
+        } else {
+            var def = safeParseDefinition(workflow);
+            if (def != null && def.gates() != null) {
+                for (var g : def.gates()) {
+                    gates.add(new GateDef(g.gateKey(), g.label(), g.description()));
+                }
             }
         }
         var dependencies = dependencyRepository.findByTaskRunIdIn(taskIds).stream()

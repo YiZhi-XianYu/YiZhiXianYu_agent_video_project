@@ -48,6 +48,10 @@ public class WorkflowRunEntity extends BaseEntity {
     @Column(name = "current_gate_key", length = 100)
     private String currentGateKey;
 
+    @Lob
+    @Column(name = "gates_json", columnDefinition = "LONGTEXT")
+    private String gatesJson;
+
     private Instant startedAt;
 
     private Instant completedAt;
@@ -162,6 +166,8 @@ public class WorkflowRunEntity extends BaseEntity {
     public boolean isAutoMode() { return autoMode; }
     public void setAutoMode(boolean autoMode) { this.autoMode = autoMode; }
     public String getCurrentGateKey() { return currentGateKey; }
+    public String getGatesJson() { return gatesJson; }
+    public void setGatesJson(String gatesJson) { this.gatesJson = gatesJson; }
 
     public int getProgress() {
         return progress;

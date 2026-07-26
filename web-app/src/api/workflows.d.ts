@@ -10,8 +10,16 @@ export declare function getWorkflowRun(runId: string): Promise<WorkflowRunDetail
 /**
  * 创建多素材分析 Workflow
  */
-export declare function createAnalysisRun(projectId: string, request: CreateAnalysisRunRequest): Promise<WorkflowRun>;
+export declare function createAnalysisRun(projectId: string, request: CreateAnalysisRunRequest): Promise<{
+    workflowRunId: string;
+    status: string;
+    statusUrl: string;
+}>;
 /**
  * 继续暂停的 Workflow（通过 Gate）
  */
-export declare function continueWorkflow(runId: string): Promise<WorkflowRun>;
+export declare function continueWorkflow(runId: string): Promise<{
+    workflowRunId: string;
+    status: string;
+    statusUrl: string;
+}>;

@@ -30,8 +30,8 @@
  export async function createAnalysisRun(
    projectId: string,
    request: CreateAnalysisRunRequest,
- ): Promise<WorkflowRun> {
-   return post<WorkflowRun>(
+ ): Promise<{ workflowRunId: string; status: string; statusUrl: string }> {
+   return post<{ workflowRunId: string; status: string; statusUrl: string }>(
      `/api/v1/projects/${projectId}/multi-asset-analysis-runs`,
      request,
    )
@@ -40,6 +40,6 @@
  /**
   * 继续暂停的 Workflow（通过 Gate）
   */
- export async function continueWorkflow(runId: string): Promise<WorkflowRun> {
-   return post<WorkflowRun>(`/api/v1/workflow-runs/${runId}/continue`)
+ export async function continueWorkflow(runId: string): Promise<{ workflowRunId: string; status: string; statusUrl: string }> {
+   return post<{ workflowRunId: string; status: string; statusUrl: string }>(`/api/v1/workflow-runs/${runId}/continue`)
  }
