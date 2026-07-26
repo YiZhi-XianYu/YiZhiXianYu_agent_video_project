@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
     artifact_root: Path = Path("runtime/artifacts")
+    execution_store_path: Path = Path("runtime/executions/tool-executions.sqlite3")
     callback_timeout_seconds: float = 10.0
 
     # LLM configuration (loaded from .env or environment)

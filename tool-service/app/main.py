@@ -15,6 +15,7 @@ from app.execution.service import execution_service
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     settings.artifact_root.mkdir(parents=True, exist_ok=True)
+    execution_service.start()
     yield
     execution_service.shutdown()
 

@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN mkdir -p runtime/artifacts runtime/bgm
+RUN mkdir -p runtime/artifacts runtime/bgm runtime/executions
 
 EXPOSE 8090
 

@@ -53,6 +53,7 @@ services:
       TOOL_SERVICE_HOST: "0.0.0.0"
       TOOL_SERVICE_PORT: "8090"
       TOOL_SERVICE_ARTIFACT_ROOT: /app/runtime/artifacts
+      TOOL_SERVICE_EXECUTION_STORE_PATH: /app/runtime/executions/tool-executions.sqlite3
       TOOL_SERVICE_BGM_LIBRARY_ROOT: /app/runtime/bgm
       TOOL_SERVICE_LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
       TOOL_SERVICE_LLM_API_KEY: ${LLM_API_KEY:-}

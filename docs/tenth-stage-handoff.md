@@ -65,6 +65,11 @@ timeline.compose + audio.bgm-select(optional) + subtitle.compose(optional) -> vi
 - Render 可在无 BGM、无字幕和源视频无音轨时构造降级滤镜图。
 - 修正 `decision.highlight-select` Manifest，声明实现实际读取的 `SHOT_RANKING`。
 - 删除 `audio.transcribe-final` 与 `video.render-subtitles` 后置 Tool。
+- 新增标准库 SQLite Execution Journal，完整持久化 `ToolExecutionRequest` 和 `ToolExecutionRecord`，不再依赖进程内字典保存执行记录。
+- SQLite 文件位于共享 Docker volume 的 `/app/runtime/executions/tool-executions.sqlite3`，启用 WAL、`synchronous=FULL` 和完整性约束；密码、API Key 和凭据不进入该数据库。
+- Tool Service 重启后，终态记录和输出仍可按原 Execution ID 查询；相同幂等键仍返回原 Execution ID，不会创建第二条执行记录。
+- 启动时将遗留的 `QUEUED/RUNNING` 记录按原 Execution ID 重新排队，并通过进程内调度集合防止同一实例重复提交。
+- 恢复语义为 at-least-once：服务中断时当前 FFmpeg/ASR 进程不会从中间检查点续跑，而是以同一 Execution ID 重新执行；中断前已写出但未登记成功的 Artifact 可能成为孤立的不可变 Artifact。
 
 ### 3.3 Vue 前端与构建
 
@@ -89,15 +94,19 @@ timeline.compose + audio.bgm-select(optional) + subtitle.compose(optional) -> vi
 ## 4. 测试与验证结果
 
 - Java：`mvn test`，19 个测试全部通过。
-- Python：专用 Conda 环境及 Docker 镜像环境运行 `pytest -q`，58 个测试全部通过。
+- Python：Docker 镜像环境在禁用外部 LLM 的确定性条件下运行 `pytest -q`，64 个测试全部通过。
 - 新增 Java 回归覆盖：已完成 Gate 不重复暂停、终点 Gate、可选依赖失败仍放行 Render、Render 真实输入组装。
 - 新增 Python 回归覆盖：v9 的 13 个 Tool 名称/版本和关键 Manifest 输入契约、CLIP 空/无效本地路径回退、字幕标签拼接和 FFmpeg 错误重试分类。
+- 新增 6 个 Python 持久化回归场景：成功输出、失败错误、跨实例幂等键、`QUEUED` 恢复、`RUNNING` 恢复和运行中重复提交防重。
 - 新增 Java 回归覆盖：超长 Tool 错误在 2000 字符字段边界内保留首尾诊断信息。
 - `docker compose config` 成功解析，三个镜像构建成功；Vue 生产构建已在 Docker 镜像构建阶段完成。
 - MySQL、Java Control Plane 和 Python Tool Service 三个容器启动成功；Flyway 校验通过，数据库保持 V1 且无需新增迁移。
 - 重新创建 Java 容器后，PID 1 以 `app` 用户运行，且 `app` 用户可写 `/app/runtime/storage`；上传目录权限修复不再依赖手工 `docker exec`。
 - 修复后真实 Workflow `a83f9955-7414-4b35-9b6f-028e693ec248` 已 `SUCCEEDED 100%`；`video.render@1.1.0` 首次执行成功、无重试，并生成 `RENDERED_VIDEO` Artifact。
 - 浏览器回归通过：首页项目卡片、项目详情、Workflow 历史、Workflow 监控、全局 LLM 审计及深层路由刷新均可用；控制台无 warning/error。
+- Tool Service 镜像重新构建并单独部署成功；终态执行 `tex_a00c9e370e7c4a19bbc59187b9b19fc0` 在容器重启后仍以同 ID 返回 `SUCCEEDED` 和完整输出。
+- 运行中执行 `tex_ab4b5f9201c6487982b406e1fbc0f26e` 在 Tool Service 被强制终止后，以原 ID 自动恢复并从 `RUNNING` 收敛到 `SUCCEEDED`；再次提交相同幂等键仍返回该 ID。
+- 容器内 SQLite `PRAGMA integrity_check` 返回 `ok`；验证期间 Java Control Plane 和 MySQL 未重建，系统/Conda 环境未修改。
 
 ## 5. 数据库变更
 
@@ -119,7 +128,7 @@ timeline.compose + audio.bgm-select(optional) + subtitle.compose(optional) -> vi
 - LLM 在线成功路径和断网/Key 缺失回退；
 - 最小媒体的 CUT/FADE/CROSS_DISSOLVE 混合渲染；
 - 无音轨、多音轨、Windows 字幕路径转义、BGM 音量和最终时长；
-- 服务在 RUNNING/RETRY_WAIT/PAUSED 状态重启后的数据库恢复；
+- Java Workflow 在 `RETRY_WAIT/PAUSED` 状态重启后的数据库恢复；Python Tool Execution 的 `QUEUED/RUNNING` 重启恢复已完成真实容器验证；
 - Vue 生产构建、浏览器控制台和真实 Gate 编辑/保存行为。
 
 ## 7. 下一步建议顺序
