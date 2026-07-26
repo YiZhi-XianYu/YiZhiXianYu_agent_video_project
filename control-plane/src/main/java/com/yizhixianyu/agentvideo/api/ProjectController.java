@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
+import java.time.Instant;
 
 @RestController
 @RequestMapping("/api/v1/projects")
@@ -69,19 +70,22 @@ public class ProjectController {
     public record CreateProjectRequest(@NotBlank String name) {
     }
 
-    public record ProjectView(String id, String name, String status) {
+    public record ProjectView(String id, String name, String status, Instant createdAt, Instant updatedAt) {
         static ProjectView from(ProjectEntity entity) {
-            return new ProjectView(entity.getId(), entity.getName(), entity.getStatus());
+            return new ProjectView(
+                entity.getId(), entity.getName(), entity.getStatus(), entity.getCreatedAt(), entity.getUpdatedAt()
+            );
         }
     }
 
     public record AssetView(
-        String id, String projectId, String type, String status, String fileName, long sizeBytes, String contentHash
+        String id, String projectId, String type, String status, String fileName, long sizeBytes, String contentHash,
+        Instant createdAt, Instant updatedAt
     ) {
         static AssetView from(AssetEntity entity) {
             return new AssetView(
                 entity.getId(), entity.getProjectId(), entity.getType(), entity.getStatus(), entity.getFileName(),
-                entity.getSizeBytes(), entity.getContentHash()
+                entity.getSizeBytes(), entity.getContentHash(), entity.getCreatedAt(), entity.getUpdatedAt()
             );
         }
     }

@@ -1,24 +1,19 @@
 <script setup lang="ts">
-/**
- * LLM 审计面板
- *
- * 展示 Workflow 中 LLM 相关的审计记录。当前为展示骨架，
- * 后续接入 LlmAuditRecord API 后替换数据源。
- */
-import { ref, onMounted } from 'vue'
-import { ShieldAlert, Cpu, Zap, Clock, AlertTriangle, CheckCircle2 } from 'lucide-vue-next'
-'vue'
+import { onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { AlertTriangle, CheckCircle2, Clock, Cpu, Loader2, ShieldAlert, Zap } from 'lucide-vue-next'
+import { useProjectStore } from '@/stores/project'
+import { getWorkflowRun, listWorkflowRuns } from '@/api/workflows'
 
-defineProps<{
-  projectId: string
+const props = defineProps<{
+  projectId?: string
 }>()
 
-
-
-// 审计记录骨架（后续替换为 API 数据）
 interface AuditRecord {
   id: string
-  taskName: string
+  projectId: string
+  projectName: string
+  runId: string
   provider: string
   model: string
   latencyMs: number
@@ -27,98 +22,124 @@ interface AuditRecord {
   createdAt: string
 }
 
-const records = ref<AuditRecord[]>([])
-const loading = ref(false)
+interface StoryPlanPayload {
+  llmAudit?: {
+    requestId?: string
+    provider?: string
+    model?: string
+    durationMs?: number
+    finalSource?: string
+    validationErrors?: unknown[]
+    timestamp?: string
+  }
+}
 
-onMounted(async () => {
+const router = useRouter()
+const projectStore = useProjectStore()
+const records = ref<AuditRecord[]>([])
+const loading = ref(true)
+const error = ref<string | null>(null)
+
+onMounted(loadRecords)
+
+async function loadRecords(): Promise<void> {
   loading.value = true
+  error.value = null
   try {
-    // TODO: 接入实际 LLM 审计 API
-    // records.value = await getAuditRecords(props.projectId)
-  } catch {
-    // 静默
+    await projectStore.fetchProjects()
+    const projects = props.projectId
+      ? projectStore.projects.filter((project) => project.id === props.projectId)
+      : projectStore.projects
+    const collected: AuditRecord[] = []
+
+    for (const project of projects) {
+      const runs = await listWorkflowRuns(project.id)
+      for (const run of runs) {
+        const detail = await getWorkflowRun(run.id)
+        const artifact = detail.tasks
+          .flatMap((task) => task.artifacts)
+          .find((item) => item.type === 'STORY_PLAN')
+        if (!artifact) continue
+
+        const response = await fetch(artifact.contentUrl)
+        if (!response.ok) continue
+        const story = await response.json() as StoryPlanPayload
+        const audit = story.llmAudit
+        if (!audit) continue
+
+        collected.push({
+          id: audit.requestId || `${run.id}:story-plan`,
+          projectId: project.id,
+          projectName: project.name,
+          runId: run.id,
+          provider: audit.provider || 'none',
+          model: audit.model || 'none',
+          latencyMs: Number(audit.durationMs ?? 0),
+          result: audit.finalSource === 'LLM' ? 'ai' : 'fallback',
+          errors: (audit.validationErrors ?? []).map(String),
+          createdAt: audit.timestamp || run.createdAt,
+        })
+      }
+    }
+
+    records.value = collected.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'LLM 审计记录加载失败'
   } finally {
     loading.value = false
   }
-})
+}
 
 function formatLatency(ms: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`
 }
 
-function formatDate(d: string): string {
-  return new Date(d).toLocaleString('zh-CN', {
-    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-  })
+function formatDate(value: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '时间未知' : date.toLocaleString('zh-CN')
+}
+
+function openRun(record: AuditRecord): void {
+  router.push(`/projects/${record.projectId}/runs/${record.runId}`)
 }
 </script>
 
 <template>
-  <div class="max-w-4xl mx-auto px-6 py-8">
+  <div class="max-w-5xl mx-auto px-6 py-8">
     <header class="mb-8">
       <p class="section-eyebrow mb-2">LLM AUDIT</p>
       <h1 class="text-2xl font-bold text-surface-100 flex items-center gap-2">
-        <ShieldAlert class="w-6 h-6 text-accent" />
-        LLM 审计面板
+        <ShieldAlert class="w-6 h-6 text-accent" /> LLM 审计
       </h1>
-      <p class="text-sm text-surface-400 mt-2">
-        追踪每次 LLM 调用的 Provider、模型、延迟、校验结果与 fallback 情况。
-      </p>
+      <p class="text-sm text-surface-400 mt-2">从不可变 Story Plan Artifact 汇总 Provider、模型、校验结果和安全回退记录。</p>
     </header>
 
-    <!-- 统计卡片 -->
-    <div class="grid grid-cols-4 gap-4 mb-6">
-      <div class="card text-center">
-        <p class="text-2xl font-bold text-surface-100">{{ records.length }}</p>
-        <p class="text-xs text-surface-500 mt-1">总调用次数</p>
-      </div>
-      <div class="card text-center">
-        <p class="text-2xl font-bold text-success">{{ records.filter(r => r.result === 'ai').length }}</p>
-        <p class="text-xs text-surface-500 mt-1">AI 采纳</p>
-      </div>
-      <div class="card text-center">
-        <p class="text-2xl font-bold text-warning">{{ records.filter(r => r.result === 'fallback').length }}</p>
-        <p class="text-xs text-surface-500 mt-1">Fallback</p>
-      </div>
-      <div class="card text-center">
-        <p class="text-2xl font-bold text-surface-300">{{ records.length > 0 ? Math.round(records.filter(r => r.result === 'ai').length / records.length * 100) : 0 }}%</p>
-        <p class="text-xs text-surface-500 mt-1">采纳率</p>
-      </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div class="card text-center"><p class="text-2xl font-bold">{{ records.length }}</p><p class="text-xs text-surface-500 mt-1">总记录</p></div>
+      <div class="card text-center"><p class="text-2xl font-bold text-success">{{ records.filter(r => r.result === 'ai').length }}</p><p class="text-xs text-surface-500 mt-1">LLM 采纳</p></div>
+      <div class="card text-center"><p class="text-2xl font-bold text-warning">{{ records.filter(r => r.result === 'fallback').length }}</p><p class="text-xs text-surface-500 mt-1">安全回退</p></div>
+      <div class="card text-center"><p class="text-2xl font-bold text-surface-300">{{ records.length ? Math.round(records.filter(r => r.result === 'ai').length / records.length * 100) : 0 }}%</p><p class="text-xs text-surface-500 mt-1">采纳率</p></div>
     </div>
 
-    <!-- 记录列表 -->
-    <div v-if="loading" class="text-center py-8 text-surface-500 text-sm">加载审计记录...</div>
-
-    <div v-else-if="records.length === 0" class="card text-center py-12">
-      <ShieldAlert class="w-10 h-10 text-surface-600 mx-auto mb-3" />
-      <p class="text-surface-400 text-sm">暂无 LLM 审计记录</p>
-      <p class="text-surface-600 text-xs mt-1">运行 Workflow 且接入 LLM 后将在此显示审计信息</p>
-    </div>
-
+    <div v-if="loading" class="flex justify-center py-16 text-surface-400"><Loader2 class="w-5 h-5 animate-spin mr-2" />正在加载审计记录...</div>
+    <div v-else-if="error" class="card border-danger/30 text-danger text-sm">{{ error }}<button class="btn-secondary ml-3 text-xs" @click="loadRecords">重试</button></div>
+    <div v-else-if="records.length === 0" class="card text-center py-12 text-surface-400">暂无 Story Plan LLM 审计记录</div>
     <div v-else class="space-y-3">
-      <div
-        v-for="r in records"
-        :key="r.id"
-        class="card hover:bg-surface-700/30 transition-colors"
-      >
-        <div class="flex items-center justify-between mb-2">
-          <span class="text-sm font-medium text-surface-200">{{ r.taskName }}</span>
-          <span :class="['flex items-center gap-1 text-xs', r.result === 'ai' ? 'text-success' : 'text-warning']">
-            <CheckCircle2 v-if="r.result === 'ai'" class="w-3.5 h-3.5" />
-            <AlertTriangle v-else class="w-3.5 h-3.5" />
-            {{ r.result === 'ai' ? 'AI 采纳' : 'Fallback' }}
+      <button v-for="record in records" :key="record.id" class="card w-full text-left hover:border-accent/40 transition-colors" @click="openRun(record)">
+        <div class="flex flex-wrap items-center justify-between gap-3 mb-2">
+          <div><p class="text-sm font-medium text-surface-100">{{ record.projectName }}</p><p class="text-xs text-surface-500 mt-1">{{ formatDate(record.createdAt) }}</p></div>
+          <span :class="['flex items-center gap-1 text-xs', record.result === 'ai' ? 'text-success' : 'text-warning']">
+            <CheckCircle2 v-if="record.result === 'ai'" class="w-3.5 h-3.5" /><AlertTriangle v-else class="w-3.5 h-3.5" />
+            {{ record.result === 'ai' ? 'LLM 采纳' : '安全回退' }}
           </span>
         </div>
-        <div class="flex gap-4 text-xs text-surface-500">
-          <span class="flex items-center gap-1"><Cpu class="w-3 h-3" />{{ r.provider }}</span>
-          <span class="flex items-center gap-1"><Zap class="w-3 h-3" />{{ r.model }}</span>
-          <span class="flex items-center gap-1"><Clock class="w-3 h-3" />{{ formatLatency(r.latencyMs) }}</span>
-          <span>{{ formatDate(r.createdAt) }}</span>
+        <div class="flex flex-wrap gap-4 text-xs text-surface-500">
+          <span class="flex items-center gap-1"><Cpu class="w-3 h-3" />{{ record.provider }}</span>
+          <span class="flex items-center gap-1"><Zap class="w-3 h-3" />{{ record.model }}</span>
+          <span class="flex items-center gap-1"><Clock class="w-3 h-3" />{{ formatLatency(record.latencyMs) }}</span>
         </div>
-        <div v-if="r.errors.length > 0" class="mt-2 text-xs text-danger/80">
-          <span v-for="(e, i) in r.errors" :key="i" class="block">{{ e }}</span>
-        </div>
-      </div>
+        <p v-for="(item, index) in record.errors.slice(0, 2)" :key="index" class="text-xs text-danger/80 mt-2">{{ item }}</p>
+      </button>
     </div>
   </div>
 </template>

@@ -2,7 +2,7 @@
 
 > 文档日期：2026-07-27  
 > 工作基线：`C:\Users\XRZ\Desktop\ninth\WwDa3B884n8dj`  
-> 阶段状态：代码与无服务测试已收口；Docker/真实多素材/真实 FFmpeg 端到端尚未执行
+> 阶段状态：代码、自动测试和 Docker 三服务启动已验证；真实多素材/真实 FFmpeg 端到端尚未执行
 
 ## 1. 本阶段目标
 
@@ -76,15 +76,28 @@ timeline.compose + audio.bgm-select(optional) + subtitle.compose(optional) -> vi
 - 删除 `web-app/src` 下误提交的 `.js/.d.ts` 编译产物。
 - 删除 Java static 目录中与 Vue 源码不一致的旧 hash bundle；Docker 构建时先构建 Vue，再复制到 Java JAR。
 - Docker 中 Java/Python 共享同一个 runtime volume，Artifact URI 对两个服务可见。
+- Java 容器入口会初始化共享 runtime 顶层目录权限，再降权为 `app` 用户运行，修复新建 Volume 后上传视频返回 500 的问题。
+- 修复未配置 `CLIP_LOCAL_MODEL_PATH` 时空字符串被误判为当前目录、继而传给 Hugging Face 形成空 Repo ID 的问题；现在仅接受明确存在的本地目录，否则使用公开 CLIP 模型 ID。
+- 修复字幕滤镜对已带方括号的视频标签重复包裹，避免生成 `[[vcN]]subtitles=...` 的非法 FFmpeg filter graph。
+- FFmpeg 滤镜/参数解析错误现在明确标记为不可重试，临时资源错误仍可重试，避免确定性失败重复执行相同命令。
+- Java 在实体边界把超过 2000 字符的 Tool 错误压缩为“首部 + 截断标记 + 尾部”，避免数据库事务因错误文本过长反复回滚。
+- 前端基础导航改为真实 `RouterLink`：项目、Workflow 历史、LLM 审计均有独立有效路由，不再通过 404 兜底返回首页却错误高亮。
+- `AppShell` 只负责布局并渲染 slot，根组件成为唯一 `RouterView` 所有者，消除重复路由出口。
+- 新增跨项目 Workflow 历史页；LLM 审计页从不可变 `STORY_PLAN` Artifact 聚合真实 `llmAudit`，不再展示空数据骨架。
+- Java 项目/素材 DTO 补齐创建与更新时间，前端日期契约与后端一致，不再显示 `Invalid Date`。
 
 ## 4. 测试与验证结果
 
-- Java：`mvn test`，18 个测试全部通过。
-- Python：专用 Conda 环境运行 `pytest -q`，51 个测试全部通过。
+- Java：`mvn test`，19 个测试全部通过。
+- Python：专用 Conda 环境及 Docker 镜像环境运行 `pytest -q`，58 个测试全部通过。
 - 新增 Java 回归覆盖：已完成 Gate 不重复暂停、终点 Gate、可选依赖失败仍放行 Render、Render 真实输入组装。
-- 新增 Python 回归覆盖：v9 的 13 个 Tool 名称/版本和关键 Manifest 输入契约。
-- `docker compose config` 成功解析；未启动 Docker Desktop、MySQL 或任何服务。
-- 前端未执行构建：新 clone 中没有 `node_modules`，本阶段遵守“不安装/升级依赖和不修改本机环境”的约束。
+- 新增 Python 回归覆盖：v9 的 13 个 Tool 名称/版本和关键 Manifest 输入契约、CLIP 空/无效本地路径回退、字幕标签拼接和 FFmpeg 错误重试分类。
+- 新增 Java 回归覆盖：超长 Tool 错误在 2000 字符字段边界内保留首尾诊断信息。
+- `docker compose config` 成功解析，三个镜像构建成功；Vue 生产构建已在 Docker 镜像构建阶段完成。
+- MySQL、Java Control Plane 和 Python Tool Service 三个容器启动成功；Flyway 校验通过，数据库保持 V1 且无需新增迁移。
+- 重新创建 Java 容器后，PID 1 以 `app` 用户运行，且 `app` 用户可写 `/app/runtime/storage`；上传目录权限修复不再依赖手工 `docker exec`。
+- 修复后真实 Workflow `a83f9955-7414-4b35-9b6f-028e693ec248` 已 `SUCCEEDED 100%`；`video.render@1.1.0` 首次执行成功、无重试，并生成 `RENDERED_VIDEO` Artifact。
+- 浏览器回归通过：首页项目卡片、项目详情、Workflow 历史、Workflow 监控、全局 LLM 审计及深层路由刷新均可用；控制台无 warning/error。
 
 ## 5. 数据库变更
 
@@ -102,7 +115,6 @@ timeline.compose + audio.bgm-select(optional) + subtitle.compose(optional) -> vi
 
 以下内容没有在本阶段宣称完成：
 
-- Docker 镜像完整构建与三服务启动；
 - 真实多素材 Workflow 从上传到最终 Render 的完整收敛；
 - LLM 在线成功路径和断网/Key 缺失回退；
 - 最小媒体的 CUT/FADE/CROSS_DISSOLVE 混合渲染；
@@ -112,12 +124,10 @@ timeline.compose + audio.bgm-select(optional) + subtitle.compose(optional) -> vi
 
 ## 7. 下一步建议顺序
 
-1. 启动 Docker Desktop，只执行 `docker compose build`，确认 Vue、Java、Python 镜像可构建。
-2. 执行 `docker compose up -d`，检查 MySQL health、Flyway 和两个 HTTP 服务。
-3. 使用最小无音轨视频验证 Render 无 BGM/无字幕降级。
-4. 使用两段短素材验证 CUT/FADE/CROSS_DISSOLVE、音频映射和成片总时长。
-5. 运行真实多素材 Workflow，并在四个 Gate 分别刷新页面/重启服务验证恢复。
-6. 完成前端实际编辑提交 API；当前 Gate 组件展示和本地编辑状态已恢复，但编辑保存仍需单独验收。
+1. 使用最小无音轨视频验证 Render 无 BGM/无字幕降级。
+2. 使用两段短素材验证 CUT/FADE/CROSS_DISSOLVE、音频映射和成片总时长。
+3. 运行真实多素材 Workflow，并在四个 Gate 分别刷新页面/重启服务验证恢复。
+4. 完成前端实际编辑提交 API；当前 Gate 组件展示和本地编辑状态已恢复，但编辑保存仍需单独验收。
 
 ## 8. 安全与仓库卫生
 

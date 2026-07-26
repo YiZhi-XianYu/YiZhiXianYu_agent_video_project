@@ -87,6 +87,9 @@ class ExecutionService:
 
     @staticmethod
     def _is_retryable(exc: Exception) -> bool:
+        explicit_retryable = getattr(exc, "retryable", None)
+        if isinstance(explicit_retryable, bool):
+            return explicit_retryable
         # Contract and parameter failures are deterministic; runtime and I/O failures may recover.
         return not isinstance(exc, ValueError)
 

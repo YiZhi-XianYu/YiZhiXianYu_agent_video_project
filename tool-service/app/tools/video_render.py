@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.core.config import settings
+from app.core.errors import ToolExecutionError
 from app.core.models import ArtifactDescriptor, ToolExecutionRequest
 from app.tools.timeline_validator import TimelineValidator
 from app.tools.artifact_json import matching_inputs, read_json_artifact
@@ -100,7 +101,7 @@ class VideoRenderTool:
         stderr = process.stderr.read() if process.stderr is not None else ""
         return_code = process.wait()
         if return_code != 0:
-            raise RuntimeError(stderr.strip() or "ffmpeg render failed")
+            raise _ffmpeg_render_error(stderr)
         if not output_path.is_file() or output_path.stat().st_size == 0:
             raise RuntimeError("ffmpeg completed without producing a rendered video")
 
@@ -361,7 +362,7 @@ def _build_filter_graph(
         # Escape backslashes and colons for FFmpeg subtitles filter on Windows
         srt_escaped = str(srt_path).replace("\\", "/").replace(":", "\\:")
         transition_filters.append(
-            f"[{final_video_label}]subtitles='{srt_escaped}':"
+            f"{final_video_label}subtitles='{srt_escaped}':"
             f"force_style='FontSize=24,PrimaryColour=&H00FFFFFF,"
             f"OutlineColour=&H00000000,Outline=1,Shadow=1,MarginV=50'[outv_sub]"
         )
@@ -401,6 +402,23 @@ def _assemble_command(
     cmd.extend(["-map", final_audio_label, "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"])
     cmd.extend(["-movflags", "+faststart"])
     return cmd
+
+
+_DETERMINISTIC_FFMPEG_ERRORS = (
+    "error parsing",
+    "invalid argument",
+    "no option name",
+    "no such filter",
+    "unable to parse option value",
+    "matches no streams",
+)
+
+
+def _ffmpeg_render_error(stderr: str) -> ToolExecutionError:
+    message = stderr.strip() or "ffmpeg render failed"
+    normalized = message.lower()
+    retryable = not any(marker in normalized for marker in _DETERMINISTIC_FFMPEG_ERRORS)
+    return ToolExecutionError(message, retryable=retryable)
 
 
 # ── Progress / probe helpers ────────────────────────────────────────────────

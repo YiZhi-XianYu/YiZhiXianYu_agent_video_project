@@ -33,6 +33,7 @@
  /** 格式化日期为本地短格式 */
  function formatDate(dateStr: string): string {
    const d = new Date(dateStr)
+   if (Number.isNaN(d.getTime())) return '时间未知'
    return d.toLocaleDateString('zh-CN', {
      month: 'short',
      day: 'numeric',

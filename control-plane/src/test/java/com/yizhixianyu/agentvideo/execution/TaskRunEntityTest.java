@@ -102,4 +102,22 @@ class TaskRunEntityTest {
         task.markFailed("third");
         assertThat(task.getStatus()).isEqualTo(TaskStatus.FAILED);
     }
+
+    @Test
+    void keepsTheStartAndEndOfOversizedToolErrors() {
+        var task = new TaskRunEntity(
+            "workflow-1", "video_render", "video.render", "1.1.0", null
+        );
+        var message = "BEGIN-" + "x".repeat(2500) + "-INVALID-ARGUMENT-END";
+
+        task.markReady();
+        task.markDispatching();
+        task.markRunning();
+        task.markFailed(message);
+
+        assertThat(task.getErrorMessage()).hasSize(ErrorMessageFormatter.MAX_LENGTH);
+        assertThat(task.getErrorMessage()).startsWith("BEGIN-");
+        assertThat(task.getErrorMessage()).contains("...[error truncated]...");
+        assertThat(task.getErrorMessage()).endsWith("-INVALID-ARGUMENT-END");
+    }
 }

@@ -4,16 +4,16 @@
   *
   * 首页：展示历史项目列表，提供创建新项目和选择历史项目的入口。
   * P1 阶段将实现完整功能，P0 仅验证路由和 API 连通性。
-  */
+ */
  import { onMounted, ref } from 'vue'
  import { useRouter } from 'vue-router'
  import { useProjectStore } from '@/stores/project'
  import { useUiStore } from '@/stores/ui'
- import { Clapperboard, Plus, Loader2 } from 'lucide-vue-next'
+ import { Clapperboard, FolderOpen, Plus, Loader2 } from 'lucide-vue-next'
 
- const router = useRouter()
  const projectStore = useProjectStore()
  const uiStore = useUiStore()
+ const router = useRouter()
 
  const newProjectName = ref('')
  const creating = ref(false)
@@ -31,7 +31,8 @@
      const project = await projectStore.createProject(name)
      newProjectName.value = ''
      uiStore.showToast(`项目「${project.name}」已创建`, 'success')
-     router.push(`/projects/${project.id}`)
+     projectStore.setCurrentProject(project.id)
+     await router.push(`/projects/${project.id}`)
    } catch (e: unknown) {
      const msg = e instanceof Error ? e.message : '创建项目失败'
      uiStore.showToast(msg, 'error')
@@ -40,10 +41,9 @@
    }
  }
 
- /** 进入项目 */
- function enterProject(id: string): void {
-   projectStore.setCurrentProject(id)
-   router.push(`/projects/${id}`)
+ function formatDate(dateStr: string): string {
+   const date = new Date(dateStr)
+   return Number.isNaN(date.getTime()) ? '时间未知' : date.toLocaleDateString('zh-CN')
  }
 </script>
 
@@ -103,11 +103,11 @@
     </div>
 
     <div v-else class="grid gap-3 sm:grid-cols-2">
-      <button
+      <RouterLink
         v-for="proj in projectStore.projects"
         :key="proj.id"
+        :to="`/projects/${proj.id}`"
         class="card text-left hover:border-accent/40 transition-colors cursor-pointer group"
-        @click="enterProject(proj.id)"
       >
         <div class="flex items-center gap-3">
           <div class="w-9 h-9 rounded-lg bg-surface-700 flex items-center justify-center
@@ -117,11 +117,11 @@
           <div>
             <p class="text-sm font-medium text-surface-200">{{ proj.name }}</p>
             <p class="text-xs text-surface-500 mt-0.5">
-              {{ new Date(proj.createdAt).toLocaleDateString('zh-CN') }}
+              {{ formatDate(proj.createdAt) }}
             </p>
           </div>
         </div>
-      </button>
+      </RouterLink>
     </div>
   </div>
 </template>

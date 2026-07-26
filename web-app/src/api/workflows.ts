@@ -6,16 +6,16 @@
  import { get, post } from '@/api/client'
  import type {
    WorkflowRunDetail,
-   WorkflowRun,
+   WorkflowHistoryItem,
    CreateAnalysisRunRequest,
  } from '@/api/types'
 
  /**
   * 获取项目的 Workflow 运行历史列表
   */
- export async function listWorkflowRuns(projectId: string): Promise<WorkflowRun[]> {
-   return get<WorkflowRun[]>(`/api/v1/projects/${projectId}/workflow-runs`)
- }
+export async function listWorkflowRuns(projectId: string): Promise<WorkflowHistoryItem[]> {
+  return get<WorkflowHistoryItem[]>(`/api/v1/projects/${projectId}/workflow-runs`)
+}
 
  /**
   * 获取 Workflow 运行详情（含 Task 列表）

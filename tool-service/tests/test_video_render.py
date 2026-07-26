@@ -8,6 +8,7 @@ from unittest.mock import patch
 from app.tools.video_render import (
     VideoRenderTool,
     _build_filter_graph,
+    _ffmpeg_render_error,
     _resolve_proxy_paths,
 )
 
@@ -162,6 +163,42 @@ def test_build_filter_graph_with_cross_dissolve():
     assert "offset=2.500" in fc  # 3.0 - 0.5 = 2.5
     # acrossfade for audio
     assert "acrossfade=d=0.500" in fc
+
+
+def test_build_filter_graph_with_subtitles_does_not_duplicate_label_brackets(tmp_path):
+    clips = [{
+        "sourceProxyArtifactId": "art_abc",
+        "sourceInMs": 0,
+        "sourceOutMs": 3000,
+        "timelineInMs": 0,
+        "timelineOutMs": 3000,
+        "transitionIn": {"type": "CUT", "durationMs": 0},
+    }]
+    canvas = {"width": 1280, "height": 720, "fps": 30}
+    proxy_map = {"art_abc": Path("/tmp/art_abc/video-proxy.mp4")}
+    audio_map = {"art_abc": True}
+    srt_path = tmp_path / "subtitles.srt"
+    srt_path.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n")
+
+    _inputs, fc, video_label, _audio_label = _build_filter_graph(
+        clips, canvas, proxy_map, audio_map, srt_path=srt_path,
+    )
+
+    assert "[s0]subtitles=" in fc
+    assert "[[s0]]subtitles=" not in fc
+    assert video_label == "[outv_sub]"
+
+
+def test_ffmpeg_filter_syntax_error_is_not_retryable():
+    error = _ffmpeg_render_error("Error parsing filterchain: Invalid argument")
+
+    assert error.retryable is False
+
+
+def test_ffmpeg_transient_runtime_error_remains_retryable():
+    error = _ffmpeg_render_error("Resource temporarily unavailable")
+
+    assert error.retryable is True
 
 
 def test_resolve_proxy_paths_finds_and_misses(monkeypatch, tmp_path):

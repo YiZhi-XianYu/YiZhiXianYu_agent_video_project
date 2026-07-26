@@ -171,7 +171,7 @@ public class WorkflowRunEntity extends BaseEntity {
         status = RunStatus.FAILED;
         progress = 100;
         completedAt = Instant.now();
-        errorMessage = message;
+        errorMessage = ErrorMessageFormatter.fit(message);
     }
 
     public String getProjectId() {

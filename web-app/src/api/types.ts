@@ -13,6 +13,7 @@
  export interface Project {
    id: string
    name: string
+   status: string
    createdAt: string
    updatedAt: string
  }
@@ -29,10 +30,14 @@
  /** 素材实体 */
  export interface Asset {
    id: string
+   projectId: string
+   type: string
    fileName: string
    sizeBytes: number
    status: string
+   contentHash: string
    createdAt: string
+   updatedAt: string
  }
 
  // ============================================================
@@ -107,6 +112,23 @@
  /** Workflow 运行详情（含 Task 列表） */
  export interface WorkflowRunDetail extends WorkflowRun {
    tasks: TaskRun[]
+ }
+
+ /** 项目 Workflow 历史列表项。 */
+ export interface WorkflowHistoryItem {
+   id: string
+   workflowType: string
+   definitionKey: string
+   definitionVersion: number
+   proxyQuality: '4K' | '2K' | '1080P' | '720P'
+   status: RunStatus
+   progress: number
+   errorMessage: string | null
+   assetCount: number
+   taskCount: number
+   createdAt: string
+   startedAt: string | null
+   completedAt: string | null
  }
 
  // ============================================================

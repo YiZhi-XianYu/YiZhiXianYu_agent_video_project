@@ -4,6 +4,7 @@ import type { RouteRecordRaw } from 'vue-router'
 // 路由懒加载 —— 按 feature 拆分 chunk，减少首屏体积
 const ProjectListPage = () => import('@/features/projects/ProjectListPage.vue')
 const ProjectDetailPage = () => import('@/features/projects/ProjectDetailPage.vue')
+const WorkflowHistoryPage = () => import('@/features/workflow/WorkflowHistoryPage.vue')
 const WorkflowMonitorPage = () => import('@/features/workflow/WorkflowMonitorPage.vue')
 const VersionListPage = () => import('@/features/versions/VersionListPage.vue')
 const LlmAuditPage = () => import('@/features/audit/LlmAuditPanel.vue')
@@ -24,6 +25,12 @@ const routes: RouteRecordRaw[] = [
     props: true,
   },
   {
+    path: '/workflows',
+    name: 'workflow-list',
+    component: WorkflowHistoryPage,
+    meta: { title: 'Workflow 历史' },
+  },
+  {
     path: '/projects/:projectId/runs/:runId',
     name: 'workflow-monitor',
     component: WorkflowMonitorPage,
@@ -38,8 +45,14 @@ const routes: RouteRecordRaw[] = [
     props: true,
   },
   {
-    path: '/projects/:projectId/audit',
+    path: '/audit',
     name: 'audit',
+    component: LlmAuditPage,
+    meta: { title: 'LLM 审计' },
+  },
+  {
+    path: '/projects/:projectId/audit',
+    name: 'project-audit',
     component: LlmAuditPage,
     meta: { title: 'LLM 审计' },
     props: true,

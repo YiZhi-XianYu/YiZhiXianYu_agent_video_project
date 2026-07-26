@@ -3,11 +3,11 @@
  import AppShell from '@/components/AppShell.vue'
  </script>
 
- <template>
-   <AppShell>
-     <router-view />
-   </AppShell>
- </template>
+<template>
+  <AppShell>
+    <RouterView />
+  </AppShell>
+</template>
  
  <style>
  /* 全局过渡动画 */

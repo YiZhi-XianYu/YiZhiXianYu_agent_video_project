@@ -18,9 +18,13 @@ RUN mvn package -DskipTests -q
 
 # ── Stage 3: Runtime ──
 FROM eclipse-temurin:21-jre-alpine
-RUN addgroup -S app && adduser -S app -G app
-USER app
+RUN addgroup -S app \
+    && adduser -S app -G app \
+    && apk add --no-cache su-exec
 WORKDIR /app
 COPY --from=builder /build/target/*.jar app.jar
+COPY control-plane/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
 EXPOSE 8080
-ENTRYPOINT ["java", "-jar", "app.jar"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["java", "-jar", "/app/app.jar"]

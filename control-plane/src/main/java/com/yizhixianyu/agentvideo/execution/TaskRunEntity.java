@@ -176,7 +176,7 @@ public class TaskRunEntity extends BaseEntity {
         status = TaskStatus.FAILED;
         progress = 100;
         completedAt = Instant.now();
-        errorMessage = message;
+        errorMessage = ErrorMessageFormatter.fit(message);
         nextAttemptAt = null;
     }
 
@@ -187,7 +187,7 @@ public class TaskRunEntity extends BaseEntity {
         status = TaskStatus.RETRY_WAIT;
         progress = 0;
         completedAt = null;
-        errorMessage = message;
+        errorMessage = ErrorMessageFormatter.fit(message);
         nextAttemptAt = retryAt;
         retrySameAttempt = sameAttempt;
         retryCount += 1;
@@ -214,7 +214,7 @@ public class TaskRunEntity extends BaseEntity {
         status = TaskStatus.SKIPPED;
         progress = 100;
         completedAt = Instant.now();
-        errorMessage = message;
+        errorMessage = ErrorMessageFormatter.fit(message);
     }
 
     private void require(TaskStatus expected) {

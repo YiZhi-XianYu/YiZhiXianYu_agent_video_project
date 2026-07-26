@@ -20,14 +20,22 @@ _CLIP_PROCESSOR: Any = None
 _MODEL_NAME = "openai/clip-vit-base-patch32"
 
 
+def _resolve_clip_model_source(local_path: str | None = None) -> str:
+    """Use a configured local model directory, otherwise the public model ID."""
+    configured_path = local_path if local_path is not None else os.environ.get("CLIP_LOCAL_MODEL_PATH", "")
+    configured_path = configured_path.strip()
+    if configured_path and Path(configured_path).is_dir():
+        return configured_path
+    return _MODEL_NAME
+
+
 def _load_clip() -> tuple[Any, Any]:
     global _CLIP_MODEL, _CLIP_PROCESSOR
     if _CLIP_MODEL is None:
         logger.info("Loading CLIP model %s (this may take a moment on first run)...", _MODEL_NAME)
         from transformers import CLIPModel, CLIPProcessor
 
-        _loc = os.environ.get("CLIP_LOCAL_MODEL_PATH", "")
-        _model_dir = _loc if Path(_loc).is_dir() else _MODEL_NAME
+        _model_dir = _resolve_clip_model_source()
         _CLIP_MODEL = CLIPModel.from_pretrained(_model_dir)
         _CLIP_PROCESSOR = CLIPProcessor.from_pretrained(_model_dir)
         logger.info("CLIP model loaded.")
