@@ -42,6 +42,12 @@ public class WorkflowRunEntity extends BaseEntity {
     @Column(nullable = false)
     private int progress;
 
+    @Column(name = "auto_mode", nullable = false)
+    private boolean autoMode = false;
+
+    @Column(name = "current_gate_key", length = 100)
+    private String currentGateKey;
+
     private Instant startedAt;
 
     private Instant completedAt;
@@ -98,6 +104,23 @@ public class WorkflowRunEntity extends BaseEntity {
         }
     }
 
+
+    /** 在Gate处暂停Workflow，等待用户审核 */
+    public void pause(String gateKey) {
+        if (status == RunStatus.RUNNING) {
+            status = RunStatus.PAUSED;
+            currentGateKey = gateKey;
+        }
+    }
+
+    /** 从暂停状态恢复，继续执行下游Task */
+    public void resume() {
+        if (status == RunStatus.PAUSED) {
+            status = RunStatus.RUNNING;
+            currentGateKey = null;
+        }
+    }
+
     public void succeed() {
         status = RunStatus.SUCCEEDED;
         progress = 100;
@@ -135,6 +158,10 @@ public class WorkflowRunEntity extends BaseEntity {
     public RunStatus getStatus() {
         return status;
     }
+
+    public boolean isAutoMode() { return autoMode; }
+    public void setAutoMode(boolean autoMode) { this.autoMode = autoMode; }
+    public String getCurrentGateKey() { return currentGateKey; }
 
     public int getProgress() {
         return progress;

@@ -22,7 +22,8 @@ public class MultiAssetAnalysisTemplate {
         }
         return new WorkflowDefinition(
             "MULTI_ASSET_ANALYSIS",
-            7,
+            8, // 版本号从 7 升级为 8：新增 Gate 人在回路，移除 speech_transcribe
+            // === Nodes ===
             List.of(
                 new WorkflowDefinition.Node(
                     "video_probe", "video.probe", "1.0.0",
@@ -72,17 +73,14 @@ public class MultiAssetAnalysisTemplate {
                     WorkflowDefinition.NodeScope.WORKFLOW,
                     WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()
                 ),
-                new WorkflowDefinition.Node(
-                    "speech_transcribe", "audio.speech-transcribe", "1.0.0",
-                    WorkflowDefinition.NodeScope.WORKFLOW,
-                    WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()
-                ),
+                // 注意：speech_transcribe 已从主 DAG 移除，改为 Post-Render 阶段执行
                 new WorkflowDefinition.Node(
                     "video_render", "video.render", "1.1.0",
                     WorkflowDefinition.NodeScope.WORKFLOW,
                     WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()
                 )
             ),
+            // === Edges ===
             List.of(
                 new WorkflowDefinition.Edge("video_probe", "video_proxy_generate"),
                 new WorkflowDefinition.Edge("video_proxy_generate", "video_shot_detect"),
@@ -96,10 +94,15 @@ public class MultiAssetAnalysisTemplate {
                 new WorkflowDefinition.Edge("shot_ranking", "highlight_selection"),
                 new WorkflowDefinition.Edge("highlight_selection", "timeline_compose"),
                 new WorkflowDefinition.Edge("timeline_compose", "bgm_select"),
-                new WorkflowDefinition.Edge("timeline_compose", "speech_transcribe"),
                 new WorkflowDefinition.Edge("bgm_select", "video_render"),
-                new WorkflowDefinition.Edge("speech_transcribe", "video_render"),
                 new WorkflowDefinition.Edge("timeline_compose", "video_render")
+            ),
+            // === Gates（人在回路关卡） ===
+            List.of(
+                new WorkflowDefinition.Gate("gate_shot_ranking", "shot_ranking", "镜头排序审核", "请检查系统对镜头的质量评分和排名。可手动调整评分、强制入选或排除指定镜头。"),
+                new WorkflowDefinition.Gate("gate_story_edit", "story_plan", "故事安排编辑", "请检查五段式故事安排。可替换、排序、锁定、添加或删除各段落中的镜头。"),
+                new WorkflowDefinition.Gate("gate_timeline_preview", "bgm_select", "时间线与音乐预览", "请预览生成的时间线和背景音乐搭配。确认转场效果和整体节奏。"),
+                new WorkflowDefinition.Gate("gate_render_review", "video_render", "成片预览与字幕配置", "请预览无字幕成片。可配置字幕样式（字号、颜色、位置），确认后生成字幕并渲染最终成片。")
             )
         );
     }

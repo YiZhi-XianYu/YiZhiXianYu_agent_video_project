@@ -188,9 +188,16 @@ def _get_whisper_model() -> Any:
     """Lazy-load and cache the Whisper model."""
     global _whisper_model, _loaded_model_size
     model_size = getattr(settings, "asr_model_size", "small") or "small"
+    local_path = getattr(settings, "asr_model_path", None)
 
     if _whisper_model is not None and _loaded_model_size == model_size:
         return _whisper_model
+
+    # Use local model path if provided (no download)
+    if local_path:
+        model_path = Path(local_path)
+        if model_path.is_dir():
+            model_size = str(model_path)
 
     try:
         from faster_whisper import WhisperModel

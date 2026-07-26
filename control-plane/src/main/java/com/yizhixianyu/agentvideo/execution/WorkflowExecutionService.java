@@ -129,7 +129,7 @@ public class WorkflowExecutionService {
         List<String> requestedAssetIds,
         ProxyQuality proxyQuality
     ) {
-        return createMultiAssetAnalysisRun(projectId, requestedAssetIds, proxyQuality, null);
+        return createMultiAssetAnalysisRun(projectId, requestedAssetIds, proxyQuality, null, false);
     }
 
     @Transactional
@@ -137,7 +137,8 @@ public class WorkflowExecutionService {
         String projectId,
         List<String> requestedAssetIds,
         ProxyQuality proxyQuality,
-        String durationPrompt
+        String durationPrompt,
+        boolean autoMode
     ) {
         projectService.getRequired(projectId);
         if (requestedAssetIds == null || requestedAssetIds.isEmpty()) {
@@ -494,12 +495,108 @@ public class WorkflowExecutionService {
         }
     }
 
+
+    /** 安全反序列化 WorkflowDefinition，忽略格式错误 */
+    private WorkflowDefinition safeParseDefinition(WorkflowRunEntity workflow) {
+        if (workflow.getDefinitionJson() == null || workflow.getDefinitionJson().isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(workflow.getDefinitionJson(), WorkflowDefinition.class);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 查找与指定任务的上游节点关联的 Gate。
+     * 规则：如果某个上游 Task 完成后应该触发 Gate（即 definition 中有一个 Gate 的 afterNodeKey
+     * 等于该上游 Task 的 nodeKey），且该 Gate 的下游 Task 正是当前 task，则返回该 Gate。
+     */
+    private WorkflowDefinition.Gate findGateForTask(
+        WorkflowDefinition definition,
+        TaskRunEntity task,
+        List<TaskRunEntity> upstream,
+        Map<String, TaskRunEntity> tasksById
+    ) {
+        if (definition == null || definition.gates() == null || definition.gates().isEmpty()) {
+            return null;
+        }
+        for (var up : upstream) {
+            if (up.getStatus() != TaskStatus.SUCCEEDED) continue;
+            for (var gate : definition.gates()) {
+                if (gate.afterNodeKey().equals(up.getNodeKey())) {
+                    return gate;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** 创建字幕后置渲染 mini Workflow：ASR → 字幕烧录 */
+    @Transactional
+    public WorkflowRunEntity createPostRenderSubtitleRun(
+        String sourceWorkflowRunId,
+        int fontSize, String fontColor, String position, String outlineColor
+    ) {
+        var source = workflowRepository.findById(sourceWorkflowRunId)
+            .orElseThrow(() -> new IllegalArgumentException("Source workflow not found: " + sourceWorkflowRunId));
+        var projectId = source.getProjectId();
+
+        // 创建 mini Workflow：2 节点（transcribe-final → render-subtitles）
+        var definition = new WorkflowDefinition(
+            "POST_RENDER_SUBTITLE", 1,
+            List.of(
+                new WorkflowDefinition.Node("transcribe_final", "audio.transcribe-final", "1.0.0",
+                    WorkflowDefinition.NodeScope.WORKFLOW,
+                    WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()),
+                new WorkflowDefinition.Node("render_subtitles", "video.render-subtitles", "1.0.0",
+                    WorkflowDefinition.NodeScope.WORKFLOW,
+                    WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT,
+                    Map.of("subtitleStyle", Map.of(
+                        "fontSize", fontSize,
+                        "fontColor", fontColor,
+                        "position", position,
+                        "outlineColor", outlineColor
+                    )))
+            ),
+            List.of(new WorkflowDefinition.Edge("transcribe_final", "render_subtitles")),
+            List.of() // 无 Gate
+        );
+
+        var workflow = workflowRepository.save(new WorkflowRunEntity(
+            projectId, source.getAssetId(), "POST_RENDER_SUBTITLE",
+            source.getProxyQuality(),
+            definition.definitionKey(), definition.definitionVersion(),
+            toJson(definition)
+        ));
+        workflow.setAutoMode(true); // 后置流程自动运行，不暂停
+        workflow.start();
+
+        var asset = assetService.getRequired(source.getAssetId());
+        expandTasks(workflow, List.of(asset), definition);
+        evaluateWorkflow(workflow.getId());
+        return workflow;
+    }
+
+    public void continueWorkflow(String workflowRunId) {
+        var workflow = workflowRepository.findLockedById(workflowRunId).orElseThrow();
+        if (workflow.getStatus() != RunStatus.PAUSED) {
+            throw new IllegalStateException("Workflow is not paused: " + workflowRunId);
+        }
+        workflow.resume();
+        evaluateWorkflow(workflowRunId);
+    }
+
     private void evaluateWorkflow(String workflowRunId) {
         var workflow = workflowRepository.findLockedById(workflowRunId).orElseThrow();
         var tasks = taskRepository.findByWorkflowRunIdOrderByCreatedAtAsc(workflowRunId);
         var tasksById = tasks.stream().collect(Collectors.toMap(TaskRunEntity::getId, Function.identity()));
         var dependencies = dependencyRepository.findByTaskRunIdIn(tasksById.keySet().stream().toList()).stream()
             .collect(Collectors.groupingBy(TaskDependencyEntity::getTaskRunId));
+
+        // 解析 WorkflowDefinition，用于 Gate 检查
+        var definition = safeParseDefinition(workflow);
 
         var changed = true;
         while (changed) {
@@ -516,6 +613,13 @@ public class WorkflowExecutionService {
                     task.markSkipped("A required upstream Task did not succeed");
                     changed = true;
                 } else if (upstream.stream().allMatch(item -> item.getStatus() == TaskStatus.SUCCEEDED)) {
+                    /* Gate 检查：如果上游 Node 关联了 Gate 且非 auto 模式，暂停 Workflow */
+                    var gate = findGateForTask(definition, task, upstream, tasksById);
+                    if (gate != null && !workflow.isAutoMode()) {
+                        workflow.pause(gate.gateKey());
+                        changed = true;
+                        continue;
+                    }
                     task.markReady();
                     eventPublisher.publishEvent(new WorkflowDispatchRequested(workflowRunId, task.getId()));
                     changed = true;
@@ -539,7 +643,6 @@ public class WorkflowExecutionService {
             workflow.updateProgress((int) (terminal * 100 / tasks.size()));
         }
     }
-
     private boolean isTerminal(TaskRunEntity task) {
         return task.getStatus() == TaskStatus.SUCCEEDED
             || task.getStatus() == TaskStatus.FAILED
@@ -552,7 +655,17 @@ public class WorkflowExecutionService {
             .orElseThrow(() -> new IllegalArgumentException("Workflow run not found: " + workflowRunId));
         var tasks = taskRepository.findByWorkflowRunIdOrderByCreatedAtAsc(workflowRunId);
         var taskIds = tasks.stream().map(TaskRunEntity::getId).toList();
+
+        // 解析 definitionJson 获取 Gate 列表
+        var gates = new java.util.ArrayList<GateDef>();
+        var def = safeParseDefinition(workflow);
+        if (def != null && def.gates() != null) {
+            for (var g : def.gates()) {
+                gates.add(new GateDef(g.gateKey(), g.label(), g.description()));
+            }
+        }
         var dependencies = dependencyRepository.findByTaskRunIdIn(taskIds).stream()
+
             .collect(Collectors.groupingBy(TaskDependencyEntity::getTaskRunId));
         var taskSnapshots = tasks.stream().map(task -> new TaskSnapshot(
             task.getId(), task.getAssetId(), task.getInstanceKey(), task.getNodeKey(), task.getToolName(),
@@ -574,7 +687,10 @@ public class WorkflowExecutionService {
         return new WorkflowSnapshot(
             workflow.getId(), workflow.getProjectId(), workflow.getAssetId(), workflow.getWorkflowType(),
             workflow.getDefinitionKey(), workflow.getDefinitionVersion(), workflow.getProxyQuality().value(),
-            workflow.getStatus(), workflow.getProgress(), workflow.getErrorMessage(), assets, taskSnapshots
+            workflow.getStatus(), workflow.getProgress(), workflow.getErrorMessage(),
+            workflow.isAutoMode(), workflow.getCurrentGateKey(),
+            gates,
+            assets, taskSnapshots
         );
     }
 
@@ -705,8 +821,13 @@ public class WorkflowExecutionService {
     public record WorkflowSnapshot(
         String id, String projectId, String assetId, String workflowType, String definitionKey,
         Integer definitionVersion, String proxyQuality, RunStatus status, int progress, String errorMessage,
+        boolean autoMode, String currentGateKey,
+        List<GateDef> gates,
         List<AssetSnapshot> assets, List<TaskSnapshot> tasks
     ) {}
+
+    /** Gate 定义视图（前端展示用） */
+    public record GateDef(String gateKey, String label, String description) {}
 
     public record AssetSnapshot(String id, String fileName, long sizeBytes, String status) {}
 

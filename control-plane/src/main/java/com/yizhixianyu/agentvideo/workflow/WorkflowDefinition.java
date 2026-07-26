@@ -7,7 +7,8 @@ public record WorkflowDefinition(
     String definitionKey,
     int definitionVersion,
     List<Node> nodes,
-    List<Edge> edges
+    List<Edge> edges,
+    List<Gate> gates
 ) {
     public record Node(
         String nodeKey,
@@ -30,6 +31,15 @@ public record WorkflowDefinition(
 
     public record Edge(String from, String to) {
     }
+
+
+    /** 人在回路关卡。关联到某个 Node.nodeKey，该 Node 完成后触发暂停 */
+    public record Gate(
+        String gateKey,
+        String afterNodeKey,
+        String label,
+        String description
+    ) {}
 
     public enum InputBinding {
         PROJECT_ASSET,
