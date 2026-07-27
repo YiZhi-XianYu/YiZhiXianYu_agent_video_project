@@ -369,7 +369,7 @@ def _build_filter_graph(
         srt_escaped = str(srt_path).replace("\\", "/").replace(":", "\\:")
         transition_filters.append(
             f"{final_video_label}subtitles='{srt_escaped}':"
-            f"force_style='FontSize=24,PrimaryColour=&H00FFFFFF,"
+            f"force_style='FontName=Noto Sans CJK SC,FontSize=24,PrimaryColour=&H00FFFFFF,"
             f"OutlineColour=&H00000000,Outline=1,Shadow=1,MarginV=50'[outv_sub]"
         )
         final_video_label = "[outv_sub]"

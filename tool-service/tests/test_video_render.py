@@ -187,6 +187,7 @@ def test_build_filter_graph_with_subtitles_does_not_duplicate_label_brackets(tmp
 
     assert "[s0]subtitles=" in fc
     assert "[[s0]]subtitles=" not in fc
+    assert "FontName=Noto Sans CJK SC" in fc
     assert video_label == "[outv_sub]"
 
 

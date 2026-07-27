@@ -11,6 +11,9 @@ RUN sed -i "s|http://deb.debian.org/debian|${DEBIAN_MIRROR}|g" \
         -o Acquire::https::Timeout=30 update \
     && apt-get install -y --no-install-recommends \
     ffmpeg \
+    fontconfig \
+    fonts-noto-cjk \
+    && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
