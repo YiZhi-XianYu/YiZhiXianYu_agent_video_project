@@ -9,7 +9,15 @@
  const BASE_URL = ''
 
  /** 默认请求超时（毫秒） */
- const DEFAULT_TIMEOUT_MS = 30_000
+const DEFAULT_TIMEOUT_MS = 30_000
+
+export function csrfHeaders(): Record<string, string> {
+  const cookie = document.cookie
+    .split('; ')
+    .find((item) => item.startsWith('avp_csrf='))
+  if (!cookie) return {}
+  return { 'X-CSRF-Token': decodeURIComponent(cookie.substring('avp_csrf='.length)) }
+}
 
  /** API 错误类型 */
  export class ApiError extends Error {
@@ -143,6 +151,7 @@
        headers: {
          'Content-Type': 'application/json',
          'Accept': 'application/json',
+         ...csrfHeaders(),
          ...options.headers,
        },
        body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -168,6 +177,7 @@
        headers: {
          'Content-Type': 'application/json',
          'Accept': 'application/json',
+         ...csrfHeaders(),
          ...options.headers,
        },
        body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -188,6 +198,7 @@
        method: 'DELETE',
        headers: {
          'Accept': 'application/json',
+         ...csrfHeaders(),
          ...options.headers,
        },
      },
@@ -213,6 +224,7 @@
        method: 'POST',
        headers: {
          'Accept': 'application/json',
+         ...csrfHeaders(),
          ...options.headers,
        },
        body: formData,

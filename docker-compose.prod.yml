@@ -1,0 +1,153 @@
+name: agent-video-prod
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: avp-prod-mysql
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max-connections=100
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: agent-video-pipeline
+      MYSQL_USER: agentvideo
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:?Set MYSQL_APP_PASSWORD in .env}
+    volumes:
+      - ${DEPLOY_ROOT:-/opt/agent-video}/data/mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$${MYSQL_PASSWORD} mysqladmin ping -h 127.0.0.1 -u agentvideo --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    networks:
+      - backend
+    mem_limit: 1g
+    cpus: 1.0
+    logging: *default-logging
+
+  control-plane:
+    build:
+      context: .
+      dockerfile: control-plane/Dockerfile
+    container_name: avp-prod-control-plane
+    restart: unless-stopped
+    init: true
+    environment:
+      SERVER_PORT: "8080"
+      MYSQL_URL: jdbc:mysql://mysql:3306/agent-video-pipeline?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
+      MYSQL_USER: agentvideo
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:?Set MYSQL_APP_PASSWORD in .env}
+      TOOL_SERVICE_BASE_URL: http://tool-service:8090
+      APP_PUBLIC_BASE_URL: http://control-plane:8080
+      APP_STORAGE_ROOT: /app/runtime/storage
+      APP_ARTIFACT_ROOT: /app/runtime/artifacts
+      AUTH_SESSION_DAYS: ${AUTH_SESSION_DAYS:-30}
+      AUTH_SECURE_COOKIE: ${AUTH_SECURE_COOKIE:-false}
+      UPLOAD_MAX_FILE_SIZE: ${UPLOAD_MAX_FILE_SIZE:-500MB}
+      UPLOAD_MAX_REQUEST_SIZE: ${UPLOAD_MAX_REQUEST_SIZE:-1GB}
+      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=75.0 -XX:+ExitOnOutOfMemoryError
+    volumes:
+      - ${DEPLOY_ROOT:-/opt/agent-video}/data/runtime:/app/runtime
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks:
+      - frontend
+      - backend
+    mem_limit: 1536m
+    cpus: 1.5
+    stop_grace_period: 45s
+    logging: *default-logging
+
+  tool-service:
+    build:
+      context: ./tool-service
+    container_name: avp-prod-tool-service
+    restart: unless-stopped
+    init: true
+    environment:
+      TOOL_SERVICE_HOST: 0.0.0.0
+      TOOL_SERVICE_PORT: "8090"
+      TOOL_SERVICE_ARTIFACT_ROOT: /app/runtime/artifacts
+      TOOL_SERVICE_EXECUTION_STORE_PATH: /app/runtime/executions/tool-executions.sqlite3
+      TOOL_SERVICE_BGM_LIBRARY_ROOT: /app/runtime/bgm
+      TOOL_SERVICE_LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
+      TOOL_SERVICE_LLM_API_KEY: ${LLM_API_KEY:-}
+      TOOL_SERVICE_LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      TOOL_SERVICE_LLM_OPENAI_API_KEY: ${LLM_OPENAI_API_KEY:-}
+      TOOL_SERVICE_LLM_ANTHROPIC_API_KEY: ${LLM_ANTHROPIC_API_KEY:-}
+      TOOL_SERVICE_ASR_MODEL_SIZE: ${ASR_MODEL_SIZE:-small}
+      PYTHONUNBUFFERED: "1"
+      OMP_NUM_THREADS: "3"
+    volumes:
+      - ${DEPLOY_ROOT:-/opt/agent-video}/data/runtime:/app/runtime
+      - ${DEPLOY_ROOT:-/opt/agent-video}/data/huggingface:/app/.cache/huggingface
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/api/v1/health', timeout=3)
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+    networks:
+      - backend
+    mem_limit: 5g
+    cpus: 3.5
+    shm_size: 512m
+    stop_grace_period: 2m
+    logging: *default-logging
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: avp-prod-caddy
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?Set SITE_ADDRESS in .env}
+      UPLOAD_MAX_REQUEST_SIZE: ${UPLOAD_MAX_REQUEST_SIZE:-1GB}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${DEPLOY_ROOT:-/opt/agent-video}/data/caddy/data:/data
+      - ${DEPLOY_ROOT:-/opt/agent-video}/data/caddy/config:/config
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:2019/config/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - frontend
+    mem_limit: 256m
+    cpus: 0.5
+    logging: *default-logging
+
+networks:
+  frontend:
+  backend:

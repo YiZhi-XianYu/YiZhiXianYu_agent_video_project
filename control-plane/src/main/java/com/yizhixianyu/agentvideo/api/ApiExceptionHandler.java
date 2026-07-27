@@ -1,7 +1,10 @@
 package com.yizhixianyu.agentvideo.api;
 
 import com.yizhixianyu.agentvideo.auth.AccessDeniedException;
+import com.yizhixianyu.agentvideo.auth.AuthRateLimitException;
 import com.yizhixianyu.agentvideo.auth.AuthenticationRequiredException;
+import com.yizhixianyu.agentvideo.auth.CsrfProtectionException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -23,6 +26,19 @@ public class ApiExceptionHandler {
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<ApiError> forbidden(AccessDeniedException exception) {
         return error(HttpStatus.FORBIDDEN, "ACCESS_DENIED", exception);
+    }
+
+    @ExceptionHandler(CsrfProtectionException.class)
+    public ResponseEntity<ApiError> csrfForbidden(CsrfProtectionException exception) {
+        return error(HttpStatus.FORBIDDEN, "CSRF_REJECTED", exception);
+    }
+
+    @ExceptionHandler(AuthRateLimitException.class)
+    public ResponseEntity<ApiError> rateLimited(AuthRateLimitException exception) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+            .header(HttpHeaders.RETRY_AFTER, Long.toString(exception.getRetryAfterSeconds()))
+            .contentType(MediaType.APPLICATION_JSON)
+            .body(new ApiError("AUTH_RATE_LIMITED", exception.getMessage(), Instant.now()));
     }
 
     @ExceptionHandler({IllegalArgumentException.class, MethodArgumentNotValidException.class})

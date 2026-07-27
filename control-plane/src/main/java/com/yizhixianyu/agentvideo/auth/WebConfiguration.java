@@ -8,9 +8,14 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 public class WebConfiguration implements WebMvcConfigurer {
 
     private final AuthenticationInterceptor authenticationInterceptor;
+    private final CsrfProtectionInterceptor csrfProtectionInterceptor;
 
-    public WebConfiguration(AuthenticationInterceptor authenticationInterceptor) {
+    public WebConfiguration(
+        AuthenticationInterceptor authenticationInterceptor,
+        CsrfProtectionInterceptor csrfProtectionInterceptor
+    ) {
         this.authenticationInterceptor = authenticationInterceptor;
+        this.csrfProtectionInterceptor = csrfProtectionInterceptor;
     }
 
     @Override
@@ -18,5 +23,8 @@ public class WebConfiguration implements WebMvcConfigurer {
         registry.addInterceptor(authenticationInterceptor)
             .addPathPatterns("/api/v1/**")
             .excludePathPatterns("/api/v1/auth/**");
+        registry.addInterceptor(csrfProtectionInterceptor)
+            .addPathPatterns("/api/v1/**")
+            .excludePathPatterns("/api/v1/auth/login", "/api/v1/auth/register");
     }
 }

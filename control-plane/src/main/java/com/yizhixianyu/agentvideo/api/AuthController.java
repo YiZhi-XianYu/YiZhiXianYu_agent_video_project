@@ -1,6 +1,9 @@
 package com.yizhixianyu.agentvideo.api;
 
 import com.yizhixianyu.agentvideo.auth.AuthService;
+import com.yizhixianyu.agentvideo.auth.AuthRateLimiter;
+import com.yizhixianyu.agentvideo.auth.AuthenticationRequiredException;
+import com.yizhixianyu.agentvideo.auth.CsrfService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
@@ -23,41 +26,67 @@ import java.time.Duration;
 public class AuthController {
 
     private final AuthService authService;
+    private final AuthRateLimiter rateLimiter;
+    private final CsrfService csrfService;
     private final boolean secureCookie;
 
-    public AuthController(AuthService authService, @Value("${app.auth.secure-cookie:false}") boolean secureCookie) {
+    public AuthController(
+        AuthService authService,
+        AuthRateLimiter rateLimiter,
+        CsrfService csrfService,
+        @Value("${app.auth.secure-cookie:false}") boolean secureCookie
+    ) {
         this.authService = authService;
+        this.rateLimiter = rateLimiter;
+        this.csrfService = csrfService;
         this.secureCookie = secureCookie;
     }
 
     @PostMapping("/register")
     public AuthView register(
         @Valid @RequestBody RegisterRequest request,
+        HttpServletRequest servletRequest,
         HttpServletResponse response
     ) {
+        rateLimiter.checkRegistration(servletRequest);
         return complete(authService.register(request.email(), request.displayName(), request.password()), response);
     }
 
     @PostMapping("/login")
-    public AuthView login(@Valid @RequestBody LoginRequest request, HttpServletResponse response) {
-        return complete(authService.login(request.email(), request.password()), response);
+    public AuthView login(
+        @Valid @RequestBody LoginRequest request,
+        HttpServletRequest servletRequest,
+        HttpServletResponse response
+    ) {
+        rateLimiter.checkLogin(servletRequest, request.email());
+        try {
+            var result = authService.login(request.email(), request.password());
+            rateLimiter.clearLoginFailures(servletRequest, request.email());
+            return complete(result, response);
+        } catch (AuthenticationRequiredException exception) {
+            rateLimiter.recordLoginFailure(servletRequest, request.email());
+            throw exception;
+        }
     }
 
     @PostMapping("/logout")
     public void logout(HttpServletRequest request, HttpServletResponse response) {
         authService.logout(authService.readSessionToken(request));
         response.addHeader(HttpHeaders.SET_COOKIE, sessionCookie("", Duration.ZERO).toString());
+        response.addHeader(HttpHeaders.SET_COOKIE, csrfService.clearCookie().toString());
     }
 
     @GetMapping("/me")
-    public AuthView me(HttpServletRequest request) {
+    public AuthView me(HttpServletRequest request, HttpServletResponse response) {
         var user = authService.authenticate(authService.readSessionToken(request));
+        response.addHeader(HttpHeaders.SET_COOKIE, csrfService.cookie(csrfService.ensureToken(request)).toString());
         return AuthView.from(user);
     }
 
     private AuthView complete(AuthService.AuthResult result, HttpServletResponse response) {
         var maxAge = Duration.between(java.time.Instant.now(), result.expiresAt());
         response.addHeader(HttpHeaders.SET_COOKIE, sessionCookie(result.rawToken(), maxAge).toString());
+        response.addHeader(HttpHeaders.SET_COOKIE, csrfService.cookie(csrfService.issueToken()).toString());
         return AuthView.from(result.user());
     }
 

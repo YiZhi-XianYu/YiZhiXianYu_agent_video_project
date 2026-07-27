@@ -19,7 +19,18 @@ tool-service/runtime/
 
 # Local secrets
 .env
+*.env
+.env.*
+!.env.*.example
+*.secret
+*.pem
+*.key
 *.local.yml
+
+# Production runtime data and backups
+deploy/data/
+deploy/backups/
+backups/
 
 # Environment
 .env

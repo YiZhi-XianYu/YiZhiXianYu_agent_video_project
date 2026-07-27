@@ -3,7 +3,7 @@
   *
   * 封装素材上传和列表查询的 HTTP 请求。
   */
- import { get } from '@/api/client'
+ import { csrfHeaders, get } from '@/api/client'
  import type { Asset } from '@/api/types'
 
  /**
@@ -57,6 +57,9 @@
      xhr.addEventListener('abort', () => reject(new Error('上传已取消')))
 
      xhr.open('POST', `/api/v1/projects/${projectId}/assets/batch`)
+     for (const [name, value] of Object.entries(csrfHeaders())) {
+       xhr.setRequestHeader(name, value)
+     }
      xhr.send(formData)
    })
  }

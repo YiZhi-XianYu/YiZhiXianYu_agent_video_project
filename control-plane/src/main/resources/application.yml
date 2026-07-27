@@ -21,8 +21,8 @@ spring:
     baseline-version: 1
   servlet:
     multipart:
-      max-file-size: 2GB
-      max-request-size: 2GB
+      max-file-size: ${UPLOAD_MAX_FILE_SIZE:2GB}
+      max-request-size: ${UPLOAD_MAX_REQUEST_SIZE:2GB}
 
 app:
   auth:
