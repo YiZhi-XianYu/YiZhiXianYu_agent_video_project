@@ -68,6 +68,15 @@
    penalties: string[]
    /** 是否入选 */
    selected: boolean
+
+  /** 关键帧图片 Content-URL（由 WorkflowMonitorPage.syncGate 预加载） */
+  keyframeUrl?: string
+  /** 代理视频 Content-URL（可选，来自 video_proxy_generate 任务） */
+  proxyVideoUrl?: string
+  /** 镜头起始时间（毫秒） */
+  startMs?: number
+  /** 镜头结束时间（毫秒） */
+  endMs?: number
  }
 
  // ============================================================

@@ -5,7 +5,7 @@
  * 实时展示 Workflow DAG 中 Task 状态、整体进度和 Gate 人在回路审核界面。
  * 分层轮询：1.5s 刷新 Workflow 状态，进入 PAUSED 后展示对应审核视图。
  */
-import { computed, onMounted, onUnmounted, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft, Loader2, CheckCircle2, Download, Film, XCircle, PauseCircle } from 'lucide-vue-next'
 import { useWorkflowStore } from '@/stores/workflow'
@@ -16,6 +16,7 @@ import { WORKFLOW_POLL_INTERVAL_MS, RUN_STATUS_LABEL } from '@/shared/constants'
 import ProgressBar from '@/components/ProgressBar.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import TaskGrid from '@/components/TaskGrid.vue'
+import ShotGalleryView from '@/features/review/ShotGalleryView.vue'
 import ShotRankingReview from '@/features/review/ShotRankingReview.vue'
 import StoryEditor from '@/features/review/StoryEditor.vue'
 import TimelinePreview from '@/features/review/TimelinePreview.vue'
@@ -32,6 +33,9 @@ const router = useRouter()
 const workflowStore = useWorkflowStore()
 const reviewStore = useReviewStore()
 const uiStore = useUiStore()
+
+/** Gate 1 视图模式：true = 画廊视图, false = 列表视图 */
+const showGalleryView = ref(true)
 
 const renderedVideo = computed(() => workflowStore.tasks
   .flatMap((task) => task.artifacts)
@@ -83,7 +87,8 @@ async function syncGate(): Promise<void> {
   try {
     if (gate.gateKey === 'gate_shot_ranking') {
       const payload = await loadArtifactJson('shot_ranking', 'SHOT_RANKING')
-      reviewStore.setShotScores(mapShotScores(payload))
+      const scores = mapShotScores(payload)
+      reviewStore.setShotScores(await enrichShotScores(scores))
     } else if (gate.gateKey === 'gate_story_edit') {
       const payload = await loadArtifactJson('story_plan', 'STORY_PLAN')
       reviewStore.setStoryPlan(mapStoryPlan(payload))
@@ -162,6 +167,50 @@ function mapTimeline(payload: Record<string, any>): Timeline {
   }
 }
 
+/** 从视频检测任务中提取每个镜头的关键帧 URL 和代理视频地址，合并到 ShotScore */
+async function enrichShotScores(scores: ShotScore[]): Promise<ShotScore[]> {
+  try {
+    /* 1. 加载 SHOT_LIST（含 keyframeArtifactId 和时间） */
+    const shotListPayload = await loadArtifactJson('video_shot_detect', 'SHOT_LIST')
+    const shotMetaMap = new Map<string, { keyframeArtifactId: string; startMs: number; endMs: number }>(
+      (shotListPayload.shots ?? []).map((s: Record<string, any>) => [
+        String(s.shotId),
+        {
+          keyframeArtifactId: String(s.keyframeArtifactId),
+          startMs: Number(s.startMs),
+          endMs: Number(s.endMs),
+        },
+      ])
+    )
+
+    /* 2. 获取代理视频 URL */
+    const proxyTask = workflowStore.tasks.find((t) => t.nodeKey === 'video_proxy_generate')
+    const proxyUrl = proxyTask?.artifacts.find((a) => a.type === 'VIDEO_PROXY')?.contentUrl ?? null
+
+    /* 3. 从 video_shot_detect 任务的 artifacts 中构建 externalArtifactId → contentUrl 映射 */
+    const shotDetectTask = workflowStore.tasks.find((t) => t.nodeKey === 'video_shot_detect')
+    const artifactUrlMap = new Map<string, string>(
+      (shotDetectTask?.artifacts ?? []).map((a) => [a.externalArtifactId, a.contentUrl])
+    )
+
+    /* 4. 合并到 scores */
+    return scores.map((shot) => {
+      const meta = shotMetaMap.get(shot.shotId)
+      return {
+        ...shot,
+        keyframeUrl: meta ? artifactUrlMap.get(meta.keyframeArtifactId) : undefined,
+        proxyVideoUrl: proxyUrl ?? undefined,
+        startMs: meta?.startMs,
+        endMs: meta?.endMs,
+      }
+    })
+  } catch {
+    /* 预加载失败不阻塞主流程，返回原始 scores */
+    return scores
+  }
+}
+
+
 // ===================== Actions =====================
 
 async function handleContinue(): Promise<void> {
@@ -237,10 +286,44 @@ function goBack(): void {
       </div>
 
       <!-- ===== Gate 人在回路审核区 ===== -->
-      <ShotRankingReview
-        v-if="workflowStore.isPaused && workflowStore.currentGate?.gateKey === 'gate_shot_ranking'"
-        @confirm="handleContinue"
-      />
+
+      <!-- Gate 1: 镜头排序（画廊 / 列表 双视图切换） -->
+      <template v-if="workflowStore.isPaused && workflowStore.currentGate?.gateKey === 'gate_shot_ranking'">
+        <!-- 视图切换 tabs -->
+        <div class="flex gap-1 mb-3">
+          <button
+            :class="[
+              'px-3 py-1.5 rounded text-xs font-medium transition-colors',
+              showGalleryView
+                ? 'bg-accent/20 text-accent border border-accent/30'
+                : 'text-surface-400 hover:text-surface-200 hover:bg-surface-700',
+            ]"
+            @click="showGalleryView = true"
+          >
+            &#x1F4F7; 画廊视图
+          </button>
+          <button
+            :class="[
+              'px-3 py-1.5 rounded text-xs font-medium transition-colors',
+              !showGalleryView
+                ? 'bg-accent/20 text-accent border border-accent/30'
+                : 'text-surface-400 hover:text-surface-200 hover:bg-surface-700',
+            ]"
+            @click="showGalleryView = false"
+          >
+            &#x1F4CB; 列表视图
+          </button>
+        </div>
+
+        <ShotGalleryView
+          v-if="showGalleryView"
+          @confirm="handleContinue"
+        />
+        <ShotRankingReview
+          v-else
+          @confirm="handleContinue"
+        />
+      </template>
       <StoryEditor
         v-if="workflowStore.isPaused && workflowStore.currentGate?.gateKey === 'gate_story_edit'"
         @confirm="handleContinue"

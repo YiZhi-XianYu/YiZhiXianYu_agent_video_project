@@ -5,16 +5,34 @@
   * 展示系统对镜头的评分排名，用户可强制入选或排除指定镜头。
   * 点击确认后通过 emit 通知父组件继续 Workflow。
   */
- import { computed } from 'vue'
+ import { computed, ref } from 'vue'
  import { Star, EyeOff, Eye, CheckCircle2, Loader2 } from 'lucide-vue-next'
  import { useReviewStore } from '@/stores/review'
  import type { ShotScore } from '@/shared/types'
+import ShotPreviewPanel from '@/components/ShotPreviewPanel.vue'
 
  const emit = defineEmits<{
    confirm: []
  }>()
 
  const review = useReviewStore()
+
+/** 当前预览的镜头（null = 关闭） */
+const previewShot = ref<ShotScore | null>(null)
+/** 预览锚点 DOM 元素 */
+const previewAnchorEl = ref<HTMLElement | null>(null)
+
+/** 点击镜头行：切换预览 */
+function handleShotClick(shot: ShotScore, event: MouseEvent): void {
+  if (previewShot.value?.shotId === shot.shotId) {
+    previewShot.value = null
+    previewAnchorEl.value = null
+  } else {
+    previewShot.value = shot
+    previewAnchorEl.value = event.currentTarget as HTMLElement
+  }
+}
+
 
  // ===================== Computed =====================
 
@@ -71,6 +89,7 @@
         v-for="(shot, idx) in sortedShots"
         :key="shot.shotId"
         :class="[
+          'cursor-pointer',
           'flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-sm',
           review.excludedShotIds.has(shot.shotId)
             ? 'bg-danger/5 border border-danger/20 opacity-60'
@@ -119,7 +138,7 @@
                 : 'text-surface-500 hover:text-accent hover:bg-surface-700',
             ]"
             title="强制入选"
-            @click="review.toggleForced(shot.shotId)"
+            @click.stop="review.toggleForced(shot.shotId)"
           >
             <Star class="w-3.5 h-3.5" />
           </button>
@@ -131,7 +150,7 @@
                 : 'text-surface-500 hover:text-danger hover:bg-surface-700',
             ]"
             title="排除此镜头"
-            @click="review.toggleExcluded(shot.shotId)"
+            @click.stop="review.toggleExcluded(shot.shotId)"
           >
             <EyeOff v-if="review.excludedShotIds.has(shot.shotId)" class="w-3.5 h-3.5" />
             <Eye v-else class="w-3.5 h-3.5" />
@@ -139,5 +158,16 @@
         </div>
       </div>
     </div>
+    <!-- 镜头预览浮层 -->
+    <ShotPreviewPanel
+      :shot-id="previewShot?.shotId ?? ''"
+      :keyframe-url="previewShot?.keyframeUrl ?? null"
+      :video-url="previewShot?.proxyVideoUrl ?? null"
+      :start-ms="previewShot?.startMs ?? 0"
+      :end-ms="previewShot?.endMs ?? 0"
+      :anchor-el="previewAnchorEl"
+      :visible="previewShot !== null"
+      @close="previewShot = null; previewAnchorEl = null"
+    />
   </div>
 </template>

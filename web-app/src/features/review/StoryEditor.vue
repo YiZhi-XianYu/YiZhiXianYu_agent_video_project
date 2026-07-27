@@ -6,17 +6,37 @@
  * 支持版本保存（通过 Custom Story Plan API）。
  * 确认后 emit 通知父组件继续 Workflow。
  */
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { Lock, LockOpen, ArrowUp, ArrowDown, Trash2, Plus, Save, CheckCircle2 } from 'lucide-vue-next'
 import { useReviewStore } from '@/stores/review'
 import { BEAT_LABEL_MAP } from '@/shared/constants'
-import type { StoryBeat } from '@/shared/types'
+import type { ShotScore, StoryBeat } from '@/shared/types'
+import ShotPreviewPanel from '@/components/ShotPreviewPanel.vue'
 
 const emit = defineEmits<{
   confirm: []
 }>()
 
 const review = useReviewStore()
+
+/** 当前预览的镜头数据（null = 关闭） */
+const previewShot = ref<ShotScore | null>(null)
+/** 预览锚点 DOM 元素 */
+const previewAnchorEl = ref<HTMLElement | null>(null)
+
+/** 点击 shot ID：从 reviewStore 查找对应 ShotScore 并打开预览 */
+function handleShotPreview(shotId: string, event: MouseEvent): void {
+  if (previewShot.value?.shotId === shotId) {
+    previewShot.value = null
+    previewAnchorEl.value = null
+    return
+  }
+  const found = review.shotScores.find((s) => s.shotId === shotId)
+  if (found) {
+    previewShot.value = found
+    previewAnchorEl.value = event.currentTarget as HTMLElement
+  }
+}
 
 // ===================== Computed =====================
 
@@ -105,7 +125,7 @@ function formatMs(ms: number): string {
             <span class="w-5 text-surface-500 text-right shrink-0">{{ idx + 1 }}</span>
 
             <!-- Shot ID -->
-            <span class="flex-1 text-surface-200 font-mono truncate">
+            <span class="flex-1 text-surface-200 font-mono truncate cursor-pointer hover:text-accent hover:underline transition-colors" @click="handleShotPreview(shotId, $event)">
               {{ shotId.slice(0, 16) }}...
             </span>
 
@@ -165,4 +185,16 @@ function formatMs(ms: number): string {
       </div>
     </div>
   </div>
+    <!-- 镜头预览浮层 -->
+    <ShotPreviewPanel
+      :shot-id="previewShot?.shotId ?? ''"
+      :keyframe-url="previewShot?.keyframeUrl ?? null"
+      :video-url="previewShot?.proxyVideoUrl ?? null"
+      :start-ms="previewShot?.startMs ?? 0"
+      :end-ms="previewShot?.endMs ?? 0"
+      :anchor-el="previewAnchorEl"
+      :visible="previewShot !== null"
+      @close="previewShot = null; previewAnchorEl = null"
+    />
+
 </template>
