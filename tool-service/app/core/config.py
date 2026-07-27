@@ -18,6 +18,13 @@ class Settings(BaseSettings):
     artifact_root: Path = Path("runtime/artifacts")
     execution_store_path: Path = Path("runtime/executions/tool-executions.sqlite3")
     callback_timeout_seconds: float = 10.0
+    execution_max_workers: int = 4
+    execution_light_limit: int = 3
+    execution_media_limit: int = 2
+    execution_model_limit: int = 1
+    execution_render_limit: int = 1
+    execution_heavy_limit: int = 2
+    execution_max_recoveries: int = 1
 
     # LLM configuration (loaded from .env or environment)
     llm_provider: str = "deepseek"
@@ -36,6 +43,7 @@ class Settings(BaseSettings):
 
     # ASR
     asr_model_size: str = "small"  # "tiny", "small", "medium", "large-v3"
+    release_models_after_execution: bool = True
 
     model_config = SettingsConfigDict(
         env_prefix="TOOL_SERVICE_",

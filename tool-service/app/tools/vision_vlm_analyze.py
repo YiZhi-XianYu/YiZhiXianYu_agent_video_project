@@ -72,6 +72,7 @@ class VisionVlmAnalyzeTool:
             "description": "Analyze shot keyframes for scene, object, and person tags using VLM (falls back to CLIP)",
             "executionMode": "ASYNC",
             "resourceClass": "CPU_LIGHT",
+            "resourceGroup": "MODEL",
             "timeoutSeconds": 900,
             "supportsCancellation": False,
             "deterministic": False,

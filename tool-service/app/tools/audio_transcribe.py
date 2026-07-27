@@ -33,6 +33,7 @@ class SpeechTranscribeTool:
             "description": "Transcribe source video audio to timed SRT subtitles using Whisper ASR",
             "executionMode": "ASYNC",
             "resourceClass": "CPU_MEDIUM",
+            "resourceGroup": "MODEL",
             "timeoutSeconds": 600,
             "supportsCancellation": False,
             "deterministic": True,
@@ -66,6 +67,7 @@ class SpeechTranscribeTool:
         all_segments: list[dict[str, Any]] = []
         segment_index = 0
         proxy_paths = _resolve_proxy_paths_for_asr(proxy_inputs)
+        proxy_count = max(len(proxy_paths), 1)
 
         for i, (artifact_id, proxy_path) in enumerate(proxy_paths):
             if not proxy_path.is_file():
@@ -77,14 +79,23 @@ class SpeechTranscribeTool:
                 continue
 
             if report_progress is not None:
-                report_progress(int((i + 1) / max(len(proxy_paths), 1) * 60))
+                report_progress(15 + int(i / proxy_count * 70))
 
             # Find timeline offset for this source
             offset_ms = _find_timeline_offset(clips_meta, artifact_id)
 
             # Extract audio to WAV
             try:
-                segments = _transcribe(proxy_path, offset_ms, segment_index)
+                segments = _transcribe(
+                    proxy_path,
+                    offset_ms,
+                    segment_index,
+                    None if report_progress is None else (
+                        lambda fraction, index=i: report_progress(
+                            15 + int((index + fraction) / proxy_count * 70)
+                        )
+                    ),
+                )
                 all_segments.extend(segments)
                 segment_index += len(segments)
             except Exception as exc:
@@ -139,6 +150,7 @@ def _transcribe(
     proxy_path: Path,
     offset_ms: int,
     start_index: int,
+    report_progress: Callable[[float], None] | None = None,
 ) -> list[dict[str, Any]]:
     """Transcribe a single proxy video, returning SRT-ready segments."""
     model = _get_whisper_model()
@@ -156,7 +168,7 @@ def _transcribe(
         ]
         subprocess.run(extract_cmd, capture_output=True, text=True, encoding="utf-8", check=True)
 
-        segments_raw, _info = model.transcribe(
+        segments_raw, info = model.transcribe(
             str(wav_path),
             language=None,  # auto-detect
             vad_filter=True,
@@ -164,6 +176,7 @@ def _transcribe(
         )
 
         segments = []
+        duration_seconds = max(float(getattr(info, "duration", 0.0) or 0.0), 0.001)
         for seg in segments_raw:
             start_ms = int(seg.start * 1000) + offset_ms
             end_ms = int(seg.end * 1000) + offset_ms
@@ -175,6 +188,11 @@ def _transcribe(
                     "endMs": end_ms,
                     "text": text,
                 })
+            if report_progress is not None:
+                report_progress(min(1.0, max(0.0, float(seg.end) / duration_seconds)))
+
+        if report_progress is not None:
+            report_progress(1.0)
 
         return segments
     finally:
@@ -216,6 +234,14 @@ def _get_whisper_model() -> Any:
         )
     except Exception as exc:
         raise RuntimeError(f"Failed to load Whisper model '{model_size}': {exc}")
+
+
+def release_whisper_model() -> bool:
+    global _whisper_model, _loaded_model_size
+    released = _whisper_model is not None
+    _whisper_model = None
+    _loaded_model_size = None
+    return released
 
 
 def _format_srt(segments: list[dict[str, Any]]) -> str:

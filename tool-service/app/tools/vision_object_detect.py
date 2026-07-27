@@ -77,6 +77,7 @@ class VisionObjectDetectTool:
             "description": "Detect objects in shot keyframes using CLIP zero-shot",
             "executionMode": "ASYNC",
             "resourceClass": "CPU_MEDIUM",
+            "resourceGroup": "MODEL",
             "timeoutSeconds": 900,
             "supportsCancellation": False,
             "deterministic": True,

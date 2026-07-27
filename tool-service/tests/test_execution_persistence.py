@@ -183,3 +183,31 @@ def test_repeated_submit_does_not_schedule_duplicate_execution(tmp_path) -> None
 
     wait_for_status(service, first.execution_id, ExecutionStatus.SUCCEEDED)
     service.shutdown()
+
+
+def test_repeated_process_loss_marks_execution_retryable_failed(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("app.execution.service.settings.execution_max_recoveries", 1)
+    store_path = tmp_path / "executions.sqlite3"
+    request = make_request("recover:exhausted")
+    record = ToolExecutionRecord(
+        executionId="tex-recover-exhausted",
+        idempotencyKey=request.idempotency_key,
+        tool=request.tool,
+        version=request.version,
+        status=ExecutionStatus.RUNNING,
+        progress=40,
+        recoveryCount=1,
+    )
+    ExecutionStore(store_path).create(request, record)
+    tool = FakeTool()
+    service = ExecutionService(store_path, tool_registry=FakeRegistry(tool), max_workers=1)
+
+    service.start()
+    failed = wait_for_status(service, record.execution_id, ExecutionStatus.FAILED)
+    service.shutdown()
+
+    assert failed.error is not None
+    assert failed.error.code == "EXECUTION_RECOVERY_EXHAUSTED"
+    assert failed.error.retryable is True
+    assert failed.recovery_count == 2
+    assert tool.calls == 0

@@ -76,7 +76,11 @@ services:
 
   tool-service:
     build:
-      context: ./tool-service
+      context: .
+      dockerfile: tool-service/Dockerfile
+      args:
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-https://mirrors.aliyun.com/debian}
+        PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}
     container_name: avp-prod-tool-service
     restart: unless-stopped
     init: true
@@ -92,8 +96,21 @@ services:
       TOOL_SERVICE_LLM_OPENAI_API_KEY: ${LLM_OPENAI_API_KEY:-}
       TOOL_SERVICE_LLM_ANTHROPIC_API_KEY: ${LLM_ANTHROPIC_API_KEY:-}
       TOOL_SERVICE_ASR_MODEL_SIZE: ${ASR_MODEL_SIZE:-small}
+      TOOL_SERVICE_EXECUTION_MAX_WORKERS: ${TOOL_MAX_WORKERS:-4}
+      TOOL_SERVICE_EXECUTION_LIGHT_LIMIT: ${TOOL_LIGHT_LIMIT:-3}
+      TOOL_SERVICE_EXECUTION_MEDIA_LIMIT: ${TOOL_MEDIA_LIMIT:-2}
+      TOOL_SERVICE_EXECUTION_MODEL_LIMIT: ${TOOL_MODEL_LIMIT:-1}
+      TOOL_SERVICE_EXECUTION_RENDER_LIMIT: ${TOOL_RENDER_LIMIT:-1}
+      TOOL_SERVICE_EXECUTION_HEAVY_LIMIT: ${TOOL_HEAVY_LIMIT:-2}
+      TOOL_SERVICE_EXECUTION_MAX_RECOVERIES: ${TOOL_MAX_RECOVERIES:-1}
+      TOOL_SERVICE_RELEASE_MODELS_AFTER_EXECUTION: ${RELEASE_MODELS_AFTER_EXECUTION:-true}
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+      HF_HUB_DOWNLOAD_TIMEOUT: ${HF_HUB_DOWNLOAD_TIMEOUT:-300}
+      HF_HUB_ETAG_TIMEOUT: ${HF_HUB_ETAG_TIMEOUT:-30}
+      HF_HUB_DISABLE_XET: "1"
       PYTHONUNBUFFERED: "1"
       OMP_NUM_THREADS: "3"
+      MALLOC_ARENA_MAX: "2"
     volumes:
       - ${DEPLOY_ROOT:-/opt/agent-video}/data/runtime:/app/runtime
       - ${DEPLOY_ROOT:-/opt/agent-video}/data/huggingface:/app/.cache/huggingface

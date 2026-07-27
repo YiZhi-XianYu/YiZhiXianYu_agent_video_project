@@ -78,6 +78,7 @@ class ToolExecutionRecord(BaseModel):
     created_at: datetime = Field(default_factory=utc_now, alias="createdAt")
     started_at: datetime | None = Field(default=None, alias="startedAt")
     completed_at: datetime | None = Field(default=None, alias="completedAt")
+    recovery_count: int = Field(default=0, alias="recoveryCount")
 
     model_config = ConfigDict(populate_by_name=True)
 

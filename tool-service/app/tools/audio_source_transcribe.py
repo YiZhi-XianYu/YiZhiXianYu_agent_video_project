@@ -21,6 +21,7 @@ class SourceTranscribeTool:
             "description": "Transcribe each proxy audio stream into immutable source-time segments",
             "executionMode": "ASYNC",
             "resourceClass": "CPU_MEDIUM",
+            "resourceGroup": "MODEL",
             "timeoutSeconds": 600,
             "supportsCancellation": False,
             "deterministic": True,
@@ -40,10 +41,20 @@ class SourceTranscribeTool:
 
         sources: list[dict[str, Any]] = []
         proxy_paths = _resolve_proxy_paths_for_asr(proxy_inputs)
+        proxy_count = max(len(proxy_paths), 1)
         for index, (artifact_id, proxy_path) in enumerate(proxy_paths):
             if not proxy_path.is_file() or not _has_audio(proxy_path):
                 continue
-            segments = _transcribe(proxy_path, 0, 0)
+            segments = _transcribe(
+                proxy_path,
+                0,
+                0,
+                None if report_progress is None else (
+                    lambda fraction, item_index=index: report_progress(
+                        15 + int((item_index + fraction) / proxy_count * 75)
+                    )
+                ),
+            )
             if segments:
                 sources.append({
                     "sourceProxyArtifactId": artifact_id,
@@ -53,7 +64,7 @@ class SourceTranscribeTool:
                     ],
                 })
             if report_progress is not None:
-                report_progress(int((index + 1) / len(proxy_paths) * 90))
+                report_progress(15 + int((index + 1) / proxy_count * 75))
 
         if not sources:
             return []

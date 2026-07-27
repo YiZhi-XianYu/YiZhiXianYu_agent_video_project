@@ -41,3 +41,12 @@ def test_cross_service_artifact_contracts_match_workflow_edges() -> None:
     assert set(manifests["video.render"]["inputTypes"]) == {
         "TIMELINE", "BGM_AUDIO", "SUBTITLE_SRT",
     }
+
+
+def test_memory_heavy_workflow_tools_declare_resource_groups() -> None:
+    manifests = {item["name"]: item for item in registry.manifests()}
+
+    assert manifests["vision.vlm-analyze"]["resourceGroup"] == "MODEL"
+    assert manifests["audio.source-transcribe"]["resourceGroup"] == "MODEL"
+    assert manifests["audio.speech-transcribe"]["resourceGroup"] == "MODEL"
+    assert manifests["video.render"]["resourceGroup"] == "RENDER"

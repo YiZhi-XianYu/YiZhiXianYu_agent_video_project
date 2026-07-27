@@ -287,3 +287,31 @@ docker compose --env-file .env -f docker-compose.prod.yml ps
 ```
 
 前端或 Java 修改只需重建 `control-plane`；Python Tool 修改只需重建 `tool-service`。数据库结构以后只增加新的 Flyway migration，不修改已部署的 V1/V2。
+
+## 15. 4 核 8 GiB 资源策略
+
+生产 Tool Service 保留 4 个总 worker，但按资源权重调度：
+
+```text
+LIGHT  = 0 capacity unit
+MEDIA  = 1 capacity unit
+MODEL  = 2 capacity units
+RENDER = 2 capacity units
+total heavy capacity = 2
+```
+
+结果是轻量节点仍可并发，两个普通媒体任务可以并行，而 CLIP/Whisper
+或最终 Render 会独占重资源时段。模型任务结束后只释放进程内模型引用，
+不会删除 `/opt/agent-video/data/huggingface` 中的持久化缓存。
+
+如果内核日志出现 `Memory cgroup out of memory`，不要直接提高容器内存。
+先检查是否仍在使用旧镜像：
+
+```bash
+docker inspect avp-prod-tool-service --format '{{.Image}}'
+docker compose --env-file .env -f docker-compose.prod.yml build tool-service
+docker compose --env-file .env -f docker-compose.prod.yml up -d --force-recreate tool-service
+```
+
+Render 失败现在会保存 FFmpeg 退出码、终止信号和截断后的 stderr。
+`signal 9` 且没有 FFmpeg 诊断通常表示容器内存限制触发。

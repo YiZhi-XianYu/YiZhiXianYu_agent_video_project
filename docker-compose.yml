@@ -46,7 +46,8 @@ services:
 
   tool-service:
     build:
-      context: ./tool-service
+      context: .
+      dockerfile: tool-service/Dockerfile
     container_name: avp-tool-service
     restart: unless-stopped
     ports:

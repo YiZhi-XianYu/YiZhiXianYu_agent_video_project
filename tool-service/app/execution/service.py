@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+import logging
 from pathlib import Path
 from threading import Lock
 from uuid import uuid4
@@ -16,7 +18,10 @@ from app.core.models import (
     ToolExecutionRequest,
 )
 from app.execution.store import ExecutionStore
+from app.execution.resources import LIGHT, MEDIA, MODEL, RENDER, ResourcePolicy, resource_group
 from app.registry.registry import ToolRegistry, registry
+
+logger = logging.getLogger(__name__)
 
 
 class ExecutionService:
@@ -25,29 +30,68 @@ class ExecutionService:
         store_path: Path | None = None,
         *,
         tool_registry: ToolRegistry | None = None,
-        max_workers: int = 4,
+        max_workers: int | None = None,
+        resource_limits: dict[str, int] | None = None,
+        heavy_limit: int | None = None,
     ) -> None:
         self._store = ExecutionStore(store_path or settings.execution_store_path)
         self._registry = tool_registry or registry
-        self._max_workers = max_workers
+        worker_count = max_workers or settings.execution_max_workers
+        self._policy = ResourcePolicy(
+            max_workers=max(1, worker_count),
+            limits=resource_limits or {
+                LIGHT: settings.execution_light_limit,
+                MEDIA: settings.execution_media_limit,
+                MODEL: settings.execution_model_limit,
+                RENDER: settings.execution_render_limit,
+            },
+            heavy_limit=max(1, heavy_limit or settings.execution_heavy_limit),
+        )
         self._records: dict[str, ToolExecutionRecord] = {}
         self._requests: dict[str, ToolExecutionRequest] = {}
         self._scheduled: set[str] = set()
+        self._pending: deque[str] = deque()
+        self._execution_groups: dict[str, str] = {}
+        self._active_by_group: dict[str, int] = {}
+        self._active_total = 0
+        self._active_heavy_weight = 0
         self._lock = Lock()
         self._pool: ThreadPoolExecutor | None = None
         self._started = False
 
     def start(self) -> None:
+        callbacks: list[tuple[ToolExecutionRequest, ToolExecutionRecord]] = []
         with self._lock:
             if self._started:
                 return
             self._pool = ThreadPoolExecutor(
-                max_workers=self._max_workers,
+                max_workers=self._policy.max_workers,
                 thread_name_prefix="tool-worker",
             )
             self._started = True
 
             for request, persisted in self._store.list_recoverable():
+                recovery_count = persisted.recovery_count
+                if persisted.status == ExecutionStatus.RUNNING:
+                    recovery_count += 1
+                if recovery_count > settings.execution_max_recoveries:
+                    record = persisted.model_copy(update={
+                        "status": ExecutionStatus.FAILED,
+                        "progress": 100,
+                        "outputs": [],
+                        "error": ToolError(
+                            code="EXECUTION_RECOVERY_EXHAUSTED",
+                            message="Tool process stopped repeatedly while this execution was running",
+                            retryable=True,
+                        ),
+                        "completed_at": datetime.now(timezone.utc),
+                        "recovery_count": recovery_count,
+                    })
+                    self._requests[record.execution_id] = request
+                    self._records[record.execution_id] = record
+                    self._store.update(record)
+                    callbacks.append((request, record))
+                    continue
                 record = persisted.model_copy(update={
                     "status": ExecutionStatus.QUEUED,
                     "progress": 0,
@@ -55,11 +99,14 @@ class ExecutionService:
                     "error": None,
                     "started_at": None,
                     "completed_at": None,
+                    "recovery_count": recovery_count,
                 })
                 self._requests[record.execution_id] = request
                 self._records[record.execution_id] = record
                 self._store.update(record)
                 self._schedule_locked(record.execution_id)
+        for request, record in callbacks:
+            self._callback(request, record)
 
     def submit(self, request: ToolExecutionRequest) -> ToolExecutionRecord:
         self._registry.get(request.tool, request.version)
@@ -115,7 +162,49 @@ class ExecutionService:
         if self._pool is None:
             return
         self._scheduled.add(execution_id)
-        self._pool.submit(self._run, execution_id)
+        self._pending.append(execution_id)
+        self._drain_pending_locked()
+
+    def _drain_pending_locked(self) -> None:
+        if self._pool is None:
+            return
+        while self._active_total < self._policy.max_workers:
+            selected_index = self._next_runnable_index_locked()
+            if selected_index is None:
+                return
+            execution_id = self._pending[selected_index]
+            del self._pending[selected_index]
+            group = self._group_for_execution_locked(execution_id)
+            self._execution_groups[execution_id] = group
+            self._active_by_group[group] = self._active_by_group.get(group, 0) + 1
+            self._active_total += 1
+            self._active_heavy_weight += self._policy.heavy_weight(group)
+            self._pool.submit(self._run, execution_id)
+
+    def _next_runnable_index_locked(self) -> int | None:
+        for index, execution_id in enumerate(self._pending):
+            group = self._group_for_execution_locked(execution_id)
+            group_available = self._active_by_group.get(group, 0) < self._policy.limit_for(group)
+            heavy_available = (
+                self._active_heavy_weight + self._policy.heavy_weight(group)
+                <= self._policy.heavy_limit
+            )
+            if group_available and heavy_available:
+                return index
+        return None
+
+    def _group_for_execution_locked(self, execution_id: str) -> str:
+        request = self._requests.get(execution_id)
+        if request is None:
+            persisted = self._store.get(execution_id)
+            if persisted is None:
+                return LIGHT
+            request, record = persisted
+            self._requests[execution_id] = request
+            self._records[execution_id] = record
+        tool = self._registry.get(request.tool, request.version)
+        manifest = tool.manifest() if hasattr(tool, "manifest") else None
+        return resource_group(manifest)
 
     def _run(self, execution_id: str) -> None:
         try:
@@ -152,7 +241,10 @@ class ExecutionService:
                     error=None,
                     completed_at=datetime.now(timezone.utc),
                 )
+                self._release_models_if_needed(tool)
             except Exception as exc:  # Tool failures are normalized at the service boundary.
+                if 'tool' in locals():
+                    self._release_models_if_needed(tool)
                 record = self._update(
                     execution_id,
                     status=ExecutionStatus.FAILED,
@@ -169,6 +261,27 @@ class ExecutionService:
         finally:
             with self._lock:
                 self._scheduled.discard(execution_id)
+                group = self._execution_groups.pop(execution_id, LIGHT)
+                self._active_by_group[group] = max(0, self._active_by_group.get(group, 1) - 1)
+                self._active_total = max(0, self._active_total - 1)
+                self._active_heavy_weight = max(
+                    0,
+                    self._active_heavy_weight - self._policy.heavy_weight(group),
+                )
+                self._drain_pending_locked()
+
+    @staticmethod
+    def _release_models_if_needed(tool) -> None:
+        if not settings.release_models_after_execution:
+            return
+        manifest = tool.manifest() if hasattr(tool, "manifest") else None
+        if resource_group(manifest) != MODEL:
+            return
+        from app.core.model_lifecycle import release_models
+        try:
+            release_models()
+        except Exception:
+            logger.exception("Failed to release process-local ML model references")
 
     @staticmethod
     def _is_retryable(exc: Exception) -> bool:

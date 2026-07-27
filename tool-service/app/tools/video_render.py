@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ class VideoRenderTool:
             "description": "Compile a validated TIMELINE into an H.264 MP4 final video via FFmpeg with transitions, BGM, and subtitles",
             "executionMode": "ASYNC",
             "resourceClass": "CPU_MEDIUM",
+            "resourceGroup": "RENDER",
             "timeoutSeconds": 900,
             "supportsCancellation": False,
             "deterministic": True,
@@ -85,23 +87,27 @@ class VideoRenderTool:
 
         command.append(str(output_path))
 
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-        )
-        if process.stdout is None:
-            raise RuntimeError("ffmpeg progress stream is unavailable")
-        for line in process.stdout:
-            key, _, value = line.strip().partition("=")
-            if key == "out_time" and report_progress is not None:
-                report_progress(_transcode_progress(value, total_duration_sec))
-        stderr = process.stderr.read() if process.stderr is not None else ""
-        return_code = process.wait()
+        # A file-backed stderr stream avoids deadlocking when FFmpeg emits more
+        # diagnostics than an unread pipe can buffer while progress is parsed.
+        with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as stderr_stream:
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=stderr_stream,
+                text=True,
+                encoding="utf-8",
+            )
+            if process.stdout is None:
+                raise RuntimeError("ffmpeg progress stream is unavailable")
+            for line in process.stdout:
+                key, _, value = line.strip().partition("=")
+                if key == "out_time" and report_progress is not None:
+                    report_progress(_transcode_progress(value, total_duration_sec))
+            return_code = process.wait()
+            stderr_stream.seek(0)
+            stderr = stderr_stream.read()
         if return_code != 0:
-            raise _ffmpeg_render_error(stderr)
+            raise _ffmpeg_render_error(stderr, return_code)
         if not output_path.is_file() or output_path.stat().st_size == 0:
             raise RuntimeError("ffmpeg completed without producing a rendered video")
 
@@ -390,6 +396,7 @@ def _assemble_command(
 ) -> list[str]:
     cmd = [
         settings.ffmpeg_path, "-hide_banner", "-loglevel", "error", "-y",
+        "-filter_threads", "1", "-filter_complex_threads", "1",
         "-progress", "pipe:1", "-nostats",
     ]
     for p in input_paths:
@@ -397,6 +404,7 @@ def _assemble_command(
     cmd.extend(["-filter_complex", filter_complex])
     cmd.extend([
         "-map", final_video_label, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-threads", "2",
         "-pix_fmt", "yuv420p",
     ])
     cmd.extend(["-map", final_audio_label, "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"])
@@ -414,8 +422,16 @@ _DETERMINISTIC_FFMPEG_ERRORS = (
 )
 
 
-def _ffmpeg_render_error(stderr: str) -> ToolExecutionError:
-    message = stderr.strip() or "ffmpeg render failed"
+def _ffmpeg_render_error(stderr: str, return_code: int = 1) -> ToolExecutionError:
+    diagnostic = stderr.strip()
+    if len(diagnostic) > 8000:
+        diagnostic = diagnostic[-8000:]
+    if diagnostic:
+        message = f"ffmpeg exited with code {return_code}: {diagnostic}"
+    elif return_code < 0:
+        message = f"ffmpeg was terminated by signal {-return_code}; possible memory or container limit"
+    else:
+        message = f"ffmpeg exited with code {return_code} without diagnostic output"
     normalized = message.lower()
     retryable = not any(marker in normalized for marker in _DETERMINISTIC_FFMPEG_ERRORS)
     return ToolExecutionError(message, retryable=retryable)

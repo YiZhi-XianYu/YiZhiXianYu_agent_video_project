@@ -20,6 +20,14 @@ _CLIP_PROCESSOR: Any = None
 _MODEL_NAME = "openai/clip-vit-base-patch32"
 
 
+def release_clip_model() -> bool:
+    global _CLIP_MODEL, _CLIP_PROCESSOR
+    released = _CLIP_MODEL is not None or _CLIP_PROCESSOR is not None
+    _CLIP_MODEL = None
+    _CLIP_PROCESSOR = None
+    return released
+
+
 def _resolve_clip_model_source(local_path: str | None = None) -> str:
     """Use a configured local model directory, otherwise the public model ID."""
     configured_path = local_path if local_path is not None else os.environ.get("CLIP_LOCAL_MODEL_PATH", "")

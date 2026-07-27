@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from app.tools.video_render import (
     VideoRenderTool,
+    _assemble_command,
     _build_filter_graph,
     _ffmpeg_render_error,
     _resolve_proxy_paths,
@@ -199,6 +200,22 @@ def test_ffmpeg_transient_runtime_error_remains_retryable():
     error = _ffmpeg_render_error("Resource temporarily unavailable")
 
     assert error.retryable is True
+
+
+def test_ffmpeg_signal_exit_reports_possible_resource_limit():
+    error = _ffmpeg_render_error("", -9)
+
+    assert "signal 9" in str(error)
+    assert "memory" in str(error)
+    assert error.retryable is True
+
+
+def test_render_command_limits_ffmpeg_threads():
+    command = _assemble_command(["input.mp4"], "null[outv];anull[outa]", "[outv]", "[outa]")
+
+    assert command[command.index("-filter_threads") + 1] == "1"
+    assert command[command.index("-filter_complex_threads") + 1] == "1"
+    assert command[command.index("-threads") + 1] == "2"
 
 
 def test_resolve_proxy_paths_finds_and_misses(monkeypatch, tmp_path):

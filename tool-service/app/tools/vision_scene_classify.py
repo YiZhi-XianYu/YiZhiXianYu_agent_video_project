@@ -77,6 +77,7 @@ class VisionSceneClassifyTool:
             "description": "Classify shot keyframes into scene categories using CLIP zero-shot",
             "executionMode": "ASYNC",
             "resourceClass": "CPU_MEDIUM",
+            "resourceGroup": "MODEL",
             "timeoutSeconds": 900,
             "supportsCancellation": False,
             "deterministic": True,
