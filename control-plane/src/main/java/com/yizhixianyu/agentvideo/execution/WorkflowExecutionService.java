@@ -20,7 +20,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -42,6 +44,8 @@ import java.time.Duration;
 
 @Service
 public class WorkflowExecutionService {
+
+    private static final long MAX_BGM_UPLOAD_BYTES = 100L * 1024 * 1024;
 
     private final WorkflowRunRepository workflowRepository;
     private final WorkflowAssetRepository workflowAssetRepository;
@@ -356,6 +360,96 @@ public class WorkflowExecutionService {
     }
 
     @Transactional
+    public String uploadBgm(
+        String workflowRunId, MultipartFile file, String playbackMode, long durationMs
+    ) {
+        var workflow = requireBgmGate(workflowRunId);
+        var bgmTask = requireBgmTask(workflowRunId);
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("BGM audio file is required");
+        }
+        if (file.getSize() > MAX_BGM_UPLOAD_BYTES) {
+            throw new IllegalArgumentException("BGM audio file must not exceed 100 MB");
+        }
+        var normalizedMode = playbackMode == null ? "ONCE" : playbackMode.trim().toUpperCase();
+        if (!Set.of("ONCE", "LOOP").contains(normalizedMode)) {
+            throw new IllegalArgumentException("BGM playbackMode must be ONCE or LOOP");
+        }
+        if (durationMs < 0 || durationMs > Duration.ofHours(12).toMillis()) {
+            throw new IllegalArgumentException("BGM durationMs is outside the supported range");
+        }
+        var originalName = sanitizeBgmFileName(file.getOriginalFilename());
+        var extension = fileExtension(originalName);
+        var mediaType = file.getContentType() == null ? "" : file.getContentType().toLowerCase();
+        if (!Set.of(".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac").contains(extension)
+            || (!mediaType.isBlank() && !mediaType.startsWith("audio/")
+                && !"application/octet-stream".equals(mediaType))) {
+            throw new IllegalArgumentException("Unsupported BGM audio format");
+        }
+
+        var artifactId = "art_" + UUID.randomUUID().toString().replace("-", "");
+        var artifactDir = artifactRoot.resolve(artifactId);
+        var audioPath = artifactDir.resolve("bgm-upload" + extension).normalize();
+        if (!audioPath.startsWith(artifactDir)) {
+            throw new IllegalArgumentException("Invalid BGM file name");
+        }
+        long contentSize;
+        String contentHash;
+        try {
+            Files.createDirectories(artifactDir);
+            try (InputStream input = file.getInputStream()) {
+                Files.copy(input, audioPath);
+            }
+            contentSize = Files.size(audioPath);
+            if (contentSize == 0) {
+                throw new IllegalArgumentException("BGM audio file is empty");
+            }
+            contentHash = sha256(audioPath);
+        } catch (IllegalArgumentException exc) {
+            throw exc;
+        } catch (Exception exc) {
+            throw new IllegalStateException("Failed to store uploaded BGM", exc);
+        }
+
+        var selectedAt = Instant.now().toString();
+        var metadata = new LinkedHashMap<String, Object>();
+        metadata.put("selected", true);
+        metadata.put("provider", "upload");
+        metadata.put("title", originalName);
+        metadata.put("artist", "用户上传");
+        metadata.put("fileName", originalName);
+        metadata.put("bgmDurationMs", durationMs);
+        metadata.put("playbackMode", normalizedMode);
+        metadata.put("selectedAt", selectedAt);
+        artifactRepository.save(new ArtifactEntity(
+            artifactId,
+            workflow.getProjectId(),
+            bgmTask.getId(),
+            "BGM_AUDIO",
+            audioPath.toUri().toString(),
+            mediaType.isBlank() || "application/octet-stream".equals(mediaType)
+                ? audioMediaType(extension) : mediaType,
+            contentSize,
+            contentHash,
+            toJson(metadata)
+        ));
+        saveJsonArtifact(
+            workflow.getProjectId(), bgmTask.getId(), "BGM_SELECTION", "bgm-selection.json",
+            toJson(Map.of(
+                "mode", "UPLOADED",
+                "selectedAudioArtifactId", artifactId,
+                "playbackMode", normalizedMode,
+                "durationMs", durationMs,
+                "fileName", originalName,
+                "selectedAt", selectedAt
+            ))
+        );
+
+        completeBgmGate(workflowRunId, workflow);
+        return workflowRunId;
+    }
+
+    @Transactional
     public String continueWithoutBgm(String workflowRunId) {
         var workflow = requireBgmGate(workflowRunId);
         var bgmTask = requireBgmTask(workflowRunId);
@@ -364,6 +458,38 @@ public class WorkflowExecutionService {
             toJson(Map.of("mode", "NONE", "selectedAt", Instant.now().toString()))
         );
         completeBgmGate(workflowRunId, workflow);
+        return workflowRunId;
+    }
+
+    @Transactional
+    public String refreshBgmCandidates(String workflowRunId) {
+        var workflow = requireBgmGate(workflowRunId);
+        var bgmTask = requireBgmTask(workflowRunId);
+        var previousCandidates = artifactRepository.findByProducerTaskRunId(bgmTask.getId()).stream()
+            .filter(artifact -> "BGM_CANDIDATE".equals(artifact.getType()))
+            .toList();
+        var excludedTrackIds = new LinkedHashSet<String>();
+        var latestBatch = 0;
+        for (var artifact : previousCandidates) {
+            var metadata = parseJsonObject(artifact.getMetadataJson());
+            var trackId = String.valueOf(metadata.getOrDefault("providerTrackId", "")).trim();
+            if (!trackId.isBlank()) {
+                excludedTrackIds.add(trackId);
+            }
+            var batch = metadata.get("recommendationBatch");
+            if (batch instanceof Number number) {
+                latestBatch = Math.max(latestBatch, number.intValue());
+            }
+        }
+
+        var parameters = new LinkedHashMap<>(parseParameters(bgmTask));
+        parameters.put("recommendationBatch", Math.min(latestBatch + 1, 100));
+        parameters.put("recommendationSeed", workflowRunId);
+        parameters.put("excludedTrackIds", excludedTrackIds.stream().limit(100).toList());
+        bgmTask.updateParametersJson(toJson(parameters));
+        bgmTask.resetForReexecution();
+        workflow.resume();
+        evaluateWorkflow(workflowRunId);
         return workflowRunId;
     }
 
@@ -380,9 +506,9 @@ public class WorkflowExecutionService {
     private TaskRunEntity requireBgmTask(String workflowRunId) {
         return taskRepository.findByWorkflowRunIdOrderByCreatedAtAsc(workflowRunId).stream()
             .filter(task -> "bgm_select".equals(task.getNodeKey()))
-            .filter(task -> task.getStatus() == TaskStatus.SUCCEEDED)
+            .filter(task -> task.getStatus() == TaskStatus.SUCCEEDED || task.getStatus() == TaskStatus.FAILED)
             .findFirst()
-            .orElseThrow(() -> new IllegalStateException("BGM selection task has not succeeded: " + workflowRunId));
+            .orElseThrow(() -> new IllegalStateException("BGM selection task has not finished: " + workflowRunId));
     }
 
     private void completeBgmGate(String workflowRunId, WorkflowRunEntity workflow) {
@@ -622,6 +748,23 @@ public class WorkflowExecutionService {
         }
         var idempotencyKey = task.getNodeKey() + ":" + task.getId() + ":" + task.getAttempt();
         var parameters = new java.util.HashMap<>(parseParameters(task));
+        if ("audio.bgm-select".equals(task.getToolName())) {
+            parameters.putIfAbsent("recommendationBatch", 0);
+            parameters.putIfAbsent("recommendationSeed", workflow.getId());
+            var excludedTrackIds = new LinkedHashSet<String>();
+            var configuredExclusions = parameters.get("excludedTrackIds");
+            if (configuredExclusions instanceof List<?> values) {
+                values.stream().map(String::valueOf).filter(value -> !value.isBlank())
+                    .forEach(excludedTrackIds::add);
+            }
+            artifactRepository.findTop100ByProjectIdAndTypeOrderByCreatedAtDesc(
+                workflow.getProjectId(), "BGM_CANDIDATE"
+            ).stream().map(artifact -> parseJsonObject(artifact.getMetadataJson()))
+                .map(metadata -> String.valueOf(metadata.getOrDefault("providerTrackId", "")).trim())
+                .filter(value -> !value.isBlank())
+                .forEach(excludedTrackIds::add);
+            parameters.put("excludedTrackIds", excludedTrackIds.stream().limit(100).toList());
+        }
         if ("video.proxy-generate".equals(task.getToolName())) {
             parameters.putIfAbsent("quality", workflow.getProxyQuality().value());
         }
@@ -631,11 +774,15 @@ public class WorkflowExecutionService {
             }
             parameters.put("sourceAssetId", asset.getId());
         }
+        var inputs = resolveInputs(task, asset);
+        if ("video.render".equals(task.getToolName())) {
+            parameters.put("bgmPlaybackMode", resolveBgmPlaybackMode(inputs));
+        }
         var request = new ToolServiceClient.CreateToolExecutionRequest(
             task.getToolName(),
             task.getToolVersion(),
             idempotencyKey,
-            resolveInputs(task, asset),
+            inputs,
             parameters,
             publicBaseUrl + "/internal/tool-callbacks",
             new ToolServiceClient.TraceContext(UUID.randomUUID().toString(), workflow.getId(), task.getId())
@@ -677,7 +824,7 @@ public class WorkflowExecutionService {
                 if ("NONE".equals(bgmSelectionMode)) {
                     continue;
                 }
-                if ("SELECTED".equals(bgmSelectionMode)
+                if (Set.of("SELECTED", "UPLOADED").contains(bgmSelectionMode)
                     && !selectedBgmArtifactId.equals(artifact.getExternalArtifactId())) {
                     continue;
                 }
@@ -693,6 +840,38 @@ public class WorkflowExecutionService {
             throw new IllegalStateException("Required upstream Artifact is missing for " + task.getInstanceKey());
         }
         return inputs;
+    }
+
+    private String sanitizeBgmFileName(String name) {
+        var value = name == null || name.isBlank() ? "bgm.mp3" : Path.of(name).getFileName().toString();
+        return value.replaceAll("[^\\p{L}\\p{N}._-]", "_");
+    }
+
+    private String fileExtension(String fileName) {
+        var index = fileName.lastIndexOf('.');
+        return index < 0 ? "" : fileName.substring(index).toLowerCase();
+    }
+
+    private String audioMediaType(String extension) {
+        return switch (extension) {
+            case ".mp3" -> "audio/mpeg";
+            case ".wav" -> "audio/wav";
+            case ".m4a" -> "audio/mp4";
+            case ".aac" -> "audio/aac";
+            case ".ogg" -> "audio/ogg";
+            case ".flac" -> "audio/flac";
+            default -> "application/octet-stream";
+        };
+    }
+
+    private String resolveBgmPlaybackMode(Map<String, ToolServiceClient.ArtifactInput> inputs) {
+        var bgm = inputs.get("bgm");
+        if (bgm == null) return "ONCE";
+        var playbackMode = artifactRepository.findByExternalArtifactId(bgm.artifactId())
+            .map(artifact -> parseJsonObject(artifact.getMetadataJson()))
+            .map(metadata -> String.valueOf(metadata.getOrDefault("playbackMode", "ONCE")))
+            .orElse("ONCE").toUpperCase();
+        return Set.of("ONCE", "LOOP").contains(playbackMode) ? playbackMode : "ONCE";
     }
 
     private List<ArtifactEntity> latestArtifactsByProducerAndType(List<ArtifactEntity> artifacts) {
@@ -917,7 +1096,9 @@ public class WorkflowExecutionService {
                 continue;
             }
             var producerSucceeded = upstream.stream().anyMatch(up ->
-                up.getStatus() == TaskStatus.SUCCEEDED && gate.afterNodeKey().equals(up.getNodeKey())
+                gate.afterNodeKey().equals(up.getNodeKey())
+                    && (up.getStatus() == TaskStatus.SUCCEEDED
+                        || ("gate_bgm_review".equals(gate.gateKey()) && up.getStatus() == TaskStatus.FAILED))
             );
             if (producerSucceeded) {
                 return gate;
@@ -939,7 +1120,10 @@ public class WorkflowExecutionService {
                 continue;
             }
             var producerSucceeded = tasks.stream().anyMatch(task ->
-                gate.afterNodeKey().equals(task.getNodeKey()) && task.getStatus() == TaskStatus.SUCCEEDED
+                gate.afterNodeKey().equals(task.getNodeKey())
+                    && (task.getStatus() == TaskStatus.SUCCEEDED
+                        || ("gate_bgm_review".equals(gate.gateKey())
+                            && task.getStatus() == TaskStatus.FAILED))
             );
             if (producerSucceeded) {
                 return gate;
@@ -1240,6 +1424,22 @@ public class WorkflowExecutionService {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content));
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 not available", e);
+        }
+    }
+
+    private String sha256(Path path) {
+        try {
+            var digest = MessageDigest.getInstance("SHA-256");
+            try (var input = Files.newInputStream(path)) {
+                var buffer = new byte[8192];
+                int read;
+                while ((read = input.read(buffer)) >= 0) {
+                    digest.update(buffer, 0, read);
+                }
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (Exception exc) {
+            throw new IllegalStateException("Failed to hash Artifact", exc);
         }
     }
 

@@ -327,3 +327,64 @@ Workflow 前同样校验画布、轨道、Clip/Shot 唯一性、源区间、轨�
 验证结果：Python 全量测试 79 passed；Java 全量测试通过；`control-plane` 与 `tool-service` Docker
 生产构建通过，其中前端 `vue-tsc`、Vite 与 Java package 均成功。本地容器使用新镜像重建后，
 项目页实际显示 5 个素材删除按钮；素材预览与按钮布局正常，浏览器控制台无 warning/error。
+
+## 第十二阶段补充：本地 BGM 上传与受控循环播放
+
+Jamendo 在大陆 ECS 出现间歇性请求失败时，非全自动 Workflow 现在仍会停在 `gate_bgm_review`，
+不会因为在线 Provider 失败直接跳过人工选择。BGM 审核页无论是否取得在线候选都提供本地音频上传，
+支持 MP3、WAV、M4A、AAC、OGG 和 FLAC，单文件最大 100 MB。
+
+浏览器读取音频时长并与 Timeline 时长比较：若音频更短，必须明确选择“循环至视频结束”或“只播放
+一次”后才能提交；音频不短于视频时默认只播放一次。Java 将上传文件保存为原 `bgm_select` Task
+产生的新不可变 `BGM_AUDIO` Artifact，并用 `BGM_SELECTION` 保存 `UPLOADED`、`ONCE/LOOP`、
+文件名和时长。Workflow 保持原 ID，随后继续原 Render 节点。
+
+播放模式不会作为任意 FFmpeg 内容传递：Java 只允许 `ONCE/LOOP` 两个枚举值，Python Render
+再次校验。循环模式先用 FFprobe 读取真实时长和采样率，再为 `aloop` 设置一轮音频的有界采样数，
+最后裁切至成片时长；单次模式播放完成后保留视频原声，不自动重复。Artifact 文件、哈希、选择记录
+和 Render 元数据均保留完整血缘。
+
+验证结果：Python 全量测试 82 passed，其中 Render 专项 19 passed；Java 全量测试通过；前端
+`vue-tsc`、Vite 和 Control Plane Docker 生产构建通过。
+
+## 第十二阶段补充：故事编排添加镜头 Payload 修复
+
+人工故事编排中从候选列表添加镜头后，前端原先只追加 `shotIds/shots`，没有同步更新 Beat 的实际
+时长，并且新镜头缺少 Java Payload Validator 强制要求的 `selectionReasons`。保存版本或应用方案时，
+因此会被后端以 `actualDurationMs` 不匹配或 `selectionReasons must be an array` 拒绝。
+
+修复后编辑状态在每次添加、删除和排序后按 `shotIds` 重建镜头顺序，并重算每段及全片时长；添加
+镜头会保留完整素材 ID、代理 Artifact ID 和源区间，同时写入受控的人工编辑原因。短于 600 ms 的
+候选不会再出现在可添加列表中。保存或应用前还会再次规范化所有镜头的整数时间、选择区间、时长、
+排名、原因数组和故事角色，并据此生成 `actualDurationMs`、`targetDurationMs` 与 `maxShots`，使历史
+版本或浏览器中的旧编辑状态也不能提交不一致 Payload。后端严格校验保持不变。
+
+验证结果：前端 `vue-tsc --noEmit` 通过；Control Plane Docker 生产构建通过，其中容器内 `npm ci`、
+`vue-tsc`、Vite 和 Java package 均成功；`git diff --check` 通过。
+
+## 第十二阶段补充：BGM 多样化推荐与换一批
+
+原 BGM 推荐把五段式 Story Plan 中权重最高的 `CLIMAX` 固定映射为 `epic`，再使用 Jamendo 的
+`order=relevance` 取前三名。由于每个方案都包含高潮段，相同检索条件长期稳定返回同一批歌曲，页面
+虽然显示“按情绪推荐”，实际没有利用各故事段时长和镜头语义。
+
+现在 Tool Service 根据五段的实际时长分布与镜头 `selectionReasons` 构建受控音乐画像，生成至多三个
+白名单标签，例如 energetic、upbeat、calm、serene、epic、cinematic、acoustic 和 instrumental。
+Jamendo 针对多个画像标签扩大搜索池，并按以下因素重新排序：
+
+- Provider 原始相关度；
+- 音乐与成片的时长接近程度；
+- 主情绪和辅助标签命中；
+- 器乐曲加分；
+- 相同作者的候选多样性惩罚；
+- 当前项目近期已展示曲目的显著降权；
+- 由 Workflow ID 派生的稳定微小扰动，保证同一批次可审计且不同项目不总得到相同顺序。
+
+BGM 审核页新增“换一批”。点击后不会创建新 Workflow，也不会删除或覆盖旧候选：Java 在原
+`bgm_select` Task 上写入受控的 `recommendationBatch`、`recommendationSeed` 和最多 100 个历史
+`providerTrackId` 排除项，重置并重新执行该节点；完成后 Workflow 再次停回原 BGM Gate。前端只展示
+最新 `candidateSetId` 对应的候选，但历史候选 Artifact 仍不可变保留。每首歌曲同时展示音乐画像标签和
+推荐原因。本地上传、无 BGM、安全降级与原 Workflow 继续渲染逻辑保持不变。
+
+验证结果：BGM 专项测试 4 passed；Python 全量测试 83 passed；Java 全量测试通过；Tool Service 与
+Control Plane Docker 生产构建通过，其中前端 `vue-tsc`、Vite 和 Java package 均成功。

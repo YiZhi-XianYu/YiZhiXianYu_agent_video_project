@@ -259,6 +259,13 @@ public class TaskRunEntity extends BaseEntity {
     public String getInputBinding() { return inputBinding; }
     public String getParametersJson() { return parametersJson; }
 
+    public void updateParametersJson(String parametersJson) {
+        if (status == TaskStatus.DISPATCHING || status == TaskStatus.RUNNING || status == TaskStatus.RETRY_WAIT) {
+            throw new IllegalStateException("Cannot update parameters for active task " + nodeKey);
+        }
+        this.parametersJson = parametersJson == null || parametersJson.isBlank() ? "{}" : parametersJson;
+    }
+
     public String getDependsOnTaskRunId() {
         return dependsOnTaskRunId;
     }

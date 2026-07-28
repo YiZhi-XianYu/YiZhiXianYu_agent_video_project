@@ -65,6 +65,12 @@ class VideoRenderTool:
         bgm_path: Path | None = None
         if bgm_inputs:
             bgm_path = _resolve_extra_path(bgm_inputs[0].uri)
+        bgm_playback_mode = str(request.parameters.get("bgmPlaybackMode", "ONCE")).upper()
+        if bgm_playback_mode not in {"ONCE", "LOOP"}:
+            raise ValueError("bgmPlaybackMode must be ONCE or LOOP")
+        bgm_loop_samples = (
+            _probe_audio_sample_count(bgm_path) if bgm_path is not None and bgm_playback_mode == "LOOP" else None
+        )
 
         srt_path: Path | None = None
         if srt_inputs:
@@ -74,7 +80,8 @@ class VideoRenderTool:
         clips = timeline["tracks"][0]["clips"]
         input_args, filter_complex, final_video_label, final_audio_label = _build_filter_graph(
             clips, canvas, proxy_map, audio_map,
-            bgm_path=bgm_path, srt_path=srt_path,
+            bgm_path=bgm_path, bgm_playback_mode=bgm_playback_mode,
+            bgm_loop_samples=bgm_loop_samples, srt_path=srt_path,
         )
         command = _assemble_command(input_args, filter_complex, final_video_label, final_audio_label)
 
@@ -123,6 +130,7 @@ class VideoRenderTool:
             "videoCodec": "h264",
             "audioCodec": "aac" if probe.get("hasAudio") else None,
             "hasBgm": bgm_path is not None,
+            "bgmPlaybackMode": bgm_playback_mode if bgm_path is not None else None,
             "hasSubtitles": srt_path is not None,
             "preset": "veryfast",
             "crf": 20,
@@ -204,6 +212,8 @@ def _build_filter_graph(
     audio_map: dict[str, bool],
     *,
     bgm_path: Path | None = None,
+    bgm_playback_mode: str = "ONCE",
+    bgm_loop_samples: int | None = None,
     srt_path: Path | None = None,
 ) -> tuple[list[str], str, str, str]:
     """Build a transition-aware FFmpeg filter graph.
@@ -359,10 +369,20 @@ def _build_filter_graph(
         for track in _find_extra_tracks(clips):
             pass  # BGM settings are on the command args, not clips
 
-        transition_filters.append(
-            f"[{bgm_input_index}:a]atrim=0:duration={total_dur:.3f},"
-            f"volume={bgm_volume}[bgm]"
-        )
+        bgm_source = f"[{bgm_input_index}:a]"
+        if bgm_playback_mode == "LOOP":
+            if bgm_loop_samples is None or bgm_loop_samples < 1:
+                raise ValueError("Looping BGM requires a readable audio duration")
+            transition_filters.append(
+                f"{bgm_source}aloop=loop=-1:size={bgm_loop_samples},"
+                f"atrim=0:duration={total_dur:.3f},asetpts=PTS-STARTPTS,"
+                f"volume={bgm_volume}[bgm]"
+            )
+        else:
+            transition_filters.append(
+                f"{bgm_source}atrim=0:duration={total_dur:.3f},"
+                f"asetpts=PTS-STARTPTS,volume={bgm_volume}[bgm]"
+            )
         transition_filters.append(
             f"{final_audio_label}[bgm]amix=inputs=2:duration=first:"
             f"dropout_transition=0[outa_mixed]"
@@ -468,6 +488,25 @@ def _probe_output(output_path: Path) -> dict[str, Any]:
     streams = json.loads(process.stdout).get("streams", [])
     has_audio = any(s.get("codec_type") == "audio" for s in streams)
     return {"hasAudio": has_audio}
+
+
+def _probe_audio_sample_count(path: Path) -> int:
+    command = [
+        settings.ffprobe_path, "-v", "error", "-select_streams", "a:0",
+        "-show_entries", "stream=sample_rate:format=duration",
+        "-of", "json", str(path),
+    ]
+    process = subprocess.run(command, capture_output=True, text=True, encoding="utf-8")
+    if process.returncode != 0:
+        raise ValueError("Uploaded BGM audio cannot be read by FFprobe")
+    payload = json.loads(process.stdout or "{}")
+    streams = payload.get("streams") or []
+    duration = float((payload.get("format") or {}).get("duration") or 0)
+    sample_rate = int((streams[0] if streams else {}).get("sample_rate") or 0)
+    sample_count = round(duration * sample_rate)
+    if sample_count < 1:
+        raise ValueError("Uploaded BGM audio duration is unavailable")
+    return sample_count
 
 
 def _sha256(path: Path) -> str:

@@ -13,7 +13,7 @@ import {
 } from 'lucide-vue-next'
 import { useReviewStore } from '@/stores/review'
 import { BEAT_LABEL_MAP } from '@/shared/constants'
-import type { BeatRole, ShotScore, StoryBeat, StoryPlan } from '@/shared/types'
+import type { BeatRole, ShotScore, StoryBeat, StoryPlan, StoryShot } from '@/shared/types'
 import type { VersionListItem } from '@/api/types'
 import ShotPreviewPanel from '@/components/ShotPreviewPanel.vue'
 import { savePlan, applyPlan, getVersion, listVersions } from '@/api/plans'
@@ -69,7 +69,7 @@ const availableCandidates = computed<ShotScore[]>(() => {
       && Boolean(shot.sourceProxyArtifactId)
       && shot.startMs != null
       && shot.endMs != null
-      && shot.endMs > shot.startMs)
+      && shot.endMs - shot.startMs >= 600)
     .sort((a, b) => (b.rankScore ?? 0) - (a.rankScore ?? 0))
 })
 
@@ -110,9 +110,17 @@ function mapVersionPlan(payload: unknown): StoryPlan {
       sourceInMs: Number(shot.sourceInMs ?? shot.startMs ?? 0),
       sourceOutMs: Number(shot.sourceOutMs ?? shot.endMs ?? 0),
       selectedDurationMs: Number(shot.selectedDurationMs ?? 0),
+      selectionReasons: Array.isArray(shot.selectionReasons)
+        ? shot.selectionReasons.map((reason: unknown) => String(reason))
+        : [],
       storyRole: beat.role as BeatRole,
     })),
     targetDurationMs: Number(beat.targetDurationMs ?? 0),
+    actualDurationMs: Number(beat.actualDurationMs ?? (Array.isArray(beat.shots)
+      ? beat.shots.reduce((sum: number, shot: Record<string, any>) => (
+          sum + Math.max(0, Number(shot.sourceOutMs ?? 0) - Number(shot.sourceInMs ?? 0))
+        ), 0)
+      : 0)),
   }))
   const calculatedDuration = mappedBeats.reduce((total, beat) => total + (beat.shots ?? []).reduce(
     (sum, shot) => sum + Math.max(0, shot.selectedDurationMs || shot.sourceOutMs - shot.sourceInMs), 0,
@@ -176,31 +184,54 @@ function previewCandidate(shot: ShotScore, event: MouseEvent): void {
   previewAnchorEl.value = event.currentTarget as HTMLElement
 }
 
+function normalizedStoryShot(beat: StoryBeat, shotId: string): StoryShot {
+  const existing = beat.shots?.find((shot) => shot.shotId === shotId)
+  const score = review.shotScores.find((item) => item.shotId === shotId)
+  const sourceAssetId = existing?.sourceAssetId || score?.sourceAssetId || ''
+  const sourceProxyArtifactId = existing?.sourceProxyArtifactId || score?.sourceProxyArtifactId || ''
+  const startMs = Math.round(existing?.startMs ?? score?.startMs ?? 0)
+  const endMs = Math.round(existing?.endMs ?? score?.endMs ?? 0)
+  if (!sourceAssetId || !sourceProxyArtifactId || endMs - startMs < 600) {
+    throw new Error(`镜头 ${shotId} 的素材信息不完整或时长不足 0.6 秒，无法保存故事方案`)
+  }
+
+  const requestedInMs = Math.round(existing?.sourceInMs ?? startMs)
+  const requestedOutMs = Math.round(existing?.sourceOutMs ?? endMs)
+  const sourceInMs = Math.min(Math.max(startMs, requestedInMs), endMs - 600)
+  const sourceOutMs = Math.min(endMs, Math.max(sourceInMs + 600, requestedOutMs))
+  return {
+    shotId,
+    sourceAssetId,
+    sourceProxyArtifactId,
+    startMs,
+    endMs,
+    sourceInMs,
+    sourceOutMs,
+    selectedDurationMs: sourceOutMs - sourceInMs,
+    rank: Math.max(1, Math.round(existing?.rank ?? score?.rankScore ?? 0)),
+    selectionReasons: Array.isArray(existing?.selectionReasons) ? existing.selectionReasons : [],
+    storyRole: beat.role,
+  }
+}
+
 function planPayload(): Record<string, unknown> {
+  const normalizedBeats = beats.value.map((beat) => {
+    const shots = beat.shotIds.map((shotId) => normalizedStoryShot(beat, shotId))
+    const actualDurationMs = shots.reduce((sum, shot) => sum + shot.selectedDurationMs, 0)
+    return {
+      role: beat.role,
+      targetDurationMs: actualDurationMs,
+      actualDurationMs,
+      shots,
+    }
+  })
+  const targetDurationMs = normalizedBeats.reduce((sum, beat) => sum + beat.actualDurationMs, 0)
   return {
     schemaVersion: '1.0',
     template: 'MANUAL_EDIT',
-    targetDurationMs: totalDuration.value,
-    maxShots: beats.value.reduce((sum, beat) => sum + beat.shotIds.length, 0),
-    beats: beats.value.map((beat) => ({
-      role: beat.role,
-      targetDurationMs: beat.targetDurationMs,
-      shots: (beat.shots ?? beat.shotIds.map((shotId) => {
-        const score = review.shotScores.find((item) => item.shotId === shotId)
-        return {
-          shotId,
-          sourceAssetId: score?.sourceAssetId ?? '',
-          sourceProxyArtifactId: score?.sourceProxyArtifactId ?? '',
-          startMs: score?.startMs ?? 0,
-          endMs: score?.endMs ?? 0,
-          sourceInMs: score?.startMs ?? 0,
-          sourceOutMs: score?.endMs ?? 0,
-          selectedDurationMs: Math.max(600, (score?.endMs ?? 0) - (score?.startMs ?? 0)),
-          rank: Math.max(1, Math.round(score?.rankScore ?? 0)),
-          storyRole: beat.role,
-        }
-      })).map((shot) => ({ ...shot, storyRole: beat.role })),
-    })),
+    targetDurationMs,
+    maxShots: normalizedBeats.reduce((sum, beat) => sum + beat.shots.length, 0),
+    beats: normalizedBeats,
   }
 }
 

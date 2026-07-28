@@ -3,7 +3,7 @@ from pathlib import Path
 
 from app.core.config import settings
 from app.core.models import ArtifactInput, ToolExecutionRequest
-from app.music.providers import MusicCandidate
+from app.music.providers import MusicCandidate, MusicSearchProfile
 from app.tools import audio_bgm
 
 
@@ -13,7 +13,9 @@ class FakeMusicProvider:
     def __init__(self, root: Path) -> None:
         self.root = root
 
-    def search(self, mood: str, target_duration_ms: int, limit: int) -> list[MusicCandidate]:
+    def search(
+        self, profile: MusicSearchProfile, target_duration_ms: int, limit: int
+    ) -> list[MusicCandidate]:
         return [
             MusicCandidate(
                 provider=self.name,
@@ -21,10 +23,12 @@ class FakeMusicProvider:
                 title=f"Track {index}",
                 artist="Test Artist",
                 duration_ms=target_duration_ms + index * 1000,
-                mood=mood,
+                mood=profile.primary_mood,
                 source_url=f"https://example.test/tracks/{index}",
                 audio_url=f"https://example.test/audio/{index}.mp3",
                 score=100 - index,
+                matched_tag=profile.tags[(index - 1) % len(profile.tags)],
+                instrumental=index % 2 == 1,
             )
             for index in range(1, limit + 1)
         ]
@@ -41,20 +45,36 @@ def write_json_input(tmp_path: Path, name: str, payload: dict) -> ArtifactInput:
     return ArtifactInput(artifactId=name, uri=path.resolve().as_uri(), fileName=name)
 
 
-def request(tmp_path: Path, auto_select: bool) -> ToolExecutionRequest:
+def request(
+    tmp_path: Path,
+    auto_select: bool,
+    *, batch: int = 0,
+    excluded_track_ids: list[str] | None = None,
+) -> ToolExecutionRequest:
     return ToolExecutionRequest(
         tool="audio.bgm-select",
         version="1.0.0",
         idempotencyKey=f"bgm:{auto_select}",
         inputs={
             "story": write_json_input(tmp_path, "story.json", {
-                "beats": [{"role": "CLIMAX"}],
+                "beats": [
+                    {"role": "HOOK", "actualDurationMs": 4000, "shots": []},
+                    {"role": "INTRO", "actualDurationMs": 6000, "shots": []},
+                    {"role": "JOURNEY", "actualDurationMs": 12000, "shots": []},
+                    {"role": "CLIMAX", "actualDurationMs": 5000, "shots": []},
+                    {"role": "ENDING", "actualDurationMs": 3000, "shots": []},
+                ],
             }),
             "timeline": write_json_input(tmp_path, "timeline.json", {
                 "durationMs": 10_000,
             }),
         },
-        parameters={"autoSelect": auto_select},
+        parameters={
+            "autoSelect": auto_select,
+            "recommendationBatch": batch,
+            "recommendationSeed": "workflow-test",
+            "excludedTrackIds": excluded_track_ids or [],
+        },
     )
 
 
@@ -69,6 +89,8 @@ def test_manual_mode_returns_ranked_candidates_without_selecting(tmp_path, monke
     assert [output.metadata["rank"] for output in outputs] == [1, 2, 3]
     assert len({output.metadata["candidateSetId"] for output in outputs}) == 1
     assert all(output.metadata["selected"] is False for output in outputs)
+    assert all(output.metadata["musicProfileTags"] for output in outputs)
+    assert all(output.metadata["recommendationReasons"] for output in outputs)
 
 
 def test_auto_mode_materializes_top_candidate_as_bgm_audio(tmp_path, monkeypatch) -> None:
@@ -90,3 +112,23 @@ def test_provider_unavailable_safely_returns_no_bgm(tmp_path, monkeypatch) -> No
     monkeypatch.setattr(audio_bgm, "configured_music_providers", lambda: [])
 
     assert audio_bgm.BgmSelectTool().execute(request(tmp_path, auto_select=False)) == []
+
+
+def test_refresh_batch_rotates_profile_and_avoids_previously_shown_tracks(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "artifact_root", tmp_path / "artifacts")
+    monkeypatch.setattr(settings, "music_candidate_limit", 3)
+    monkeypatch.setattr(audio_bgm, "configured_music_providers", lambda: [FakeMusicProvider(tmp_path)])
+
+    outputs = audio_bgm.BgmSelectTool().execute(request(
+        tmp_path,
+        auto_select=False,
+        batch=1,
+        excluded_track_ids=["track-1", "track-2"],
+    ))
+
+    assert all(
+        output.metadata["providerTrackId"] not in {"track-1", "track-2"}
+        for output in outputs
+    )
+    assert outputs[0].metadata["recommendationBatch"] == 1
+    assert outputs[0].metadata["selectedMood"] != "epic"

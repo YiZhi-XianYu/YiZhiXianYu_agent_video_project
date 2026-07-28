@@ -16,6 +16,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.mock.web.MockMultipartFile;
 
 import java.nio.file.Path;
 import java.time.Duration;
@@ -81,6 +82,32 @@ class WorkflowExecutionServiceTest {
 
         assertThat(render.getStatus()).isEqualTo(TaskStatus.READY);
         assertThat(workflow.getStatus()).isEqualTo(RunStatus.RUNNING);
+    }
+
+    @Test
+    void failedBgmProviderStillPausesForManualUploadReview() throws Exception {
+        var workflow = workflow(false);
+        workflow.pause("gate_timeline_preview");
+        workflow.completeCurrentGate();
+        workflow.resume();
+        var timeline = succeededTask("timeline", "timeline_compose", "timeline.compose");
+        var bgm = failedTask("bgm", "bgm_select", "audio.bgm-select");
+        var render = pendingTask("render", "video_render", "video.render");
+        stubWorkflow(
+            workflow,
+            List.of(timeline, bgm, render),
+            List.of(
+                dependency("bgm", "timeline", WorkflowDefinition.DependencyType.REQUIRED),
+                dependency("render", "timeline", WorkflowDefinition.DependencyType.REQUIRED),
+                dependency("render", "bgm", WorkflowDefinition.DependencyType.OPTIONAL)
+            )
+        );
+
+        service.recoverWorkflow("workflow-1");
+
+        assertThat(workflow.getStatus()).isEqualTo(RunStatus.PAUSED);
+        assertThat(workflow.getCurrentGateKey()).isEqualTo("gate_bgm_review");
+        assertThat(render.getStatus()).isEqualTo(TaskStatus.PENDING);
     }
 
     @Test
@@ -308,6 +335,102 @@ class WorkflowExecutionServiceTest {
     }
 
     @Test
+    void uploadingBgmCreatesImmutableAudioArtifactWithLoopSelection() {
+        var workflow = workflow(false);
+        workflow.pause("gate_bgm_review");
+        var bgm = succeededTask("bgm", "bgm_select", "audio.bgm-select");
+        var render = pendingTask("render", "video_render", "video.render");
+        when(workflowRepository.findLockedById("workflow-1")).thenReturn(Optional.of(workflow));
+        when(taskRepository.findByWorkflowRunIdOrderByCreatedAtAsc("workflow-1"))
+            .thenReturn(List.of(bgm, render));
+        when(artifactRepository.save(any(ArtifactEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(dependencyRepository.findByTaskRunIdIn(anyList())).thenReturn(List.of(
+            dependency("render", "bgm", WorkflowDefinition.DependencyType.OPTIONAL)
+        ));
+        var file = new MockMultipartFile(
+            "file", "music.mp3", "audio/mpeg", "uploaded-music".getBytes()
+        );
+
+        var runId = service.uploadBgm("workflow-1", file, "LOOP", 1200);
+
+        assertThat(runId).isEqualTo("workflow-1");
+        assertThat(workflow.hasCompletedGate("gate_bgm_review")).isTrue();
+        assertThat(render.getStatus()).isEqualTo(TaskStatus.READY);
+        verify(artifactRepository).save(argThat(artifact ->
+            "BGM_AUDIO".equals(artifact.getType())
+                && "bgm".equals(artifact.getProducerTaskRunId())
+                && "audio/mpeg".equals(artifact.getMediaType())
+                && artifact.getMetadataJson().contains("LOOP")
+                && artifact.getMetadataJson().contains("music.mp3")
+        ));
+        verify(artifactRepository).save(argThat(artifact ->
+            "BGM_SELECTION".equals(artifact.getType())
+                && artifact.getMetadataJson().contains("UPLOADED")
+                && artifact.getMetadataJson().contains("LOOP")
+        ));
+    }
+
+    @Test
+    void uploadingBgmCanRecoverFromFailedProviderTask() {
+        var workflow = workflow(false);
+        workflow.pause("gate_bgm_review");
+        var bgm = failedTask("bgm", "bgm_select", "audio.bgm-select");
+        var render = pendingTask("render", "video_render", "video.render");
+        when(workflowRepository.findLockedById("workflow-1")).thenReturn(Optional.of(workflow));
+        when(taskRepository.findByWorkflowRunIdOrderByCreatedAtAsc("workflow-1"))
+            .thenReturn(List.of(bgm, render));
+        when(artifactRepository.save(any(ArtifactEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(dependencyRepository.findByTaskRunIdIn(anyList())).thenReturn(List.of(
+            dependency("render", "bgm", WorkflowDefinition.DependencyType.OPTIONAL)
+        ));
+        var file = new MockMultipartFile(
+            "file", "fallback.mp3", "audio/mpeg", "fallback-music".getBytes()
+        );
+
+        var runId = service.uploadBgm("workflow-1", file, "ONCE", 2000);
+
+        assertThat(runId).isEqualTo("workflow-1");
+        assertThat(workflow.getStatus()).isEqualTo(RunStatus.RUNNING);
+        assertThat(render.getStatus()).isEqualTo(TaskStatus.READY);
+    }
+
+    @Test
+    void refreshingBgmCandidatesReusesCurrentWorkflowAndExcludesPreviousTracks() {
+        var workflow = workflow(false);
+        workflow.pause("gate_bgm_review");
+        var bgm = succeededTask("bgm", "bgm_select", "audio.bgm-select");
+        when(workflowRepository.findLockedById("workflow-1")).thenReturn(Optional.of(workflow));
+        when(taskRepository.findByWorkflowRunIdOrderByCreatedAtAsc("workflow-1"))
+            .thenReturn(List.of(bgm));
+        when(artifactRepository.findByProducerTaskRunId("bgm")).thenReturn(List.of(
+            artifactWithMetadata(
+                "candidate-1", "bgm", "BGM_CANDIDATE", "file:///runtime/one.mp3",
+                "{\"providerTrackId\":\"track-1\",\"recommendationBatch\":0}"
+            ),
+            artifactWithMetadata(
+                "candidate-2", "bgm", "BGM_CANDIDATE", "file:///runtime/two.mp3",
+                "{\"providerTrackId\":\"track-2\",\"recommendationBatch\":0}"
+            )
+        ));
+
+        var runId = service.refreshBgmCandidates("workflow-1");
+
+        assertThat(runId).isEqualTo("workflow-1");
+        assertThat(workflow.getStatus()).isEqualTo(RunStatus.RUNNING);
+        assertThat(bgm.getStatus()).isEqualTo(TaskStatus.READY);
+        assertThat(bgm.getParametersJson())
+            .contains("recommendationBatch\":1")
+            .contains("recommendationSeed\":\"workflow-1")
+            .contains("track-1")
+            .contains("track-2");
+        verify(eventPublisher).publishEvent((Object) argThat(event ->
+            event instanceof WorkflowExecutionService.WorkflowDispatchRequested request
+                && "workflow-1".equals(request.workflowRunId())
+                && "bgm".equals(request.taskRunId())
+        ));
+    }
+
+    @Test
     void renderDispatchOmitsHistoricalBgmWhenLatestSelectionIsNone() {
         var workflow = workflow(true);
         var render = pendingTask("render", "video_render", "video.render");
@@ -331,6 +454,42 @@ class WorkflowExecutionServiceTest {
         var request = service.prepareDispatch("workflow-1", "render").request();
 
         assertThat(request.inputs()).containsOnlyKeys("timeline");
+    }
+
+    @Test
+    void renderDispatchIncludesUploadedBgmAndControlledLoopMode() {
+        var workflow = workflow(true);
+        var render = pendingTask("render", "video_render", "video.render");
+        render.markReady();
+        var dependencies = List.of(
+            dependency("render", "timeline", WorkflowDefinition.DependencyType.REQUIRED),
+            dependency("render", "bgm", WorkflowDefinition.DependencyType.OPTIONAL)
+        );
+        when(workflowRepository.findLockedById("workflow-1")).thenReturn(Optional.of(workflow));
+        when(taskRepository.findLockedById("render")).thenReturn(Optional.of(render));
+        when(dependencyRepository.findByTaskRunId("render")).thenReturn(dependencies);
+        when(artifactRepository.findByProducerTaskRunIdIn(List.of("timeline", "bgm"))).thenReturn(List.of(
+            artifact("timeline-artifact", "timeline", "TIMELINE", "file:///runtime/timeline.json"),
+            artifactWithMetadata(
+                "uploaded-bgm", "bgm", "BGM_AUDIO", "file:///runtime/uploaded.mp3",
+                "{\"playbackMode\":\"LOOP\"}"
+            ),
+            artifactWithMetadata(
+                "selection-upload", "bgm", "BGM_SELECTION", "file:///runtime/selection.json",
+                "{\"mode\":\"UPLOADED\",\"selectedAudioArtifactId\":\"uploaded-bgm\",\"playbackMode\":\"LOOP\"}"
+            )
+        ));
+        when(artifactRepository.findByExternalArtifactId("uploaded-bgm")).thenReturn(Optional.of(
+            artifactWithMetadata(
+                "uploaded-bgm", "bgm", "BGM_AUDIO", "file:///runtime/uploaded.mp3",
+                "{\"playbackMode\":\"LOOP\"}"
+            )
+        ));
+
+        var request = service.prepareDispatch("workflow-1", "render").request();
+
+        assertThat(request.inputs()).containsKeys("timeline", "bgm");
+        assertThat(request.parameters()).containsEntry("bgmPlaybackMode", "LOOP");
     }
 
     @Test

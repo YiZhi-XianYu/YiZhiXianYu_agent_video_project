@@ -11,8 +11,11 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 public class BgmSelectionController {
@@ -54,6 +57,33 @@ public class BgmSelectionController {
     ) {
         requireWorkflow(workflowRunId, servletRequest);
         var continuedRunId = workflowService.continueWithoutBgm(workflowRunId);
+        return new ApplyResponse(continuedRunId, "/api/v1/workflow-runs/" + continuedRunId);
+    }
+
+    @PostMapping("/api/v1/workflow-runs/{workflowRunId}/bgm-selection/upload")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public ApplyResponse upload(
+        @PathVariable String workflowRunId,
+        @RequestPart("file") MultipartFile file,
+        @RequestParam(defaultValue = "ONCE") String playbackMode,
+        @RequestParam(defaultValue = "0") long durationMs,
+        HttpServletRequest servletRequest
+    ) {
+        requireWorkflow(workflowRunId, servletRequest);
+        var continuedRunId = workflowService.uploadBgm(
+            workflowRunId, file, playbackMode, durationMs
+        );
+        return new ApplyResponse(continuedRunId, "/api/v1/workflow-runs/" + continuedRunId);
+    }
+
+    @PostMapping("/api/v1/workflow-runs/{workflowRunId}/bgm-selection/refresh")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public ApplyResponse refresh(
+        @PathVariable String workflowRunId,
+        HttpServletRequest servletRequest
+    ) {
+        requireWorkflow(workflowRunId, servletRequest);
+        var continuedRunId = workflowService.refreshBgmCandidates(workflowRunId);
         return new ApplyResponse(continuedRunId, "/api/v1/workflow-runs/" + continuedRunId);
     }
 

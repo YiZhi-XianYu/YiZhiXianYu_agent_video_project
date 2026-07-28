@@ -58,6 +58,41 @@ const bgmCandidates = computed(() => workflowStore.tasks
   .find((task) => task.nodeKey === 'bgm_select')
   ?.artifacts.filter((artifact) => artifact.type === 'BGM_CANDIDATE') ?? [])
 
+const latestBgmCandidates = computed(() => {
+  const candidates = bgmCandidates.value
+  if (!candidates.length) return []
+  let latestSetId = ''
+  try {
+    latestSetId = String(JSON.parse(candidates[0]?.metadataJson || '{}').candidateSetId ?? '')
+  } catch {
+    return candidates
+  }
+  if (!latestSetId) return candidates
+  return candidates.filter((artifact) => {
+    try {
+      return String(JSON.parse(artifact.metadataJson || '{}').candidateSetId ?? '') === latestSetId
+    } catch {
+      return false
+    }
+  })
+})
+
+const timelineDurationMs = computed(() => {
+  const artifact = workflowStore.tasks
+    .find((task) => task.nodeKey === 'timeline_compose')
+    ?.artifacts.find((item) => item.type === 'TIMELINE')
+  if (!artifact) return 0
+  try {
+    const metadata = JSON.parse(artifact.metadataJson || '{}') as Record<string, unknown>
+    return Number(metadata.durationMs ?? 0)
+  } catch {
+    return 0
+  }
+})
+
+const bgmProviderFailed = computed(() => workflowStore.tasks
+  .some((task) => task.nodeKey === 'bgm_select' && task.status === 'FAILED'))
+
 // ===================== 分层轮询 =====================
 
 const { start: startPolling, stop: stopPolling } = usePolling(
@@ -174,6 +209,7 @@ function mapStoryPlan(payload: Record<string, any>): StoryPlan {
         selectedDurationMs: Number(shot.selectedDurationMs ?? 0),
       })),
       targetDurationMs: Number(beat.targetDurationMs ?? beat.actualDurationMs ?? 0),
+      actualDurationMs: Number(beat.actualDurationMs ?? beat.targetDurationMs ?? 0),
     })),
     totalDurationMs: Number(payload.targetDurationMs ?? 0),
   }
@@ -398,7 +434,9 @@ function goBack(): void {
       <BgmSelectionReview
         v-if="workflowStore.isPaused && workflowStore.currentGate?.gateKey === 'gate_bgm_review'"
         :run-id="runId"
-        :candidates="bgmCandidates"
+        :candidates="latestBgmCandidates"
+        :timeline-duration-ms="timelineDurationMs"
+        :provider-failed="bgmProviderFailed"
         @confirm="handleBgmApplied"
       />
       <FinalReview

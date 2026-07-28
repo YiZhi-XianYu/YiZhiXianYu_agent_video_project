@@ -120,4 +120,16 @@ class TaskRunEntityTest {
         assertThat(task.getErrorMessage()).contains("...[error truncated]...");
         assertThat(task.getErrorMessage()).endsWith("-INVALID-ARGUMENT-END");
     }
+
+    @Test
+    void allowsControlledParameterUpdateOnlyWhileTaskIsInactive() {
+        var task = new TaskRunEntity(
+            "workflow-1", null, "workflow:bgm", "bgm", "audio.bgm-select", "1.0.0",
+            "UPSTREAM_ARTIFACT", "{}"
+        );
+
+        task.updateParametersJson("{\"recommendationBatch\":1}");
+
+        assertThat(task.getParametersJson()).contains("recommendationBatch");
+    }
 }

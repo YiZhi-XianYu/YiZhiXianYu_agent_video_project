@@ -81,12 +81,23 @@ export const useReviewStore = defineStore('review', () => {
     if (!storyPlan.value) return
     const next = mutator(JSON.parse(JSON.stringify(storyPlan.value)) as StoryPlan)
     next.beats.forEach((beat) => {
-      beat.shotIds = beat.shotIds.filter(Boolean)
-      if (beat.shots) beat.shots = beat.shots.filter((shot) => beat.shotIds.includes(shot.shotId))
+      beat.shotIds = [...new Set(beat.shotIds.filter(Boolean))]
+      if (beat.shots) {
+        const shotsById = new Map(beat.shots.map((shot) => [shot.shotId, shot]))
+        beat.shots = beat.shotIds.flatMap((shotId) => {
+          const shot = shotsById.get(shotId)
+          return shot ? [shot] : []
+        })
+        const actualDurationMs = beat.shots.reduce(
+          (sum, shot) => sum + Math.max(0, shot.sourceOutMs - shot.sourceInMs), 0,
+        )
+        beat.actualDurationMs = actualDurationMs
+        beat.targetDurationMs = actualDurationMs
+      }
     })
-    next.totalDurationMs = next.beats.reduce((total, beat) => total + (beat.shots ?? []).reduce(
-      (sum, shot) => sum + Math.max(0, shot.selectedDurationMs || shot.sourceOutMs - shot.sourceInMs), 0,
-    ), 0)
+    next.totalDurationMs = next.beats.reduce(
+      (total, beat) => total + (beat.actualDurationMs ?? 0), 0,
+    )
     storyPlan.value = next
     dirty.value = true
   }
@@ -139,15 +150,16 @@ export const useReviewStore = defineStore('review', () => {
   function addStoryShot(role: BeatRole, shotId: string): boolean {
     const candidate = shotScores.value.find((shot) => shot.shotId === shotId)
     const alreadyUsed = storyPlan.value?.beats.some((beat) => beat.shotIds.includes(shotId)) ?? false
+    const sourceDuration = (candidate?.endMs ?? 0) - (candidate?.startMs ?? 0)
     if (!candidate?.selected || excludedShotIds.value.has(shotId) || alreadyUsed
       || !candidate.sourceAssetId || !candidate.sourceProxyArtifactId
-      || candidate.startMs == null || candidate.endMs == null || candidate.endMs <= candidate.startMs) {
+      || candidate.startMs == null || candidate.endMs == null || sourceDuration < 600) {
       return false
     }
     updateStoryPlan((plan) => {
       const beat = plan.beats.find((item) => item.role === role)
       if (!beat) return plan
-      const duration = Math.min(candidate.endMs! - candidate.startMs!, Math.max(600, beat.targetDurationMs))
+      const duration = Math.min(sourceDuration, Math.max(600, beat.targetDurationMs))
       beat.shotIds.push(candidate.shotId)
       beat.shots ??= []
       beat.shots.push({
@@ -156,7 +168,10 @@ export const useReviewStore = defineStore('review', () => {
         sourceProxyArtifactId: candidate.sourceProxyArtifactId!,
         startMs: candidate.startMs!, endMs: candidate.endMs!,
         sourceInMs: candidate.startMs!, sourceOutMs: candidate.startMs! + duration,
-        selectedDurationMs: duration, rank: Math.max(1, Math.round(candidate.rankScore ?? 0)), storyRole: role,
+        selectedDurationMs: duration,
+        rank: Math.max(1, Math.round(candidate.rankScore ?? 0)),
+        selectionReasons: ['MANUAL_STORY_EDIT'],
+        storyRole: role,
       })
       return plan
     })

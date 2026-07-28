@@ -10,6 +10,7 @@ from app.tools.video_render import (
     _assemble_command,
     _build_filter_graph,
     _ffmpeg_render_error,
+    _probe_audio_sample_count,
     _resolve_proxy_paths,
 )
 
@@ -239,6 +240,65 @@ def test_build_filter_graph_with_bgm_does_not_duplicate_audio_label_brackets(tmp
     assert "[a0][bgm]amix=" in fc
     assert "[[a0]][bgm]amix=" not in fc
     assert audio_label == "[outa_mixed]"
+
+
+def test_build_filter_graph_loops_bgm_with_bounded_sample_count(tmp_path):
+    clips = [{
+        "sourceProxyArtifactId": "art_abc",
+        "sourceInMs": 0,
+        "sourceOutMs": 3000,
+        "timelineInMs": 0,
+        "timelineOutMs": 3000,
+        "transitionIn": {"type": "CUT", "durationMs": 0},
+    }]
+    canvas = {"width": 1280, "height": 720, "fps": 30}
+    proxy_map = {"art_abc": Path("/tmp/art_abc/video-proxy.mp4")}
+    audio_map = {"art_abc": True}
+    bgm_path = tmp_path / "bgm.mp3"
+    bgm_path.write_bytes(b"test")
+
+    _inputs, fc, _video_label, _audio_label = _build_filter_graph(
+        clips, canvas, proxy_map, audio_map,
+        bgm_path=bgm_path, bgm_playback_mode="LOOP", bgm_loop_samples=96000,
+    )
+
+    assert "aloop=loop=-1:size=96000" in fc
+    assert "atrim=0:duration=3.000" in fc
+
+
+def test_build_filter_graph_plays_short_bgm_once_without_loop(tmp_path):
+    clips = [{
+        "sourceProxyArtifactId": "art_abc",
+        "sourceInMs": 0,
+        "sourceOutMs": 3000,
+        "timelineInMs": 0,
+        "timelineOutMs": 3000,
+        "transitionIn": {"type": "CUT", "durationMs": 0},
+    }]
+    canvas = {"width": 1280, "height": 720, "fps": 30}
+    proxy_map = {"art_abc": Path("/tmp/art_abc/video-proxy.mp4")}
+    audio_map = {"art_abc": True}
+    bgm_path = tmp_path / "bgm.mp3"
+    bgm_path.write_bytes(b"test")
+
+    _inputs, fc, _video_label, _audio_label = _build_filter_graph(
+        clips, canvas, proxy_map, audio_map, bgm_path=bgm_path, bgm_playback_mode="ONCE",
+    )
+
+    assert "aloop=" not in fc
+    assert "atrim=0:duration=3.000" in fc
+
+
+def test_probe_audio_sample_count_uses_duration_and_sample_rate(tmp_path):
+    audio_path = tmp_path / "bgm.mp3"
+    audio_path.write_bytes(b"test")
+    completed = type("Completed", (), {
+        "returncode": 0,
+        "stdout": '{"streams":[{"sample_rate":"48000"}],"format":{"duration":"2.5"}}',
+    })()
+
+    with patch("app.tools.video_render.subprocess.run", return_value=completed):
+        assert _probe_audio_sample_count(audio_path) == 120000
 
 
 def test_ffmpeg_filter_syntax_error_is_not_retryable():

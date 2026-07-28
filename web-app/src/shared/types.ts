@@ -96,6 +96,8 @@ export interface StoryBeat {
    shotIds: string[]
    /** 段落目标时长（毫秒） */
   targetDurationMs: number
+  /** 当前段落内所有镜头的实际总时长（毫秒） */
+  actualDurationMs?: number
   /** Full shot records retained when saving a custom plan. */
   shots?: StoryShot[]
 }
