@@ -10,6 +10,8 @@ import com.yizhixianyu.agentvideo.asset.AssetService;
 import com.yizhixianyu.agentvideo.project.ProjectService;
 import com.yizhixianyu.agentvideo.toolclient.ToolServiceClient;
 import com.yizhixianyu.agentvideo.plan.CustomStoryPlanRepository;
+import com.yizhixianyu.agentvideo.plan.StoryPlanPayloadValidator;
+import com.yizhixianyu.agentvideo.plan.TimelinePayloadValidator;
 import com.yizhixianyu.agentvideo.plan.TimelineComposer;
 import com.yizhixianyu.agentvideo.workflow.MultiAssetAnalysisTemplate;
 import com.yizhixianyu.agentvideo.workflow.WorkflowDefinition;
@@ -106,7 +108,7 @@ public class WorkflowExecutionService {
     @Transactional
     public WorkflowRunEntity createVideoProxyRun(String projectId, String assetId, ProxyQuality proxyQuality) {
         projectService.getRequired(projectId);
-        var asset = assetService.getRequired(assetId);
+        var asset = assetService.getRequiredAvailable(assetId);
         requireProjectAsset(projectId, asset);
         var workflow = workflowRepository.save(new WorkflowRunEntity(
             projectId, assetId, "VIDEO_PROXY_PIPELINE", proxyQuality
@@ -148,7 +150,7 @@ public class WorkflowExecutionService {
         if (uniqueAssetIds.size() != requestedAssetIds.size()) {
             throw new IllegalArgumentException("Asset list must not contain duplicates");
         }
-        var assets = uniqueAssetIds.stream().map(assetService::getRequired).toList();
+        var assets = uniqueAssetIds.stream().map(assetService::getRequiredAvailable).toList();
         assets.forEach(asset -> requireProjectAsset(projectId, asset));
 
         var definition = analysisTemplate.create(proxyQuality, durationPrompt, autoMode);
@@ -242,6 +244,7 @@ public class WorkflowExecutionService {
 
     @Transactional
     public String applyCustomStoryPlan(String workflowRunId, Map<String, Object> customPlan) {
+        StoryPlanPayloadValidator.validate(customPlan);
         var workflow = workflowRepository.findLockedById(workflowRunId)
             .orElseThrow(() -> new IllegalArgumentException("Workflow run not found: " + workflowRunId));
         if (workflow.getStatus() != RunStatus.PAUSED
@@ -389,15 +392,7 @@ public class WorkflowExecutionService {
     }
 
     private void validateCustomTimeline(Map<String, Object> timeline) {
-        if (timeline == null || !(timeline.get("tracks") instanceof List<?> tracks) || tracks.isEmpty()) {
-            throw new IllegalArgumentException("Custom timeline must contain tracks");
-        }
-        var hasVideoClip = tracks.stream().filter(Map.class::isInstance).map(item -> (Map<?, ?>) item)
-            .filter(track -> "VIDEO".equals(String.valueOf(track.get("type"))))
-            .anyMatch(track -> track.get("clips") instanceof List<?> clips && !clips.isEmpty());
-        if (!hasVideoClip) {
-            throw new IllegalArgumentException("Custom timeline must contain at least one VIDEO clip");
-        }
+        TimelinePayloadValidator.validate(timeline);
     }
 
     private Set<String> descendantTaskIds(

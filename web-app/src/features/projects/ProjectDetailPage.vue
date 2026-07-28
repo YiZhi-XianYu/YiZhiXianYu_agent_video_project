@@ -27,7 +27,7 @@ onMounted(async () => {
     <div v-if="!projectStore.currentProject" class="loading-panel"><Loader2 class="animate-spin" />正在加载项目...</div>
     <template v-else>
       <div class="step-heading"><span>01</span><div><h2><UploadCloud />准备素材</h2><p>上传并预览原始视频，确认参与本次制作的素材。</p></div></div>
-      <div class="project-workspace-grid"><AssetUpload :project-id="projectId" /><AssetList /></div>
+      <div class="project-workspace-grid"><AssetUpload :project-id="projectId" /><AssetList :project-id="projectId" /></div>
       <div class="step-heading mt-10"><span>02</span><div><h2><WandSparkles />配置并启动</h2><p>选择代理清晰度、成片时长和人工审核方式。</p></div></div>
       <WorkflowLauncher :project-id="projectId" :has-assets="projectStore.assets.length > 0" />
     </template>

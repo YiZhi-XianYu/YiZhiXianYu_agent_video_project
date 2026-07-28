@@ -15,6 +15,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -83,6 +84,17 @@ public class ProjectController {
     public List<AssetView> listAssets(@PathVariable String projectId, HttpServletRequest request) {
         projectService.getRequiredForUser(projectId, authService.requireUser(request).id());
         return assetService.listByProject(projectId).stream().map(AssetView::from).toList();
+    }
+
+    @DeleteMapping("/{projectId}/assets/{assetId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void removeAssetFromLibrary(
+        @PathVariable String projectId,
+        @PathVariable String assetId,
+        HttpServletRequest request
+    ) {
+        projectService.getRequiredForUser(projectId, authService.requireUser(request).id());
+        assetService.removeFromLibrary(projectId, assetId);
     }
 
     @GetMapping("/{projectId}/assets/{assetId}/content")

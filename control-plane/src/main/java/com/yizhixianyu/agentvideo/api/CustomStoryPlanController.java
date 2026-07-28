@@ -9,6 +9,7 @@ import com.yizhixianyu.agentvideo.execution.WorkflowExecutionService;
 import com.yizhixianyu.agentvideo.execution.WorkflowRunRepository;
 import com.yizhixianyu.agentvideo.plan.CustomStoryPlanEntity;
 import com.yizhixianyu.agentvideo.plan.CustomStoryPlanRepository;
+import com.yizhixianyu.agentvideo.plan.StoryPlanPayloadValidator;
 import com.yizhixianyu.agentvideo.project.ProjectService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -25,12 +26,10 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 @RestController
 public class CustomStoryPlanController {
 
-    private static final Set<String> VALID_ROLES = Set.of("HOOK", "INTRO", "JOURNEY", "CLIMAX", "ENDING");
     private static final String STATUS_DRAFT = "DRAFT";
     private static final String STATUS_SUPERSEDED = "SUPERSEDED";
     private static final String STATUS_APPLIED = "APPLIED";
@@ -203,6 +202,7 @@ public class CustomStoryPlanController {
             ? request.versionName()
             : (source.getVersionName() != null ? source.getVersionName() + " (restored)" : "Restored from " + planId);
         var plan = parsePlanJson(source.getPlanJson());
+        validatePlan(plan);
         var entity = repository.save(new CustomStoryPlanEntity(
             workflow.getProjectId(), workflowRunId, source.getPlanJson(), STATUS_DRAFT, versionName
         ));
@@ -230,40 +230,8 @@ public class CustomStoryPlanController {
         projectService.getRequiredForUser(workflow.getProjectId(), authService.requireUser(request).id());
     }
 
-    @SuppressWarnings("unchecked")
     private void validatePlan(Map<String, Object> plan) {
-        var beats = plan.get("beats");
-        if (!(beats instanceof List<?> beatList) || beatList.isEmpty()) {
-            throw new IllegalArgumentException("Plan must have a non-empty beats array");
-        }
-        for (var beatObj : beatList) {
-            if (!(beatObj instanceof Map<?, ?> beatMap)) {
-                throw new IllegalArgumentException("Each beat must be an object");
-            }
-            var role = beatMap.get("role");
-            if (!(role instanceof String roleStr) || !VALID_ROLES.contains(roleStr)) {
-                throw new IllegalArgumentException("Beat has invalid role: " + role);
-            }
-            var shots = beatMap.get("shots");
-            if (!(shots instanceof List<?> shotList) || shotList.isEmpty()) {
-                throw new IllegalArgumentException("Each story beat must contain at least one shot");
-            }
-            for (var shotObj : shotList) {
-                if (!(shotObj instanceof Map<?, ?> shotMap)) {
-                    throw new IllegalArgumentException("Each shot must be an object");
-                }
-                if (isBlank(shotMap.get("shotId")) || isBlank(shotMap.get("sourceAssetId"))
-                    || isBlank(shotMap.get("sourceProxyArtifactId"))) {
-                    throw new IllegalArgumentException(
-                        "Shot is missing required fields (shotId, sourceAssetId, sourceProxyArtifactId)"
-                    );
-                }
-            }
-        }
-    }
-
-    private boolean isBlank(Object value) {
-        return value == null || value.toString().isBlank();
+        StoryPlanPayloadValidator.validate(plan);
     }
 
     private String toJson(Object value) {

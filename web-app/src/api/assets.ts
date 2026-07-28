@@ -3,7 +3,7 @@
   *
   * 封装素材上传和列表查询的 HTTP 请求。
   */
- import { csrfHeaders, get } from '@/api/client'
+ import { csrfHeaders, del, get } from '@/api/client'
  import type { Asset } from '@/api/types'
 
  /**
@@ -11,6 +11,10 @@
   */
  export async function listAssets(projectId: string): Promise<Asset[]> {
    return get<Asset[]>(`/api/v1/projects/${projectId}/assets`)
+ }
+
+ export async function deleteAsset(projectId: string, assetId: string): Promise<void> {
+   await del(`/api/v1/projects/${projectId}/assets/${assetId}`)
  }
 
  /**

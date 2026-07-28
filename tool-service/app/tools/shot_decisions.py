@@ -75,6 +75,7 @@ Review criteria:
 - EMOTIONAL ARC: The sequence should have a natural rise and fall in energy
 
 You may suggest up to 3 changes by replacing specific shots with better alternatives from the candidate pool.
+Each newShotId must be an unselected alternative; do not reuse a Shot that is already present elsewhere in the Story Plan.
 You may also confirm the current plan with no changes.
 
 Return JSON: {"changes": [{"beatIndex": 0, "oldShotId": "s1", "newShotId": "s5", "reason": "..."}], "confidence": 0.85, "notes": "..."}"""
@@ -116,6 +117,7 @@ class HighlightSelectionTool:
 
         strategy = "STORY_PLAN_COMPILATION_V1"
         llm_changes: list[dict[str, Any]] = []
+        llm_reviewed = False
 
         provider = get_provider()
         if provider.name != "noop" and ranking_data is not None:
@@ -123,13 +125,19 @@ class HighlightSelectionTool:
                 changes = self._llm_review(provider, story, ranking_data)
                 if changes is not None:
                     llm_changes = changes
-                    strategy = "LLM_REFINED_V1"
+                    llm_reviewed = True
                     if report_progress is not None:
                         report_progress(50)
             except (LlmError, Exception) as exc:
                 logger.warning("LLM highlight review failed, using plan as-is: %s", exc)
 
-        selected = self._compile_shots(story, llm_changes, ranking_data)
+        selected, applied_changes, rejected_changes = self._compile_shots(
+            story, llm_changes, ranking_data
+        )
+        if applied_changes:
+            strategy = "LLM_REFINED_V1"
+        elif llm_reviewed:
+            strategy = "LLM_REVIEWED_V1"
 
         if report_progress is not None:
             report_progress(70)
@@ -143,7 +151,9 @@ class HighlightSelectionTool:
             "targetDurationMs": story["targetDurationMs"],
             "selectedDurationMs": used,
             "selectedShotCount": len(selected),
-            "llmRefinements": llm_changes,
+            "llmSuggestions": llm_changes,
+            "llmRefinements": applied_changes,
+            "rejectedLlmRefinements": rejected_changes,
             "shots": selected,
         }
 
@@ -226,11 +236,16 @@ class HighlightSelectionTool:
         story: dict[str, Any],
         llm_changes: list[dict[str, Any]],
         ranking_data: dict[str, Any] | None,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
         """Compile story plan shots, applying LLM refinements where valid."""
-        change_map: dict[str, str] = {}
+        change_map: dict[str, dict[str, Any]] = {}
+        rejected_changes: list[dict[str, Any]] = []
         for c in llm_changes:
-            change_map[c["oldShotId"]] = c["newShotId"]
+            old_id = c["oldShotId"]
+            if old_id in change_map:
+                rejected_changes.append({**c, "rejectionReason": "DUPLICATE_SOURCE_CHANGE"})
+                continue
+            change_map[old_id] = c
 
         ranking_map: dict[str, dict[str, Any]] = {}
         if ranking_data is not None:
@@ -238,14 +253,32 @@ class HighlightSelectionTool:
                 ranking_map[shot["shotId"]] = shot
 
         selected: list[dict[str, Any]] = []
+        applied_changes: list[dict[str, Any]] = []
         used_ids: set[str] = set()
+        processed_change_sources: set[str] = set()
+        original_ids = {
+            shot["shotId"]
+            for beat in story.get("beats", [])
+            for shot in beat.get("shots", [])
+        }
 
-        for beat in story.get("beats", []):
+        for beat_index, beat in enumerate(story.get("beats", [])):
             for shot in beat.get("shots", []):
                 sid = shot["shotId"]
-                new_id = change_map.get(sid, sid)
+                change = change_map.get(sid)
+                new_id = change["newShotId"] if change is not None else sid
+                if change is not None:
+                    processed_change_sources.add(sid)
 
-                if new_id != sid and new_id in ranking_map and new_id not in used_ids:
+                replacement_is_available = (
+                    change is not None
+                    and change.get("beatIndex") == beat_index
+                    and new_id != sid
+                    and new_id in ranking_map
+                    and new_id not in used_ids
+                    and new_id not in original_ids
+                )
+                if replacement_is_available:
                     replacement = ranking_map[new_id]
                     repl_start = int(replacement.get("startMs", 0))
                     repl_end = int(replacement.get("endMs", 10000))
@@ -263,9 +296,30 @@ class HighlightSelectionTool:
                         ],
                         "selected": True,
                     }
+                    applied_changes.append(change)
+                elif change is not None:
+                    if change.get("beatIndex") != beat_index:
+                        reason = "BEAT_INDEX_MISMATCH"
+                    elif new_id == sid:
+                        reason = "NO_OP"
+                    elif new_id not in ranking_map:
+                        reason = "UNKNOWN_CANDIDATE"
+                    elif new_id in original_ids:
+                        reason = "ALREADY_SELECTED_IN_STORY_PLAN"
+                    else:
+                        reason = "ALREADY_SELECTED_BY_REFINEMENT"
+                    rejected_changes.append({**change, "rejectionReason": reason})
 
-                used_ids.add(new_id if new_id != sid else sid)
+                # Track the Shot that was actually retained. A proposed replacement
+                # may have been rejected because it collides with an earlier or later
+                # Story Plan Shot; recording new_id here would make a subsequent
+                # refinement appear safe and could emit duplicate Highlight Shots.
+                used_ids.add(shot["shotId"])
                 selected.append({**shot, "selected": True})
+
+        for old_id, change in change_map.items():
+            if old_id not in processed_change_sources:
+                rejected_changes.append({**change, "rejectionReason": "UNKNOWN_SOURCE_SHOT"})
 
         # ── Redistribute duration lost from LLM-replaced shots ──
         target_ms = story.get("targetDurationMs", 0)
@@ -273,7 +327,7 @@ class HighlightSelectionTool:
         deficit = target_ms - total_selected
         if deficit > 0:
             # Extend shots that still have headroom (prefer non-replaced)
-            replaced_ids = set(change_map.values())
+            replaced_ids = {change["newShotId"] for change in applied_changes}
             ordered = sorted(
                 selected,
                 key=lambda s: (0 if s["shotId"] in replaced_ids else 1, s.get("finalScore", 0)),
@@ -296,7 +350,7 @@ class HighlightSelectionTool:
                     deficit, deficit / target_ms * 100,
                 )
 
-        return selected
+        return selected, applied_changes, rejected_changes
 
     @staticmethod
     def _summarize_tags(shot: dict[str, Any], tag_type: str) -> list[str]:

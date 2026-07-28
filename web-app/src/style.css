@@ -185,7 +185,10 @@
   .compact-empty { @apply mt-5 flex flex-col items-center rounded-xl border border-dashed border-surface-700 py-10 text-xs text-surface-500; }
   .compact-empty svg { @apply mb-2 h-7 w-7; }
   .asset-list { @apply mt-4 max-h-[310px] space-y-2 overflow-y-auto pr-1; }
-  .asset-row { @apply flex w-full items-center gap-3 rounded-xl border border-transparent bg-surface-900/60 p-3 text-left transition hover:border-accent/30 hover:bg-surface-700/60; }
+  .asset-row { @apply flex w-full items-center gap-2 rounded-xl border border-transparent bg-surface-900/60 p-1.5 transition hover:border-accent/30 hover:bg-surface-700/60; }
+  .asset-row-main { @apply flex min-w-0 flex-1 items-center gap-3 rounded-lg p-1.5 text-left; }
+  .asset-delete { @apply grid h-9 w-9 shrink-0 place-items-center rounded-lg text-surface-500 transition hover:bg-danger/10 hover:text-danger disabled:cursor-not-allowed disabled:opacity-40; }
+  .asset-delete svg { @apply h-4 w-4; }
   .asset-thumb { @apply relative flex h-11 w-14 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-surface-700; }
   .asset-thumb > svg { @apply h-5 w-5 text-surface-400; }
   .asset-thumb i { @apply absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition group-hover:opacity-100; }

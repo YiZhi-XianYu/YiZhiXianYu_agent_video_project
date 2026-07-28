@@ -199,13 +199,7 @@ class WorkflowExecutionServiceTest {
         when(dependencyRepository.findByTaskRunIdIn(anyList())).thenReturn(dependencies);
         when(artifactRepository.save(any(ArtifactEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        var runId = service.applyCustomStoryPlan("workflow-1", Map.of(
-            "schemaVersion", "1.0",
-            "template", "MANUAL_EDIT",
-            "targetDurationMs", 1000,
-            "maxShots", 1,
-            "beats", List.of()
-        ));
+        var runId = service.applyCustomStoryPlan("workflow-1", validStoryPlan());
 
         assertThat(runId).isEqualTo("workflow-1");
         assertThat(workflow.getStatus()).isEqualTo(RunStatus.RUNNING);
@@ -243,14 +237,7 @@ class WorkflowExecutionServiceTest {
         when(dependencyRepository.findByTaskRunIdIn(anyList())).thenReturn(dependencies);
         when(artifactRepository.save(any(ArtifactEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        var runId = service.applyCustomTimeline("workflow-1", Map.of(
-            "schemaVersion", "1.1",
-            "durationMs", 1000,
-            "tracks", List.of(Map.of(
-                "type", "VIDEO",
-                "clips", List.of(Map.of("clipId", "clip-1"))
-            ))
-        ));
+        var runId = service.applyCustomTimeline("workflow-1", validTimeline());
 
         assertThat(runId).isEqualTo("workflow-1");
         assertThat(workflow.getStatus()).isEqualTo(RunStatus.RUNNING);
@@ -438,6 +425,69 @@ class WorkflowExecutionServiceTest {
     ) {
         return new ArtifactEntity(
             externalId, "project-1", producerId, type, uri, "application/octet-stream", 1, "hash", metadata
+        );
+    }
+
+    private Map<String, Object> validStoryPlan() {
+        var roles = List.of("HOOK", "INTRO", "JOURNEY", "CLIMAX", "ENDING");
+        var beats = new java.util.ArrayList<Map<String, Object>>();
+        for (int index = 0; index < roles.size(); index++) {
+            var role = roles.get(index);
+            beats.add(Map.of(
+                "role", role,
+                "targetDurationMs", 1000,
+                "actualDurationMs", 1000,
+                "shots", List.of(Map.ofEntries(
+                    Map.entry("shotId", "shot-" + index),
+                    Map.entry("sourceAssetId", "asset-" + index),
+                    Map.entry("sourceProxyArtifactId", "proxy-" + index),
+                    Map.entry("startMs", 0),
+                    Map.entry("endMs", 1000),
+                    Map.entry("sourceInMs", 0),
+                    Map.entry("sourceOutMs", 1000),
+                    Map.entry("selectedDurationMs", 1000),
+                    Map.entry("rank", index + 1),
+                    Map.entry("storyRole", role),
+                    Map.entry("selectionReasons", List.of("MANUAL_EDIT"))
+                ))
+            ));
+        }
+        return Map.of(
+            "schemaVersion", "1.0",
+            "template", "MANUAL_EDIT",
+            "targetDurationMs", 5000,
+            "maxShots", 5,
+            "beats", beats
+        );
+    }
+
+    private Map<String, Object> validTimeline() {
+        var clip = Map.<String, Object>ofEntries(
+            Map.entry("clipId", "clip-1"),
+            Map.entry("shotId", "shot-1"),
+            Map.entry("assetId", "asset-1"),
+            Map.entry("sourceProxyArtifactId", "proxy-1"),
+            Map.entry("sourceInMs", 0),
+            Map.entry("sourceOutMs", 1000),
+            Map.entry("sourceShotStartMs", 0),
+            Map.entry("sourceShotEndMs", 1000),
+            Map.entry("timelineInMs", 0),
+            Map.entry("timelineOutMs", 1000),
+            Map.entry("playbackRate", 1.0),
+            Map.entry("transitionIn", Map.of("type", "CUT", "durationMs", 0)),
+            Map.entry("selectionRank", 1),
+            Map.entry("storyRole", "HOOK"),
+            Map.entry("selectionReasons", List.of("MANUAL_TIMELINE_EDIT"))
+        );
+        return Map.ofEntries(
+            Map.entry("timelineId", "tl_manual_test"),
+            Map.entry("version", 1),
+            Map.entry("schemaVersion", "1.1"),
+            Map.entry("sourceHighlightArtifactId", "manual-timeline-edit"),
+            Map.entry("canvas", Map.of("width", 1280, "height", 720, "fps", 30)),
+            Map.entry("durationMs", 1000),
+            Map.entry("tracks", List.of(Map.of("type", "VIDEO", "clips", List.of(clip)))),
+            Map.entry("validation", Map.of("valid", true, "errors", List.of()))
         );
     }
 }

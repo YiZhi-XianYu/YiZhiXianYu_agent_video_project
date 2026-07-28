@@ -9,6 +9,9 @@ import jakarta.persistence.Table;
 @Table(name = "assets")
 public class AssetEntity extends BaseEntity {
 
+    public static final String STATUS_AVAILABLE = "AVAILABLE";
+    public static final String STATUS_REMOVED = "REMOVED";
+
     @Column(nullable = false, length = 40)
     private String projectId;
 
@@ -36,7 +39,7 @@ public class AssetEntity extends BaseEntity {
     public AssetEntity(String projectId, String fileName, String storageUri, long sizeBytes, String contentHash) {
         this.projectId = projectId;
         this.type = "VIDEO_SOURCE";
-        this.status = "AVAILABLE";
+        this.status = STATUS_AVAILABLE;
         this.fileName = fileName;
         this.storageUri = storageUri;
         this.sizeBytes = sizeBytes;
@@ -69,5 +72,13 @@ public class AssetEntity extends BaseEntity {
 
     public String getContentHash() {
         return contentHash;
+    }
+
+    public boolean isAvailable() {
+        return STATUS_AVAILABLE.equals(status);
+    }
+
+    public void removeFromLibrary() {
+        this.status = STATUS_REMOVED;
     }
 }

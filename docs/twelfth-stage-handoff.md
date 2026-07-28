@@ -290,3 +290,40 @@ Spine 源码。角色层级高于普通页面内容，气泡高于角色，现�
 - 页面切换后角色保持为 AppShell 全局单实例，浏览器控制台无 warning/error；
 - 本轮未人为启动新 Workflow，因此没有为测试气泡而制造业务数据；完成事件去重、睡眠唤醒和 5 秒
   单气泡刷新由全局观察器与 Pinia 状态机的同一生产代码路径负责。
+
+## 第十二阶段补充：Highlight 链式替换去重修复
+
+2026-07-29 本地五素材 Workflow 在 `timeline.compose@1.1.0` 失败，真实错误为第 5 个
+Clip 的 `clipId` 与 `shotId` 重复。血缘检查确认确定性 Story Plan 已生成五个不同镜头，重复由
+`decision.highlight-select@1.0.0` 应用多条 LLM 调整时产生：一条与已选镜头冲突的替换被拒绝后，
+占用集合错误记录了候选 ID，而不是实际保留的镜头 ID，导致后一条链式替换被误判为安全。
+
+修复后 Highlight 编译器按实际保留的 `shotId` 更新占用集合，并禁止把已存在于 Story Plan 的
+其他镜头作为替换目标。新增回归测试覆盖“CLIMAX 替换到 HOOK 已用镜头、ENDING 再替换到原
+CLIMAX 镜头”的真实冲突组合，保证输出镜头 ID 唯一并在进入 Timeline 前消除该类重复。
+
+验证结果：专项冲突测试通过；Python 全量测试 79 passed；使用失败 Workflow 原有的 Story Plan、
+Ranking 与 LLM 调整只读重放后得到 5 个镜头和 5 个唯一 `shotId`。
+
+## 第十二阶段补充：规划边界校验与素材库软删除
+
+Highlight 的 LLM 调整结果现在区分三类状态：`llmSuggestions` 保存模型给出的全部建议，
+`llmRefinements` 只保存实际应用成功的替换，`rejectedLlmRefinements` 保存拒绝项及结构化原因。
+策略标识同步区分确定性编译、仅经 LLM 审阅和实际完成 LLM 调整，避免界面或审计把“模型建议过”
+误报为“方案已经修改”。时长再分配也只依据真正生效的替换计算。
+
+Java Control Plane 在保存、应用和恢复人工 Story Plan 前执行完整 Payload 校验，包括五段角色、镜头
+全局唯一性、源区间、选片时长、角色对应关系、目标总时长与最大镜头数。人工 Timeline 在进入
+Workflow 前同样校验画布、轨道、Clip/Shot 唯一性、源区间、轨道连续性、转场约束、总时长以及
+音频和字幕基础结构。校验同时接入 Service 层，不能通过绕过 Controller 提交非法数据。
+
+项目素材库为每个视频新增“删除素材”按钮。删除采用 `Asset.status=REMOVED` 软删除语义：
+
+- 工作台列表和后续新建 Workflow 只使用 `AVAILABLE` 素材；
+- 已开始和历史 Workflow 仍按原 ID 读取素材，已有 Artifact、数据库行、源文件和完整血缘均不删除；
+- 删除前明确提示上述语义，删除期间按钮禁用，删除成功后刷新素材列表并关闭对应预览；
+- 删除接口先校验当前用户的项目权限，并校验素材确实属于目标项目。
+
+验证结果：Python 全量测试 79 passed；Java 全量测试通过；`control-plane` 与 `tool-service` Docker
+生产构建通过，其中前端 `vue-tsc`、Vite 与 Java package 均成功。本地容器使用新镜像重建后，
+项目页实际显示 5 个素材删除按钮；素材预览与按钮布局正常，浏览器控制台无 warning/error。

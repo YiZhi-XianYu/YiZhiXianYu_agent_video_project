@@ -60,6 +60,57 @@ def test_ranking_highlights_and_timeline_are_deterministic(tmp_path, monkeypatch
     assert timeline_payload["tracks"][0]["clips"][0]["storyRole"] == "HOOK"
 
 
+def test_highlight_refinements_cannot_chain_into_duplicate_story_shots() -> None:
+    roles = ["HOOK", "INTRO", "JOURNEY", "CLIMAX", "ENDING"]
+    story_shots = []
+    for index, role in enumerate(roles, start=1):
+        shot = {
+            **ranked_shot(f"s{index}", 0, 1000, index),
+            "sourceAssetId": f"a{index}",
+            "storyRole": role,
+            "sourceInMs": 0,
+            "sourceOutMs": 1000,
+            "selectedDurationMs": 1000,
+            "selectionReasons": [f"STORY_ROLE_{role}"],
+        }
+        story_shots.append(shot)
+
+    story = {
+        "targetDurationMs": 5000,
+        "beats": [
+            {"role": role, "shots": [story_shots[index]]}
+            for index, role in enumerate(roles)
+        ],
+    }
+    changes = [
+        {"beatIndex": 1, "oldShotId": "s2", "newShotId": "s6", "reason": "valid alternative"},
+        {"beatIndex": 3, "oldShotId": "s4", "newShotId": "s1", "reason": "collision"},
+        {"beatIndex": 4, "oldShotId": "s5", "newShotId": "s4", "reason": "chain"},
+    ]
+    alternative = {
+        **ranked_shot("s6", 0, 1000, 6),
+        "sourceAssetId": "a6",
+    }
+
+    selected, applied, rejected = HighlightSelectionTool()._compile_shots(
+        story,
+        changes,
+        {"shots": [*story_shots, alternative]},
+    )
+
+    selected_ids = [shot["shotId"] for shot in selected]
+    assert selected_ids == ["s1", "s6", "s3", "s4", "s5"]
+    assert len(selected_ids) == len(set(selected_ids))
+    assert [(item["oldShotId"], item["newShotId"]) for item in applied] == [("s2", "s6")]
+    assert {
+        (item["oldShotId"], item["newShotId"], item["rejectionReason"])
+        for item in rejected
+    } == {
+        ("s4", "s1", "ALREADY_SELECTED_IN_STORY_PLAN"),
+        ("s5", "s4", "ALREADY_SELECTED_IN_STORY_PLAN"),
+    }
+
+
 def test_story_plan_reduces_duration_for_short_unique_footage(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "artifact_root", tmp_path / "artifacts")
     ranking = {

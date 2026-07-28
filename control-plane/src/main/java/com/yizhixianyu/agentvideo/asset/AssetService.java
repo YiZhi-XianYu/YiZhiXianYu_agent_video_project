@@ -45,8 +45,31 @@ public class AssetService {
     }
 
     @Transactional(readOnly = true)
+    public AssetEntity getRequiredAvailable(String assetId) {
+        var asset = getRequired(assetId);
+        if (!asset.isAvailable()) {
+            throw new IllegalArgumentException("Asset is no longer available in the project library: " + assetId);
+        }
+        return asset;
+    }
+
+    @Transactional(readOnly = true)
     public List<AssetEntity> listByProject(String projectId) {
-        return repository.findByProjectIdOrderByCreatedAtDesc(projectId);
+        return repository.findByProjectIdAndStatusOrderByCreatedAtDesc(
+            projectId, AssetEntity.STATUS_AVAILABLE
+        );
+    }
+
+    @Transactional
+    public void removeFromLibrary(String projectId, String assetId) {
+        var asset = getRequired(assetId);
+        if (!projectId.equals(asset.getProjectId())) {
+            throw new IllegalArgumentException("Asset does not belong to project: " + projectId);
+        }
+        if (asset.isAvailable()) {
+            asset.removeFromLibrary();
+            repository.save(asset);
+        }
     }
 }
 
