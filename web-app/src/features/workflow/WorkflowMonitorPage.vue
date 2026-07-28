@@ -20,6 +20,7 @@ import ShotGalleryView from '@/features/review/ShotGalleryView.vue'
 import ShotRankingReview from '@/features/review/ShotRankingReview.vue'
 import StoryEditor from '@/features/review/StoryEditor.vue'
 import TimelinePreview from '@/features/review/TimelinePreview.vue'
+import BgmSelectionReview from '@/features/review/BgmSelectionReview.vue'
 import FinalReview from '@/features/review/FinalReview.vue'
 import type { ArtifactSnapshot } from '@/api/types'
 import type { BeatRole, ShotScore, StoryPlan, Timeline, TransitionType } from '@/shared/types'
@@ -39,14 +40,23 @@ const showGalleryView = ref(true)
 
 const renderedVideo = computed(() => workflowStore.tasks
   .flatMap((task) => task.artifacts)
-  .slice()
-  .reverse()
   .find((artifact) => artifact.type === 'RENDERED_VIDEO') ?? null)
 
 const renderedVideoDownloadUrl = computed(() => {
   if (!renderedVideo.value) return ''
   return `${renderedVideo.value.contentUrl}?download=true`
 })
+
+const proxyUrls = computed<Record<string, string>>(() => Object.fromEntries(
+  workflowStore.tasks
+    .flatMap((task) => task.artifacts)
+    .filter((artifact) => artifact.type === 'VIDEO_PROXY')
+    .map((artifact) => [artifact.externalArtifactId, artifact.contentUrl]),
+))
+
+const bgmCandidates = computed(() => workflowStore.tasks
+  .find((task) => task.nodeKey === 'bgm_select')
+  ?.artifacts.filter((artifact) => artifact.type === 'BGM_CANDIDATE') ?? [])
 
 // ===================== 分层轮询 =====================
 
@@ -92,9 +102,13 @@ async function syncGate(): Promise<void> {
     } else if (gate.gateKey === 'gate_story_edit') {
       const payload = await loadArtifactJson('story_plan', 'STORY_PLAN')
       reviewStore.setStoryPlan(mapStoryPlan(payload))
+      const ranking = await loadArtifactJson('shot_ranking', 'SHOT_RANKING')
+      reviewStore.setShotScores(await enrichShotScores(mapShotScores(ranking)))
     } else if (gate.gateKey === 'gate_timeline_preview') {
       const payload = await loadArtifactJson('timeline_compose', 'TIMELINE')
       reviewStore.setTimeline(mapTimeline(payload))
+    } else if (gate.gateKey === 'gate_bgm_review') {
+      // Candidate metadata and audio URLs are already included in the Workflow snapshot.
     } else if (gate.gateKey === 'gate_render_review') {
       const artifact = renderedVideo.value
       if (!artifact) throw new Error('缺少 RENDERED_VIDEO Artifact，无法打开当前审核页')
@@ -136,6 +150,10 @@ function mapShotScores(payload: Record<string, any>): ShotScore[] {
     rankScore: Number(shot.finalScore ?? shot.qualityScore ?? 0) * 100,
     penalties: (shot.rejectionReasons ?? []).map(String),
     selected: Boolean(shot.eligible),
+    sourceAssetId: shot.sourceAssetId ? String(shot.sourceAssetId) : undefined,
+    sourceProxyArtifactId: shot.sourceProxyArtifactId ? String(shot.sourceProxyArtifactId) : undefined,
+    startMs: Number(shot.startMs ?? 0),
+    endMs: Number(shot.endMs ?? shot.durationMs ?? 0),
   }))
 }
 
@@ -145,6 +163,16 @@ function mapStoryPlan(payload: Record<string, any>): StoryPlan {
     beats: (payload.beats ?? []).map((beat: Record<string, any>) => ({
       role: beat.role as BeatRole,
       shotIds: (beat.shots ?? []).map((shot: Record<string, any>) => String(shot.shotId)),
+      shots: (beat.shots ?? []).map((shot: Record<string, any>) => ({
+        ...shot,
+        shotId: String(shot.shotId),
+        sourceAssetId: String(shot.sourceAssetId ?? ''),
+        sourceProxyArtifactId: String(shot.sourceProxyArtifactId ?? ''),
+        startMs: Number(shot.startMs ?? 0), endMs: Number(shot.endMs ?? 0),
+        sourceInMs: Number(shot.sourceInMs ?? shot.startMs ?? 0),
+        sourceOutMs: Number(shot.sourceOutMs ?? shot.endMs ?? 0),
+        selectedDurationMs: Number(shot.selectedDurationMs ?? 0),
+      })),
       targetDurationMs: Number(beat.targetDurationMs ?? beat.actualDurationMs ?? 0),
     })),
     totalDurationMs: Number(payload.targetDurationMs ?? 0),
@@ -161,9 +189,22 @@ function mapTimeline(payload: Record<string, any>): Timeline {
       durationMs: Number(clip.timelineOutMs) - Number(clip.timelineInMs),
       transition: (clip.transitionIn?.type ?? 'CUT') as TransitionType,
       transitionDurationMs: Number(clip.transitionIn?.durationMs ?? 0),
+      clipId: String(clip.clipId ?? `clip_${clip.shotId}`),
+      assetId: String(clip.assetId ?? ''), sourceProxyArtifactId: String(clip.sourceProxyArtifactId ?? ''),
+      sourceShotStartMs: clip.sourceShotStartMs == null ? undefined : Number(clip.sourceShotStartMs),
+      sourceShotEndMs: clip.sourceShotEndMs == null ? undefined : Number(clip.sourceShotEndMs),
+      timelineInMs: Number(clip.timelineInMs ?? 0), timelineOutMs: Number(clip.timelineOutMs ?? 0),
+      playbackRate: Number(clip.playbackRate ?? 1), storyRole: clip.storyRole as BeatRole,
+      selectionRank: Number(clip.selectionRank ?? 1), selectionReasons: clip.selectionReasons ?? [],
     })),
     totalDurationMs: Number(payload.durationMs ?? 0),
     bgmName: null,
+    timelineId: payload.timelineId ? String(payload.timelineId) : undefined,
+    canvas: {
+      width: Number(payload.canvas?.width ?? 1920),
+      height: Number(payload.canvas?.height ?? 1080),
+      fps: Number(payload.canvas?.fps ?? 30),
+    },
   }
 }
 
@@ -172,13 +213,15 @@ async function enrichShotScores(scores: ShotScore[]): Promise<ShotScore[]> {
   try {
     /* 1. 加载 SHOT_LIST（含 keyframeArtifactId 和时间） */
     const shotListPayload = await loadArtifactJson('video_shot_detect', 'SHOT_LIST')
-    const shotMetaMap = new Map<string, { keyframeArtifactId: string; startMs: number; endMs: number }>(
+    const shotMetaMap = new Map<string, { keyframeArtifactId: string; startMs: number; endMs: number; sourceAssetId: string; sourceProxyArtifactId: string }>(
       (shotListPayload.shots ?? []).map((s: Record<string, any>) => [
         String(s.shotId),
         {
           keyframeArtifactId: String(s.keyframeArtifactId),
           startMs: Number(s.startMs),
           endMs: Number(s.endMs),
+          sourceAssetId: String(s.sourceAssetId ?? ''),
+          sourceProxyArtifactId: String(s.sourceProxyArtifactId ?? ''),
         },
       ])
     )
@@ -202,6 +245,8 @@ async function enrichShotScores(scores: ShotScore[]): Promise<ShotScore[]> {
         proxyVideoUrl: proxyUrl ?? undefined,
         startMs: meta?.startMs,
         endMs: meta?.endMs,
+        sourceAssetId: meta?.sourceAssetId || shot.sourceAssetId,
+        sourceProxyArtifactId: meta?.sourceProxyArtifactId || shot.sourceProxyArtifactId,
       }
     })
   } catch {
@@ -224,6 +269,21 @@ async function handleContinue(): Promise<void> {
 
 async function handleRenderConfirm(): Promise<void> {
   await handleContinue()
+}
+
+async function handleStoryPlanApplied(): Promise<void> {
+  await workflowStore.fetchRun(props.runId)
+  startPolling()
+}
+
+async function handleTimelineApplied(): Promise<void> {
+  await workflowStore.fetchRun(props.runId)
+  startPolling()
+}
+
+async function handleBgmApplied(): Promise<void> {
+  await workflowStore.fetchRun(props.runId)
+  startPolling()
 }
 
 function goBack(): void {
@@ -326,11 +386,20 @@ function goBack(): void {
       </template>
       <StoryEditor
         v-if="workflowStore.isPaused && workflowStore.currentGate?.gateKey === 'gate_story_edit'"
-        @confirm="handleContinue"
+        :run-id="runId"
+        @confirm="handleStoryPlanApplied"
       />
       <TimelinePreview
         v-if="workflowStore.isPaused && workflowStore.currentGate?.gateKey === 'gate_timeline_preview'"
-        @confirm="handleContinue"
+        :run-id="runId"
+        :proxy-urls="proxyUrls"
+        @confirm="handleTimelineApplied"
+      />
+      <BgmSelectionReview
+        v-if="workflowStore.isPaused && workflowStore.currentGate?.gateKey === 'gate_bgm_review'"
+        :run-id="runId"
+        :candidates="bgmCandidates"
+        @confirm="handleBgmApplied"
       />
       <FinalReview
         v-if="workflowStore.isPaused && workflowStore.currentGate?.gateKey === 'gate_render_review'"

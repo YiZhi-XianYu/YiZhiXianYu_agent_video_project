@@ -116,7 +116,7 @@
   .app-nav a small { @apply mt-0.5 block text-[11px] text-surface-600; }
   .app-nav a.active { @apply bg-accent/15 text-accent-light ring-1 ring-accent/20; }
   .app-nav a.active small { @apply text-accent-light/60; }
-  .account-card { @apply mt-auto flex items-center gap-3 rounded-2xl border border-white/5 bg-white/[0.03] p-3; }
+  .account-card { @apply mt-2 flex shrink-0 items-center gap-3 rounded-2xl border border-white/5 bg-white/[0.03] p-3; }
   .account-avatar { @apply flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-accent to-indigo-500 text-sm font-bold; }
   .account-card strong { @apply block truncate text-xs text-surface-200; }
   .account-card small { @apply block truncate text-[10px] text-surface-500; }

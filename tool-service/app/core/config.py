@@ -40,6 +40,11 @@ class Settings(BaseSettings):
 
     # BGM library
     bgm_library_root: Path = Path("runtime/bgm")
+    music_provider: str = "auto"
+    jamendo_client_id: str = ""
+    music_cache_root: Path = Path("runtime/music-cache")
+    music_candidate_limit: int = 3
+    music_request_timeout_seconds: float = 20.0
 
     # ASR
     asr_model_size: str = "small"  # "tiny", "small", "medium", "large-v3"

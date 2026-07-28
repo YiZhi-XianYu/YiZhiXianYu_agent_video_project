@@ -217,6 +217,20 @@ public class TaskRunEntity extends BaseEntity {
         errorMessage = ErrorMessageFormatter.fit(message);
     }
 
+    public void resetForReexecution() {
+        if (status == TaskStatus.DISPATCHING || status == TaskStatus.RUNNING || status == TaskStatus.RETRY_WAIT) {
+            throw new IllegalStateException("Cannot reset active task " + nodeKey + " from " + status);
+        }
+        status = TaskStatus.PENDING;
+        progress = 0;
+        retryCount = 0;
+        startedAt = null;
+        completedAt = null;
+        nextAttemptAt = null;
+        retrySameAttempt = false;
+        errorMessage = null;
+    }
+
     private void require(TaskStatus expected) {
         if (status != expected) {
             throw new IllegalStateException("Expected task status " + expected + " but was " + status);

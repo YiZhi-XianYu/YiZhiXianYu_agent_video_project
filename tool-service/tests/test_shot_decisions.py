@@ -60,6 +60,68 @@ def test_ranking_highlights_and_timeline_are_deterministic(tmp_path, monkeypatch
     assert timeline_payload["tracks"][0]["clips"][0]["storyRole"] == "HOOK"
 
 
+def test_story_plan_reduces_duration_for_short_unique_footage(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "artifact_root", tmp_path / "artifacts")
+    ranking = {
+        "shots": [
+            ranked_shot("s1", 0, 4000, 1),
+            ranked_shot("s2", 4000, 4933, 2),
+            ranked_shot("s3", 4933, 5866, 3),
+            ranked_shot("s4", 5866, 6833, 4),
+            ranked_shot("s5", 6833, 12236, 5),
+        ]
+    }
+    ranking_input = write_input(tmp_path, "short-ranking.json", ranking)
+
+    output = StoryPlanTool().execute(
+        request(
+            "planning.story-template",
+            {"ranking": ranking_input},
+            {"targetDurationMs": 30000, "maxShots": 12},
+        )
+    )[0]
+    payload = json.loads(
+        (tmp_path / "artifacts" / output.artifact_id / "story-plan.json").read_text(encoding="utf-8")
+    )
+
+    actual_duration = sum(beat["actualDurationMs"] for beat in payload["beats"])
+    assert payload["targetDurationMs"] == actual_duration
+    assert 5000 <= actual_duration <= 12236
+    assert all(beat["targetDurationMs"] == beat["actualDurationMs"] for beat in payload["beats"])
+    assert len({shot["shotId"] for beat in payload["beats"] for shot in beat["shots"]}) == 5
+    assert payload["validation"] == {"valid": True, "errors": []}
+    assert any("five-beat allocation constraints" in item for item in payload["assumptions"])
+
+
+def test_story_plan_rebalances_beats_for_ten_second_short_footage(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "artifact_root", tmp_path / "artifacts")
+    ranking_input = write_input(tmp_path, "ten-second-ranking.json", {
+        "shots": [
+            ranked_shot("s1", 0, 4000, 1),
+            ranked_shot("s2", 4000, 4933, 2),
+            ranked_shot("s3", 4933, 5866, 3),
+            ranked_shot("s4", 5866, 6833, 4),
+            ranked_shot("s5", 6833, 12236, 5),
+        ]
+    })
+
+    output = StoryPlanTool().execute(
+        request(
+            "planning.story-template",
+            {"ranking": ranking_input},
+            {"targetDurationMs": 10000, "maxShots": 18},
+        )
+    )[0]
+    payload = json.loads(
+        (tmp_path / "artifacts" / output.artifact_id / "story-plan.json").read_text(encoding="utf-8")
+    )
+
+    assert payload["targetDurationMs"] == 10000
+    assert sum(beat["actualDurationMs"] for beat in payload["beats"]) == 10000
+    assert all(beat["targetDurationMs"] == beat["actualDurationMs"] for beat in payload["beats"])
+    assert payload["validation"] == {"valid": True, "errors": []}
+
+
 def test_ranking_rejects_low_quality_and_penalizes_near_duplicates(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "artifact_root", tmp_path / "artifacts")
     quality = write_input(tmp_path, "quality", {"shots": [
@@ -330,4 +392,16 @@ def quality_shot(shot_id: str, asset_id: str, start_ms: int, end_ms: int, qualit
         "qualityScore": quality,
         "visualFingerprint": fingerprint,
         "reasonCodes": ["HIGH_VISUAL_QUALITY"],
+    }
+
+
+def ranked_shot(shot_id: str, start_ms: int, end_ms: int, rank: int) -> dict:
+    score = 1.0 - rank * 0.05
+    return {
+        **quality_shot(shot_id, "short-asset", start_ms, end_ms, score, f"{rank:016x}"),
+        "durationFitness": 0.8,
+        "finalScore": score,
+        "rank": rank,
+        "eligible": True,
+        "rankingReasons": ["USEFUL_SHOT_DURATION"],
     }

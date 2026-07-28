@@ -5,12 +5,16 @@ import { Activity, Clapperboard, FolderOpen, LogOut, ShieldCheck } from 'lucide-
 import { useAuthStore } from '@/stores/auth'
 import { useProjectStore } from '@/stores/project'
 import { useWorkflowStore } from '@/stores/workflow'
+import { useWorkflowCompletionWatcher } from '@/shared/composables/useWorkflowCompletionWatcher'
+import ChuxuePet from '@/components/ChuxuePet.vue'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const projects = useProjectStore()
 const workflow = useWorkflowStore()
+
+useWorkflowCompletionWatcher()
 
 const navItems = [
   { label: '项目工作台', caption: '素材与制作入口', icon: FolderOpen, to: '/', names: ['home', 'project-detail'] },
@@ -51,6 +55,8 @@ async function logout(): Promise<void> {
           <span><strong>{{ item.label }}</strong><small>{{ item.caption }}</small></span>
         </RouterLink>
       </nav>
+
+      <ChuxuePet />
 
       <div class="account-card">
         <div class="account-avatar">{{ auth.user?.displayName?.slice(0, 1).toUpperCase() || 'U' }}</div>

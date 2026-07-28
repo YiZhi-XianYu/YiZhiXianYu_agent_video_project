@@ -14,6 +14,10 @@ public class MultiAssetAnalysisTemplate {
     }
 
     public WorkflowDefinition create(ProxyQuality quality, String durationPrompt) {
+        return create(quality, durationPrompt, false);
+    }
+
+    public WorkflowDefinition create(ProxyQuality quality, String durationPrompt, boolean autoMode) {
         var storyParams = new java.util.LinkedHashMap<String, Object>();
         storyParams.put("targetDurationMs", 30000);
         storyParams.put("maxShots", 18);
@@ -22,7 +26,7 @@ public class MultiAssetAnalysisTemplate {
         }
         return new WorkflowDefinition(
             "MULTI_ASSET_ANALYSIS",
-            9,
+            10,
             // === Nodes ===
             List.of(
                 new WorkflowDefinition.Node(
@@ -75,7 +79,8 @@ public class MultiAssetAnalysisTemplate {
                 new WorkflowDefinition.Node(
                     "bgm_select", "audio.bgm-select", "1.0.0",
                     WorkflowDefinition.NodeScope.WORKFLOW,
-                    WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT, Map.of()
+                    WorkflowDefinition.InputBinding.UPSTREAM_ARTIFACT,
+                    Map.of("autoSelect", autoMode)
                 ),
                 new WorkflowDefinition.Node(
                     "subtitle_compose", "subtitle.compose", "1.0.0",
@@ -121,6 +126,7 @@ public class MultiAssetAnalysisTemplate {
                 new WorkflowDefinition.Gate("gate_shot_ranking", "shot_ranking", "镜头排序审核", "请检查系统对镜头的质量评分和排名。可手动调整评分、强制入选或排除指定镜头。"),
                 new WorkflowDefinition.Gate("gate_story_edit", "story_plan", "故事安排编辑", "请检查五段式故事安排。可替换、排序、锁定、添加或删除各段落中的镜头。"),
                 new WorkflowDefinition.Gate("gate_timeline_preview", "timeline_compose", "时间线预览", "请预览生成的时间线，确认镜头顺序、转场效果和整体节奏。"),
+                new WorkflowDefinition.Gate("gate_bgm_review", "bgm_select", "背景音乐选择", "试听系统按情绪、时长和匹配度排序的音乐候选；可选择一首，也可无 BGM 继续。"),
                 new WorkflowDefinition.Gate("gate_render_review", "video_render", "最终成片预览", "请预览最终成片；BGM 或字幕不可用时，系统会保留可播放的降级版本。")
             )
         );

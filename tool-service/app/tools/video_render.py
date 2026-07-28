@@ -236,10 +236,10 @@ def _build_filter_graph(
         # Base chain: trim → setpts → scale → pad → fps → format
         base = (
             f"[{src_idx}:v]"
-            f"trim=start={src_in:.3f}:duration={dur:.3f},setpts=PTS-STARTPTS,settb=AVTB,"
+            f"trim=start={src_in:.3f}:duration={dur:.3f},setpts=PTS-STARTPTS,"
             f"scale={width}:{height}:force_original_aspect_ratio=decrease:force_divisible_by=2,"
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,"
-            f"fps={fps},format=yuv420p"
+            f"fps={fps},settb=expr=1/{fps},format=yuv420p"
         )
 
         # FADE: add fade-in filter to the clip
@@ -264,8 +264,14 @@ def _build_filter_graph(
         if trans_type in ("CUT", "FADE"):
             # Simple concat (FADE already applied per-clip)
             new_label = f"[vc{xfade_counter}]"
+            concat_label = f"[vc{xfade_counter}_concat]"
             transition_filters.append(
-                f"{acc_v_label}[s{i}]concat=n=2:v=1:a=0{new_label}"
+                f"{acc_v_label}[s{i}]concat=n=2:v=1:a=0{concat_label}"
+            )
+            # concat emits AVTB (1/1_000_000). Normalize it before a later xfade,
+            # whose two video inputs must have identical frame rate and timebase.
+            transition_filters.append(
+                f"{concat_label}fps={fps},settb=expr=1/{fps}{new_label}"
             )
             acc_v_label = new_label
             acc_v_duration += clip_durations_sec[i]
@@ -358,7 +364,7 @@ def _build_filter_graph(
             f"volume={bgm_volume}[bgm]"
         )
         transition_filters.append(
-            f"[{final_audio_label}][bgm]amix=inputs=2:duration=first:"
+            f"{final_audio_label}[bgm]amix=inputs=2:duration=first:"
             f"dropout_transition=0[outa_mixed]"
         )
         final_audio_label = "[outa_mixed]"

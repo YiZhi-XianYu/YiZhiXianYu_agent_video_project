@@ -229,21 +229,30 @@ def _build_deterministic_story_plan(
                 global_remaining, global_remaining / target_duration * 100,
             )
 
+    effective_duration, source_limited = _reconcile_constrained_duration(
+        beats, target_duration, global_remaining
+    )
+    assumptions = [
+        "No semantic scene labels are available; beat roles use deterministic quality, motion and chronology signals.",
+        "Story selection prefers the least-used source Asset when it can still fill the current beat exactly.",
+        "Only eligible ranked Shots are preferred; rejected Shots are used only when fewer than five eligible candidates exist.",
+    ]
+    if source_limited:
+        assumptions.append(
+            "Source duration and five-beat allocation constraints required beat budgets to follow the selected footage without duplicating or stretching Shots."
+        )
+
     proposal = {
         "schemaVersion": "1.0",
         "template": "TRAVEL_JOURNEY_V1",
         "sourceRankingArtifactId": ranking_inputs.artifact_id,
-        "targetDurationMs": target_duration,
+        "targetDurationMs": effective_duration,
         "maxShots": max_shots,
         "beats": beats,
-        "assumptions": [
-            "No semantic scene labels are available; beat roles use deterministic quality, motion and chronology signals.",
-            "Story selection prefers the least-used source Asset when it can still fill the current beat exactly.",
-            "Only eligible ranked Shots are preferred; rejected Shots are used only when fewer than five eligible candidates exist.",
-        ],
+        "assumptions": assumptions,
     }
     allowed_ids = {shot["shotId"] for shot in ranking.get("shots") or []}
-    errors = StoryProposalValidator.validate(proposal, allowed_ids, target_duration, max_shots)
+    errors = StoryProposalValidator.validate(proposal, allowed_ids, effective_duration, max_shots)
     if errors:
         raise ValueError("Story Plan validation failed: " + "; ".join(errors))
     proposal["validation"] = {"valid": True, "errors": []}
@@ -431,7 +440,8 @@ def _try_llm_story_plan(
         return None
 
     proposal = _compile_llm_proposal(raw, ranking, candidates, target_duration, max_shots)
-    errors = StoryProposalValidator.validate(proposal, allowed_ids, target_duration, max_shots)
+    effective_duration = int(proposal["targetDurationMs"])
+    errors = StoryProposalValidator.validate(proposal, allowed_ids, effective_duration, max_shots)
     if errors:
         logger.warning("LLM compiled Story Plan validation failed [%s]: %s", audit.request_id, errors)
         audit.mark_validation_failed(errors)
@@ -696,16 +706,54 @@ def _compile_llm_proposal(
                 global_remaining, global_remaining / target_duration * 100,
             )
 
+    effective_duration, source_limited = _reconcile_constrained_duration(
+        beats, target_duration, global_remaining
+    )
+    assumptions = (
+        list(raw.get("assumptions"))
+        if isinstance(raw.get("assumptions"), list)
+        else [str(raw.get("assumptions", ""))]
+    )
+    if source_limited:
+        assumptions.append(
+            "Source duration and five-beat allocation constraints required beat budgets to follow the selected footage without duplicating or stretching Shots."
+        )
+
     return {
         "schemaVersion": "1.0",
         "template": "TRAVEL_JOURNEY_V1",
         "sourceRankingArtifactId": "llm-proposal",
-        "targetDurationMs": target_duration,
+        "targetDurationMs": effective_duration,
         "maxShots": max_shots,
         "beats": beats,
-        "assumptions": (raw.get("assumptions") if isinstance(raw.get("assumptions"), list) else [str(raw.get("assumptions", ""))]),
+        "assumptions": assumptions,
         "confidence": raw.get("confidence", 0),
     }
+
+
+def _reconcile_constrained_duration(
+    beats: list[dict[str, Any]],
+    requested_duration: int,
+    unfilled_duration: int,
+) -> tuple[int, bool]:
+    """Align beat budgets with feasible selections for constrained footage."""
+    actual_duration = sum(int(beat["actualDurationMs"]) for beat in beats)
+    beat_budget_mismatch = any(
+        abs(int(beat["targetDurationMs"]) - int(beat["actualDurationMs"]))
+        > max(900, int(beat["targetDurationMs"]) * 0.20)
+        for beat in beats
+    )
+    if unfilled_duration <= 0 and not beat_budget_mismatch:
+        return requested_duration, False
+
+    for beat in beats:
+        beat["targetDurationMs"] = int(beat["actualDurationMs"])
+    logger.info(
+        "Story Plan beat budgets reconciled from requested %d ms to feasible %d ms",
+        requested_duration,
+        actual_duration,
+    )
+    return actual_duration, True
 
 
 def _trim_beats_to_max_shots(

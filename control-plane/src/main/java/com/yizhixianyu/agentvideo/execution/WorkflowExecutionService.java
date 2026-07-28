@@ -151,7 +151,7 @@ public class WorkflowExecutionService {
         var assets = uniqueAssetIds.stream().map(assetService::getRequired).toList();
         assets.forEach(asset -> requireProjectAsset(projectId, asset));
 
-        var definition = analysisTemplate.create(proxyQuality, durationPrompt);
+        var definition = analysisTemplate.create(proxyQuality, durationPrompt, autoMode);
         definitionValidator.validate(definition);
         var workflow = workflowRepository.save(new WorkflowRunEntity(
             projectId,
@@ -234,9 +234,320 @@ public class WorkflowExecutionService {
         ));
 
         dependencyRepository.save(new TaskDependencyEntity(renderTask.getId(), virtualTask.getId()));
+        inheritOptionalRenderArtifacts(sourceWorkflowRunId, projectId, renderWorkflow.getId(), renderTask.getId());
 
         evaluateWorkflow(renderWorkflow.getId());
         return renderWorkflow.getId();
+    }
+
+    @Transactional
+    public String applyCustomStoryPlan(String workflowRunId, Map<String, Object> customPlan) {
+        var workflow = workflowRepository.findLockedById(workflowRunId)
+            .orElseThrow(() -> new IllegalArgumentException("Workflow run not found: " + workflowRunId));
+        if (workflow.getStatus() != RunStatus.PAUSED
+            || !"gate_story_edit".equals(workflow.getCurrentGateKey())) {
+            throw new IllegalStateException("Workflow is not paused at the Story Plan gate: " + workflowRunId);
+        }
+
+        var tasks = taskRepository.findByWorkflowRunIdOrderByCreatedAtAsc(workflowRunId);
+        var storyTask = tasks.stream()
+            .filter(task -> "story_plan".equals(task.getNodeKey()))
+            .findFirst()
+            .orElseThrow(() -> new IllegalStateException("Story Plan task is missing: " + workflowRunId));
+        if (storyTask.getStatus() != TaskStatus.SUCCEEDED) {
+            throw new IllegalStateException("Story Plan task has not succeeded: " + workflowRunId);
+        }
+
+        var planJson = toJson(customPlan);
+        saveJsonArtifact(workflow.getProjectId(), storyTask.getId(), "STORY_PLAN", "story-plan.json", planJson);
+
+        var taskIds = tasks.stream().map(TaskRunEntity::getId).toList();
+        var dependencies = dependencyRepository.findByTaskRunIdIn(taskIds);
+        var descendantIds = descendantTaskIds(storyTask.getId(), dependencies);
+        tasks.stream()
+            .filter(task -> descendantIds.contains(task.getId()))
+            .forEach(TaskRunEntity::resetForReexecution);
+
+        workflow.completeCurrentGate();
+        workflow.resume();
+        evaluateWorkflow(workflowRunId);
+        return workflowRunId;
+    }
+
+    @Transactional
+    public String applyCustomTimeline(String workflowRunId, Map<String, Object> timeline) {
+        var workflow = workflowRepository.findLockedById(workflowRunId)
+            .orElseThrow(() -> new IllegalArgumentException("Workflow run not found: " + workflowRunId));
+        if (workflow.getStatus() != RunStatus.PAUSED
+            || !"gate_timeline_preview".equals(workflow.getCurrentGateKey())) {
+            throw new IllegalStateException("Workflow is not paused at the Timeline gate: " + workflowRunId);
+        }
+
+        validateCustomTimeline(timeline);
+        var tasks = taskRepository.findByWorkflowRunIdOrderByCreatedAtAsc(workflowRunId);
+        var timelineTask = tasks.stream()
+            .filter(task -> "timeline_compose".equals(task.getNodeKey()))
+            .findFirst()
+            .orElseThrow(() -> new IllegalStateException("Timeline task is missing: " + workflowRunId));
+        if (timelineTask.getStatus() != TaskStatus.SUCCEEDED) {
+            throw new IllegalStateException("Timeline task has not succeeded: " + workflowRunId);
+        }
+
+        saveJsonArtifact(
+            workflow.getProjectId(), timelineTask.getId(), "TIMELINE", "timeline.json", toJson(timeline)
+        );
+
+        var taskIds = tasks.stream().map(TaskRunEntity::getId).toList();
+        var dependencies = dependencyRepository.findByTaskRunIdIn(taskIds);
+        var descendantIds = descendantTaskIds(timelineTask.getId(), dependencies);
+        tasks.stream()
+            .filter(task -> descendantIds.contains(task.getId()))
+            .forEach(TaskRunEntity::resetForReexecution);
+
+        workflow.completeCurrentGate();
+        workflow.resume();
+        evaluateWorkflow(workflowRunId);
+        return workflowRunId;
+    }
+
+    @Transactional
+    public String selectBgmCandidate(String workflowRunId, String candidateArtifactId) {
+        var workflow = requireBgmGate(workflowRunId);
+        var bgmTask = requireBgmTask(workflowRunId);
+        var candidate = artifactRepository.findByExternalArtifactId(candidateArtifactId)
+            .filter(artifact -> bgmTask.getId().equals(artifact.getProducerTaskRunId()))
+            .filter(artifact -> "BGM_CANDIDATE".equals(artifact.getType()))
+            .orElseThrow(() -> new IllegalArgumentException(
+                "BGM candidate does not belong to the current Workflow: " + candidateArtifactId
+            ));
+
+        var selectedMetadata = new LinkedHashMap<String, Object>();
+        selectedMetadata.put("selected", true);
+        selectedMetadata.put("selectedFromArtifactId", candidate.getExternalArtifactId());
+        selectedMetadata.put("selectedAt", Instant.now().toString());
+        selectedMetadata.put("candidate", parseJsonObject(candidate.getMetadataJson()));
+        var selectedAudioArtifactId = "art_" + UUID.randomUUID().toString().replace("-", "");
+        artifactRepository.save(new ArtifactEntity(
+            selectedAudioArtifactId,
+            workflow.getProjectId(),
+            bgmTask.getId(),
+            "BGM_AUDIO",
+            candidate.getStorageUri(),
+            candidate.getMediaType(),
+            candidate.getSizeBytes(),
+            candidate.getContentHash(),
+            toJson(selectedMetadata)
+        ));
+        saveJsonArtifact(
+            workflow.getProjectId(), bgmTask.getId(), "BGM_SELECTION", "bgm-selection.json",
+            toJson(Map.of(
+                "mode", "SELECTED",
+                "selectedAudioArtifactId", selectedAudioArtifactId,
+                "candidateArtifactId", candidate.getExternalArtifactId(),
+                "selectedAt", Instant.now().toString()
+            ))
+        );
+
+        completeBgmGate(workflowRunId, workflow);
+        return workflowRunId;
+    }
+
+    @Transactional
+    public String continueWithoutBgm(String workflowRunId) {
+        var workflow = requireBgmGate(workflowRunId);
+        var bgmTask = requireBgmTask(workflowRunId);
+        saveJsonArtifact(
+            workflow.getProjectId(), bgmTask.getId(), "BGM_SELECTION", "bgm-selection.json",
+            toJson(Map.of("mode", "NONE", "selectedAt", Instant.now().toString()))
+        );
+        completeBgmGate(workflowRunId, workflow);
+        return workflowRunId;
+    }
+
+    private WorkflowRunEntity requireBgmGate(String workflowRunId) {
+        var workflow = workflowRepository.findLockedById(workflowRunId)
+            .orElseThrow(() -> new IllegalArgumentException("Workflow run not found: " + workflowRunId));
+        if (workflow.getStatus() != RunStatus.PAUSED
+            || !"gate_bgm_review".equals(workflow.getCurrentGateKey())) {
+            throw new IllegalStateException("Workflow is not paused at the BGM gate: " + workflowRunId);
+        }
+        return workflow;
+    }
+
+    private TaskRunEntity requireBgmTask(String workflowRunId) {
+        return taskRepository.findByWorkflowRunIdOrderByCreatedAtAsc(workflowRunId).stream()
+            .filter(task -> "bgm_select".equals(task.getNodeKey()))
+            .filter(task -> task.getStatus() == TaskStatus.SUCCEEDED)
+            .findFirst()
+            .orElseThrow(() -> new IllegalStateException("BGM selection task has not succeeded: " + workflowRunId));
+    }
+
+    private void completeBgmGate(String workflowRunId, WorkflowRunEntity workflow) {
+        workflow.completeCurrentGate();
+        workflow.resume();
+        evaluateWorkflow(workflowRunId);
+    }
+
+    private void validateCustomTimeline(Map<String, Object> timeline) {
+        if (timeline == null || !(timeline.get("tracks") instanceof List<?> tracks) || tracks.isEmpty()) {
+            throw new IllegalArgumentException("Custom timeline must contain tracks");
+        }
+        var hasVideoClip = tracks.stream().filter(Map.class::isInstance).map(item -> (Map<?, ?>) item)
+            .filter(track -> "VIDEO".equals(String.valueOf(track.get("type"))))
+            .anyMatch(track -> track.get("clips") instanceof List<?> clips && !clips.isEmpty());
+        if (!hasVideoClip) {
+            throw new IllegalArgumentException("Custom timeline must contain at least one VIDEO clip");
+        }
+    }
+
+    private Set<String> descendantTaskIds(
+        String producerTaskId,
+        List<TaskDependencyEntity> dependencies
+    ) {
+        var descendants = new LinkedHashSet<String>();
+        var frontier = new ArrayList<String>();
+        frontier.add(producerTaskId);
+        while (!frontier.isEmpty()) {
+            var upstreamId = frontier.remove(0);
+            for (var dependency : dependencies) {
+                if (!upstreamId.equals(dependency.getDependsOnTaskRunId())) continue;
+                if (descendants.add(dependency.getTaskRunId())) {
+                    frontier.add(dependency.getTaskRunId());
+                }
+            }
+        }
+        return descendants;
+    }
+
+    private ArtifactEntity saveJsonArtifact(
+        String projectId,
+        String producerTaskRunId,
+        String type,
+        String fileName,
+        String json
+    ) {
+        var artifactId = "art_" + UUID.randomUUID().toString().replace("-", "");
+        var artifactDir = artifactRoot.resolve(artifactId);
+        try {
+            Files.createDirectories(artifactDir);
+            Files.writeString(artifactDir.resolve(fileName), json, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to write " + type + " artifact", e);
+        }
+        var contentBytes = json.getBytes(StandardCharsets.UTF_8);
+        return artifactRepository.save(new ArtifactEntity(
+            artifactId,
+            projectId,
+            producerTaskRunId,
+            type,
+            artifactDir.resolve(fileName).toUri().toString(),
+            "application/json",
+            contentBytes.length,
+            sha256(contentBytes),
+            json
+        ));
+    }
+
+    @Transactional
+    public String createCustomTimelineRenderRun(String projectId, String sourceWorkflowRunId, Map<String, Object> timeline) {
+        var sourceWorkflow = workflowRepository.findById(sourceWorkflowRunId)
+            .orElseThrow(() -> new IllegalArgumentException("Source workflow run not found: " + sourceWorkflowRunId));
+        validateCustomTimeline(timeline);
+        var timelineJson = toJson(timeline);
+        var artifactId = "art_" + UUID.randomUUID().toString().replace("-", "");
+        var artifactDir = artifactRoot.resolve(artifactId);
+        try {
+            Files.createDirectories(artifactDir);
+            Files.writeString(artifactDir.resolve("timeline.json"), timelineJson, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to write custom TIMELINE artifact", e);
+        }
+        var contentBytes = timelineJson.getBytes(StandardCharsets.UTF_8);
+        var contentHash = sha256(contentBytes);
+        var storageUri = artifactDir.resolve("timeline.json").toUri().toString();
+
+        var renderWorkflow = workflowRepository.save(new WorkflowRunEntity(
+            projectId, sourceWorkflow.getAssetId(), "CUSTOM_TIMELINE_RENDER", sourceWorkflow.getProxyQuality()
+        ));
+        renderWorkflow.start();
+
+        var virtualTask = taskRepository.save(new TaskRunEntity(
+            renderWorkflow.getId(), "timeline_compose_virtual", "timeline.compose", "1.1.0", null
+        ));
+        virtualTask.markReady();
+        virtualTask.markDispatching();
+        virtualTask.markRunning();
+        virtualTask.markSucceeded();
+        artifactRepository.save(new ArtifactEntity(
+            artifactId, projectId, virtualTask.getId(), "TIMELINE", storageUri,
+            "application/json", contentBytes.length, contentHash, timelineJson
+        ));
+
+        var renderTask = taskRepository.save(new TaskRunEntity(
+            renderWorkflow.getId(), null, "workflow:video_render", "video_render",
+            "video.render", "1.1.0", "UPSTREAM_ARTIFACT", "{}"
+        ));
+        dependencyRepository.save(new TaskDependencyEntity(renderTask.getId(), virtualTask.getId()));
+        inheritOptionalRenderArtifacts(sourceWorkflowRunId, projectId, renderWorkflow.getId(), renderTask.getId());
+        evaluateWorkflow(renderWorkflow.getId());
+        return renderWorkflow.getId();
+    }
+
+    /**
+     * Carry optional render inputs into a custom render run without mutating the
+     * source workflow's immutable artifacts. The new artifacts point to the same
+     * immutable storage object and retain explicit lineage metadata.
+     */
+    private void inheritOptionalRenderArtifacts(
+        String sourceWorkflowRunId,
+        String projectId,
+        String targetWorkflowRunId,
+        String renderTaskRunId
+    ) {
+        var sourceTasks = taskRepository.findByWorkflowRunIdOrderByCreatedAtAsc(sourceWorkflowRunId);
+        var sourceTaskIds = sourceTasks.stream().map(TaskRunEntity::getId).toList();
+        if (sourceTaskIds.isEmpty()) return;
+        var sourceArtifacts = artifactRepository.findByProducerTaskRunIdIn(sourceTaskIds);
+        for (var type : List.of("BGM_AUDIO", "SUBTITLE_SRT")) {
+            sourceArtifacts.stream()
+                .filter(artifact -> type.equals(artifact.getType()))
+                .findFirst()
+                .ifPresent(source -> {
+                    var inheritedTask = taskRepository.save(new TaskRunEntity(
+                        targetWorkflowRunId,
+                        "inherited_" + type.toLowerCase(),
+                        "inherited." + type.toLowerCase(),
+                        "1.0.0",
+                        null
+                    ));
+                    inheritedTask.markReady();
+                    inheritedTask.markDispatching();
+                    inheritedTask.markRunning();
+                    inheritedTask.markSucceeded();
+
+                    var inheritedId = "art_" + UUID.randomUUID().toString().replace("-", "");
+                    var metadata = new LinkedHashMap<String, Object>();
+                    metadata.put("inheritedFromArtifactId", source.getExternalArtifactId());
+                    metadata.put("sourceWorkflowRunId", sourceWorkflowRunId);
+                    metadata.put("sourceMetadataJson", source.getMetadataJson());
+                    artifactRepository.save(new ArtifactEntity(
+                        inheritedId,
+                        projectId,
+                        inheritedTask.getId(),
+                        type,
+                        source.getStorageUri(),
+                        source.getMediaType(),
+                        source.getSizeBytes(),
+                        source.getContentHash(),
+                        toJson(metadata)
+                    ));
+                    dependencyRepository.save(new TaskDependencyEntity(
+                        renderTaskRunId,
+                        inheritedTask.getId(),
+                        WorkflowDefinition.DependencyType.OPTIONAL
+                    ));
+                });
+        }
     }
 
     private void expandTasks(
@@ -349,12 +660,32 @@ public class WorkflowExecutionService {
         var dependencyIds = dependencyRepository.findByTaskRunId(task.getId()).stream()
             .map(TaskDependencyEntity::getDependsOnTaskRunId)
             .toList();
-        var artifacts = artifactRepository.findByProducerTaskRunIdIn(dependencyIds);
+        var artifacts = latestArtifactsByProducerAndType(
+            artifactRepository.findByProducerTaskRunIdIn(dependencyIds)
+        );
+        var bgmSelection = artifacts.stream()
+            .filter(artifact -> "BGM_SELECTION".equals(artifact.getType()))
+            .findFirst()
+            .map(artifact -> parseJsonObject(artifact.getMetadataJson()))
+            .orElse(Map.of());
+        var bgmSelectionMode = String.valueOf(bgmSelection.getOrDefault("mode", "AUTO"));
+        var selectedBgmArtifactId = String.valueOf(
+            bgmSelection.getOrDefault("selectedAudioArtifactId", "")
+        );
         var inputs = new LinkedHashMap<String, ToolServiceClient.ArtifactInput>();
         var counts = new HashMap<String, Integer>();
         for (var artifact : artifacts) {
             if (!acceptedInputTypes(task.getToolName()).contains(artifact.getType())) {
                 continue;
+            }
+            if ("video.render".equals(task.getToolName()) && "BGM_AUDIO".equals(artifact.getType())) {
+                if ("NONE".equals(bgmSelectionMode)) {
+                    continue;
+                }
+                if ("SELECTED".equals(bgmSelectionMode)
+                    && !selectedBgmArtifactId.equals(artifact.getExternalArtifactId())) {
+                    continue;
+                }
             }
             var baseKey = inputKey(artifact.getType());
             var index = counts.merge(baseKey, 1, Integer::sum) - 1;
@@ -367,6 +698,17 @@ public class WorkflowExecutionService {
             throw new IllegalStateException("Required upstream Artifact is missing for " + task.getInstanceKey());
         }
         return inputs;
+    }
+
+    private List<ArtifactEntity> latestArtifactsByProducerAndType(List<ArtifactEntity> artifacts) {
+        var latest = new LinkedHashMap<String, ArtifactEntity>();
+        artifacts.stream()
+            .sorted(java.util.Comparator.comparing(ArtifactEntity::getCreatedAt,
+                java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())))
+            .forEach(artifact -> latest.put(
+                artifact.getProducerTaskRunId() + "\u0000" + artifact.getType(), artifact
+            ));
+        return new ArrayList<>(latest.values());
     }
 
     private AssetEntity resolveTaskAsset(WorkflowRunEntity workflow, TaskRunEntity task) {
@@ -567,17 +909,23 @@ public class WorkflowExecutionService {
         WorkflowDefinition definition,
         TaskRunEntity task,
         List<TaskRunEntity> upstream,
-        Map<String, TaskRunEntity> tasksById
+        Map<String, TaskRunEntity> tasksById,
+        WorkflowRunEntity workflow
     ) {
         if (definition == null || definition.gates() == null || definition.gates().isEmpty()) {
             return null;
         }
-        for (var up : upstream) {
-            if (up.getStatus() != TaskStatus.SUCCEEDED) continue;
-            for (var gate : definition.gates()) {
-                if (gate.afterNodeKey().equals(up.getNodeKey())) {
-                    return gate;
-                }
+        // Follow definition order and ignore completed Gates. A downstream task can depend on
+        // several gated producers; returning the first completed Gate would skip a later review.
+        for (var gate : definition.gates()) {
+            if (workflow.hasCompletedGate(gate.gateKey())) {
+                continue;
+            }
+            var producerSucceeded = upstream.stream().anyMatch(up ->
+                up.getStatus() == TaskStatus.SUCCEEDED && gate.afterNodeKey().equals(up.getNodeKey())
+            );
+            if (producerSucceeded) {
+                return gate;
             }
         }
         return null;
@@ -667,8 +1015,8 @@ public class WorkflowExecutionService {
                     changed = true;
                 } else if (allUpstreamTerminal) {
                     /* Gate 检查：如果上游 Node 关联了 Gate 且非 auto 模式，暂停 Workflow */
-                    var gate = findGateForTask(definition, task, upstream, tasksById);
-                    if (gate != null && !workflow.isAutoMode() && !workflow.hasCompletedGate(gate.gateKey())) {
+                    var gate = findGateForTask(definition, task, upstream, tasksById, workflow);
+                    if (gate != null && !workflow.isAutoMode()) {
                         workflow.pause(gate.gateKey());
                         // The downstream task stays PENDING until the user continues the Gate.
                         // Return now so this transaction commits instead of evaluating the same Gate forever.
@@ -745,6 +1093,10 @@ public class WorkflowExecutionService {
             task.getProgress(), task.getAttempt(), task.getRetryCount(), task.getNextAttemptAt(),
             task.getErrorMessage(),
             artifactRepository.findByProducerTaskRunId(task.getId()).stream()
+                .sorted(java.util.Comparator.comparing(
+                    ArtifactEntity::getCreatedAt,
+                    java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())
+                ))
                 .map(artifact -> new ArtifactSnapshot(
                     artifact.getId(), artifact.getExternalArtifactId(), artifact.getType(), artifact.getStorageUri(),
                     artifact.getMediaType(), artifact.getMetadataJson(),
@@ -874,6 +1226,25 @@ public class WorkflowExecutionService {
             return objectMapper.writeValueAsString(value);
         } catch (JsonProcessingException exc) {
             throw new IllegalStateException("Failed to serialize JSON", exc);
+        }
+    }
+
+    private Map<String, Object> parseJsonObject(String json) {
+        if (json == null || json.isBlank()) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(json, new TypeReference<>() {});
+        } catch (JsonProcessingException exc) {
+            throw new IllegalStateException("Artifact metadata is invalid JSON", exc);
+        }
+    }
+
+    private String sha256(byte[] content) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 not available", e);
         }
     }
 

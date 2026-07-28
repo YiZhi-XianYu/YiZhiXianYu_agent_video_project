@@ -58,6 +58,10 @@ services:
       TOOL_SERVICE_ARTIFACT_ROOT: /app/runtime/artifacts
       TOOL_SERVICE_EXECUTION_STORE_PATH: /app/runtime/executions/tool-executions.sqlite3
       TOOL_SERVICE_BGM_LIBRARY_ROOT: /app/runtime/bgm
+      TOOL_SERVICE_MUSIC_CACHE_ROOT: /app/runtime/music-cache
+      TOOL_SERVICE_MUSIC_PROVIDER: ${MUSIC_PROVIDER:-auto}
+      TOOL_SERVICE_JAMENDO_CLIENT_ID: ${JAMENDO_CLIENT_ID:-}
+      TOOL_SERVICE_MUSIC_CANDIDATE_LIMIT: ${MUSIC_CANDIDATE_LIMIT:-3}
       TOOL_SERVICE_LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
       TOOL_SERVICE_LLM_API_KEY: ${LLM_API_KEY:-}
       TOOL_SERVICE_LLM_MODEL: ${LLM_MODEL:-deepseek-chat}

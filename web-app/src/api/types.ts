@@ -171,8 +171,12 @@
  }
 
  /** 版本列表项 */
- export interface VersionListItem {
+export interface VersionListItem {
    id: string
    versionName: string
+   status?: string
    createdAt: string
+   beatCount?: number
+   shotCount?: number
+   totalDurationMs?: number
  }

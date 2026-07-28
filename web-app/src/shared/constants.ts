@@ -11,7 +11,7 @@ import type { GateInfo } from '@/api/types'
  // Gate 定义 —— 与 Java WorkflowDefinition 中的 Gate 保持一致
  // ============================================================
 
- /** 4 个 Gate 的本地定义（gateKey、label、description 与后端同步） */
+ /** Gate 的本地定义（gateKey、label、description 与后端同步） */
  export const GATE_DEFINITIONS: GateInfo[] = [
    {
      gateKey: 'gate_shot_ranking',
@@ -26,9 +26,14 @@ import type { GateInfo } from '@/api/types'
    {
      gateKey: 'gate_timeline_preview',
      label: '时间线预览',
-     description: '请预览生成的时间线，确认镜头顺序、转场效果和整体节奏。',
-   },
-   {
+   description: '请预览生成的时间线，确认镜头顺序、转场效果和整体节奏。',
+  },
+  {
+    gateKey: 'gate_bgm_review',
+    label: '背景音乐选择',
+    description: '试听系统按情绪、时长和匹配度排序的音乐候选；可选择一首，也可无 BGM 继续。',
+  },
+  {
      gateKey: 'gate_render_review',
      label: '最终成片预览',
      description: '请预览最终成片；BGM 或字幕不可用时，系统会保留可播放的降级版本。',

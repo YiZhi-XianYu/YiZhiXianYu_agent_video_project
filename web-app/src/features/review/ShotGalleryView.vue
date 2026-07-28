@@ -99,15 +99,6 @@ function formatMs(ms: number): string {
   return `${min}:${s.toString().padStart(2, '0')}`
 }
 
-function filterLabel(mode: string): string {
-  const map: Record<string, string> = { all: '全部镜头', selected: '已入选', excluded: '已排除', low: '低分 (< 50)' }
-  return map[mode] ?? mode
-}
-
-function sortLabel(key: string): string {
-  const map: Record<string, string> = { rank: '评分降序', index: '镜头序号', duration: '时长' }
-  return map[key] ?? key
-}
 </script>
 
 <template>

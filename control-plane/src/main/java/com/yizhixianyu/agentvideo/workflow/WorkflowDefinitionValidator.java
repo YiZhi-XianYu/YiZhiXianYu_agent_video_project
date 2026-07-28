@@ -153,6 +153,12 @@ public class WorkflowDefinitionValidator {
             validateAllowed(parameters, Set.of("targetDurationMs", "maxShots", "durationPrompt"), node.toolName());
         } else if ("timeline.compose".equals(node.toolName())) {
             validateAllowed(parameters, Set.of("width", "height", "fps"), node.toolName());
+        } else if ("audio.bgm-select".equals(node.toolName())) {
+            validateAllowed(parameters, Set.of("autoSelect"), node.toolName());
+            var autoSelect = parameters.get("autoSelect");
+            if (autoSelect != null && !(autoSelect instanceof Boolean)) {
+                throw new IllegalArgumentException("audio.bgm-select autoSelect must be boolean");
+            }
         } else if ("video.render".equals(node.toolName())) {
             if (!parameters.isEmpty()) {
                 throw new IllegalArgumentException("video.render does not accept parameters");

@@ -43,6 +43,8 @@ def test_build_filter_graph_single_clip():
     assert "[0:v]" in fc
     assert "trim=start=0.000:duration=3.000" in fc
     assert "scale=1280:720" in fc
+    assert "fps=30,settb=expr=1/30" in fc
+    assert "settb=AVTB" not in fc
     assert "[s0]" in fc
     assert "[0:a]atrim=start=0.000:duration=3.000" in fc
     assert v_label == "[s0]"
@@ -166,6 +168,29 @@ def test_build_filter_graph_with_cross_dissolve():
     assert "acrossfade=d=0.500" in fc
 
 
+def test_build_filter_graph_normalizes_concat_before_later_cross_dissolve():
+    clips = [
+        {"sourceProxyArtifactId": "art_a", "sourceInMs": 0, "sourceOutMs": 2000,
+         "timelineInMs": 0, "timelineOutMs": 2000,
+         "transitionIn": {"type": "CUT", "durationMs": 0}},
+        {"sourceProxyArtifactId": "art_a", "sourceInMs": 2000, "sourceOutMs": 4000,
+         "timelineInMs": 2000, "timelineOutMs": 4000,
+         "transitionIn": {"type": "FADE", "durationMs": 300}},
+        {"sourceProxyArtifactId": "art_a", "sourceInMs": 4000, "sourceOutMs": 6000,
+         "timelineInMs": 3500, "timelineOutMs": 5500,
+         "transitionIn": {"type": "CROSS_DISSOLVE", "durationMs": 500}},
+    ]
+    canvas = {"width": 1280, "height": 720, "fps": 30}
+    proxy_map = {"art_a": Path("/tmp/art_a/video-proxy.mp4")}
+    audio_map = {"art_a": True}
+
+    _inputs, fc, _v, _a = _build_filter_graph(clips, canvas, proxy_map, audio_map)
+
+    assert "concat=n=2:v=1:a=0[vc0_concat]" in fc
+    assert "[vc0_concat]fps=30,settb=expr=1/30[vc0]" in fc
+    assert "[vc0][s2]xfade=transition=fade" in fc
+
+
 def test_build_filter_graph_with_subtitles_does_not_duplicate_label_brackets(tmp_path):
     clips = [{
         "sourceProxyArtifactId": "art_abc",
@@ -189,6 +214,31 @@ def test_build_filter_graph_with_subtitles_does_not_duplicate_label_brackets(tmp
     assert "[[s0]]subtitles=" not in fc
     assert "FontName=Noto Sans CJK SC" in fc
     assert video_label == "[outv_sub]"
+
+
+def test_build_filter_graph_with_bgm_does_not_duplicate_audio_label_brackets(tmp_path):
+    clips = [{
+        "sourceProxyArtifactId": "art_abc",
+        "sourceInMs": 0,
+        "sourceOutMs": 3000,
+        "timelineInMs": 0,
+        "timelineOutMs": 3000,
+        "transitionIn": {"type": "CUT", "durationMs": 0},
+    }]
+    canvas = {"width": 1280, "height": 720, "fps": 30}
+    proxy_map = {"art_abc": Path("/tmp/art_abc/video-proxy.mp4")}
+    audio_map = {"art_abc": True}
+    bgm_path = tmp_path / "bgm.mp3"
+    bgm_path.write_bytes(b"test")
+
+    inputs, fc, _video_label, audio_label = _build_filter_graph(
+        clips, canvas, proxy_map, audio_map, bgm_path=bgm_path,
+    )
+
+    assert str(bgm_path) in inputs
+    assert "[a0][bgm]amix=" in fc
+    assert "[[a0]][bgm]amix=" not in fc
+    assert audio_label == "[outa_mixed]"
 
 
 def test_ffmpeg_filter_syntax_error_is_not_retryable():

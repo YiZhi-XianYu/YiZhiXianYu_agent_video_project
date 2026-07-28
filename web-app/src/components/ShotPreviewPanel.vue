@@ -17,7 +17,7 @@
  *   close          - 用户请求关闭（点击外部 / Escape / 点击关闭按钮）
  */
 import { computed, onMounted, onUnmounted, ref, watch, nextTick } from 'vue'
-import { X, Play, ImageOff } from 'lucide-vue-next'
+import { X, ImageOff } from 'lucide-vue-next'
 
 const props = defineProps<{
   shotId: string
@@ -118,11 +118,18 @@ watch(() => props.visible, (v) => {
   }
 })
 
-watch(videoRef, (el) => {
+watch(videoRef, (el, _previous, onCleanup) => {
   if (!el) return
-  /* 跳转到片段起始位置 */
-  el.currentTime = props.startMs / 1000
-  el.play().catch(() => { /* 自动播放限制 */ })
+  el.muted = false
+  el.volume = 1
+
+  const startPlayback = () => {
+    el.currentTime = props.startMs / 1000
+    el.play().catch(() => { /* 有声自动播放被限制时，保留原生播放控件供用户启动 */ })
+  }
+
+  if (el.readyState >= 1) startPlayback()
+  else el.addEventListener('loadedmetadata', startPlayback, { once: true })
 
   /* 循环播放片段 */
   const onTimeUpdate = () => {
@@ -133,9 +140,10 @@ watch(videoRef, (el) => {
   }
   el.addEventListener('timeupdate', onTimeUpdate)
 
-  /* 清理 */
-  const cleanup = () => el.removeEventListener('timeupdate', onTimeUpdate)
-  el.addEventListener('ended', cleanup)
+  onCleanup(() => {
+    el.removeEventListener('loadedmetadata', startPlayback)
+    el.removeEventListener('timeupdate', onTimeUpdate)
+  })
 })
 
 /* =========================== 关闭处理 =========================== */
@@ -191,6 +199,7 @@ watch(() => props.visible, (v) => {
           <span class="text-xs text-surface-500 font-mono">
             {{ formatMs(startMs) }} – {{ formatMs(endMs) }}
           </span>
+          <span v-if="mode === 'video'" class="text-[10px] text-success">声音已开启</span>
           <button
             class="w-6 h-6 rounded flex items-center justify-center text-surface-400 hover:text-surface-200 hover:bg-surface-600 transition-colors"
             @click="emit('close')"
@@ -211,11 +220,10 @@ watch(() => props.visible, (v) => {
               :src="videoUrl!"
               class="w-full object-contain"
               style="max-height: 220px"
-              muted
+              controls
               preload="metadata"
               playsinline
             />
-            <div class="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-black/60 to-transparent pointer-events-none" />
           </div>
         </template>
 

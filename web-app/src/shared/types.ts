@@ -77,7 +77,10 @@
   startMs?: number
   /** 镜头结束时间（毫秒） */
   endMs?: number
- }
+  /** Source metadata retained for custom Story Plan edits. */
+  sourceAssetId?: string
+  sourceProxyArtifactId?: string
+}
 
  // ============================================================
  // Story Plan
@@ -87,13 +90,29 @@
  export type BeatRole = 'HOOK' | 'INTRO' | 'JOURNEY' | 'CLIMAX' | 'ENDING'
 
  /** 故事段落 */
- export interface StoryBeat {
+export interface StoryBeat {
    role: BeatRole
    /** 段落内的 shot ID 列表（按顺序排列） */
    shotIds: string[]
    /** 段落目标时长（毫秒） */
-   targetDurationMs: number
- }
+  targetDurationMs: number
+  /** Full shot records retained when saving a custom plan. */
+  shots?: StoryShot[]
+}
+
+export interface StoryShot {
+  shotId: string
+  sourceAssetId: string
+  sourceProxyArtifactId: string
+  startMs: number
+  endMs: number
+  sourceInMs: number
+  sourceOutMs: number
+  selectedDurationMs: number
+  rank?: number
+  selectionReasons?: string[]
+  storyRole?: BeatRole
+}
 
  /** 完整 Story Plan */
  export interface StoryPlan {
@@ -110,21 +129,34 @@
  export type TransitionType = 'CUT' | 'FADE' | 'CROSS_DISSOLVE'
 
  /** Timeline 片段 */
- export interface TimelineClip {
+export interface TimelineClip {
    shotId: string
    sourceInMs: number
    sourceOutMs: number
    durationMs: number
    transition: TransitionType
-   transitionDurationMs: number
- }
+  transitionDurationMs: number
+  clipId?: string
+  assetId?: string
+  sourceProxyArtifactId?: string
+  sourceShotStartMs?: number
+  sourceShotEndMs?: number
+  timelineInMs?: number
+  timelineOutMs?: number
+  playbackRate?: number
+  storyRole?: BeatRole
+  selectionRank?: number
+  selectionReasons?: string[]
+}
 
  /** Timeline */
- export interface Timeline {
-   clips: TimelineClip[]
-   totalDurationMs: number
-   bgmName: string | null
- }
+export interface Timeline {
+  clips: TimelineClip[]
+  totalDurationMs: number
+  bgmName: string | null
+  canvas?: { width: number; height: number; fps: number }
+  timelineId?: string
+}
 
  // ============================================================
  // 版本 Diff

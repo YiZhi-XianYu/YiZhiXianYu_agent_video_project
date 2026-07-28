@@ -98,7 +98,8 @@ function handleShotClick(shot: ShotScore, event: MouseEvent): void {
               : shot.selected
                 ? 'bg-surface-700/30 border border-transparent'
                 : 'bg-surface-700/10 border border-transparent opacity-50',
-        ]"
+          ]"
+        @click="handleShotClick(shot, $event)"
       >
         <!-- 排名 -->
         <span class="w-7 text-xs font-mono text-surface-500 text-right shrink-0">

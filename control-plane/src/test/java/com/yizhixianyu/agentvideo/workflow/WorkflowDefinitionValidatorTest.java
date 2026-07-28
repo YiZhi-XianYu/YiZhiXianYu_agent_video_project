@@ -21,13 +21,22 @@ class WorkflowDefinitionValidatorTest {
 
         assertThatCode(() -> validator.validate(definition))
             .doesNotThrowAnyException();
-        assertThat(definition.definitionVersion()).isEqualTo(9);
+        assertThat(definition.definitionVersion()).isEqualTo(10);
         assertThat(definition.nodes()).hasSize(13);
         assertThat(definition.nodes().stream()
             .filter(node -> node.scope() == WorkflowDefinition.NodeScope.WORKFLOW)).hasSize(7);
         assertThat(definition.edges()).hasSize(19);
         assertThat(definition.edges().stream()
             .filter(edge -> edge.dependencyType() == WorkflowDefinition.DependencyType.OPTIONAL)).hasSize(3);
+        assertThat(definition.gates()).extracting(WorkflowDefinition.Gate::gateKey)
+            .containsExactly(
+                "gate_shot_ranking", "gate_story_edit", "gate_timeline_preview",
+                "gate_bgm_review", "gate_render_review"
+            );
+        assertThat(definition.nodes().stream()
+            .filter(node -> "bgm_select".equals(node.nodeKey()))
+            .findFirst().orElseThrow().parameters())
+            .containsEntry("autoSelect", false);
     }
 
     @Test

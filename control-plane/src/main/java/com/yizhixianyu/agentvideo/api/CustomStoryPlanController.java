@@ -120,11 +120,28 @@ public class CustomStoryPlanController {
             .orElseThrow(() -> new IllegalArgumentException("No DRAFT custom story plan found. Save a plan first."));
         var plan = parsePlanJson(draft.getPlanJson());
         validatePlan(plan);
-        var renderRunId = workflowService.createCustomRenderRun(
-            draft.getProjectId(), workflowRunId, plan);
+        var continuedRunId = workflowService.applyCustomStoryPlan(workflowRunId, plan);
         draft.setStatus(STATUS_APPLIED);
         repository.save(draft);
-        return new ApplyResponse(renderRunId, "/api/v1/workflow-runs/" + renderRunId);
+        return new ApplyResponse(continuedRunId, "/api/v1/workflow-runs/" + continuedRunId);
+    }
+
+    @PostMapping("/api/v1/workflow-runs/{workflowRunId}/custom-timeline-render")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public ApplyResponse renderCustomTimeline(
+        @PathVariable String workflowRunId,
+        @RequestBody Map<String, Object> request,
+        HttpServletRequest servletRequest
+    ) {
+        requireWorkflow(workflowRunId, servletRequest);
+        var timeline = request == null ? null : request.get("timeline");
+        if (!(timeline instanceof Map<?, ?>)) {
+            throw new IllegalArgumentException("timeline must be an object");
+        }
+        @SuppressWarnings("unchecked")
+        var timelineMap = (Map<String, Object>) timeline;
+        var continuedRunId = workflowService.applyCustomTimeline(workflowRunId, timelineMap);
+        return new ApplyResponse(continuedRunId, "/api/v1/workflow-runs/" + continuedRunId);
     }
 
     @GetMapping("/api/v1/workflow-runs/{workflowRunId}/custom-story-plan/version-list")
@@ -228,17 +245,25 @@ public class CustomStoryPlanController {
                 throw new IllegalArgumentException("Beat has invalid role: " + role);
             }
             var shots = beatMap.get("shots");
-            if (shots instanceof List<?> shotList) {
-                for (var shotObj : shotList) {
-                    if (!(shotObj instanceof Map<?, ?> shotMap)) {
-                        throw new IllegalArgumentException("Each shot must be an object");
-                    }
-                    if (shotMap.get("shotId") == null || shotMap.get("sourceAssetId") == null) {
-                        throw new IllegalArgumentException("Shot is missing required fields (shotId, sourceAssetId)");
-                    }
+            if (!(shots instanceof List<?> shotList) || shotList.isEmpty()) {
+                throw new IllegalArgumentException("Each story beat must contain at least one shot");
+            }
+            for (var shotObj : shotList) {
+                if (!(shotObj instanceof Map<?, ?> shotMap)) {
+                    throw new IllegalArgumentException("Each shot must be an object");
+                }
+                if (isBlank(shotMap.get("shotId")) || isBlank(shotMap.get("sourceAssetId"))
+                    || isBlank(shotMap.get("sourceProxyArtifactId"))) {
+                    throw new IllegalArgumentException(
+                        "Shot is missing required fields (shotId, sourceAssetId, sourceProxyArtifactId)"
+                    );
                 }
             }
         }
+    }
+
+    private boolean isBlank(Object value) {
+        return value == null || value.toString().isBlank();
     }
 
     private String toJson(Object value) {
