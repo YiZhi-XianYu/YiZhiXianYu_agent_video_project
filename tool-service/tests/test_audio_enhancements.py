@@ -5,6 +5,7 @@ import json
 from app.core.config import settings
 from app.core.models import ArtifactInput, ToolExecutionRequest
 from app.tools.audio_bgm import BgmSelectTool
+from app.music.providers import LocalMusicProvider
 from app.tools.subtitle_compose import SubtitleComposeTool
 
 
@@ -26,6 +27,7 @@ def _request(tool: str, inputs: dict[str, ArtifactInput]) -> ToolExecutionReques
 
 def test_bgm_unavailable_returns_no_artifact(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "bgm_library_root", tmp_path / "missing")
+    monkeypatch.setattr("app.tools.audio_bgm.configured_music_providers", lambda: [])
     story = _input(tmp_path, "story.json", {"beats": [{"role": "CLIMAX"}]})
 
     outputs = BgmSelectTool().execute(_request("audio.bgm-select", {"story": story}))
@@ -40,6 +42,10 @@ def test_bgm_artifact_points_to_immutable_mp3(tmp_path, monkeypatch) -> None:
     source.write_bytes(b"fake-mp3")
     monkeypatch.setattr(settings, "bgm_library_root", library)
     monkeypatch.setattr(settings, "artifact_root", tmp_path / "artifacts")
+    monkeypatch.setattr(
+        "app.tools.audio_bgm.configured_music_providers",
+        lambda: [LocalMusicProvider(library)],
+    )
     monkeypatch.setattr("app.tools.audio_bgm._probe_duration", lambda _path: 1000)
     story = _input(tmp_path, "story.json", {"beats": [{"role": "CLIMAX"}]})
 

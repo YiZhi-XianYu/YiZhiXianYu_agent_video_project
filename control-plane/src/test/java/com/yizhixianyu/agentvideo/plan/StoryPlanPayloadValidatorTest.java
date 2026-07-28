@@ -49,6 +49,33 @@ class StoryPlanPayloadValidatorTest {
             .hasMessageContaining("must contain HOOK, INTRO, JOURNEY, CLIMAX and ENDING exactly once");
     }
 
+    @Test
+    void acceptsEmptyBeatsWhenThePlanStillContainsShots() {
+        var plan = validPlan();
+        shots(plan, 1).clear();
+        beats(plan).get(1).put("targetDurationMs", 0);
+        beats(plan).get(1).put("actualDurationMs", 0);
+        plan.put("targetDurationMs", 4000);
+
+        assertThatCode(() -> StoryPlanPayloadValidator.validate(plan)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void rejectsAPlanWithoutAnyShots() {
+        var plan = validPlan();
+        for (var beat : beats(plan)) {
+            ((List<?>) beat.get("shots")).clear();
+            beat.put("targetDurationMs", 0);
+            beat.put("actualDurationMs", 0);
+        }
+        plan.put("targetDurationMs", 1);
+        plan.put("maxShots", 0);
+
+        assertThatThrownBy(() -> StoryPlanPayloadValidator.validate(plan))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("Story Plan must contain at least one Shot");
+    }
+
     private static Map<String, Object> validPlan() {
         var roles = List.of("HOOK", "INTRO", "JOURNEY", "CLIMAX", "ENDING");
         var beats = new ArrayList<Map<String, Object>>();

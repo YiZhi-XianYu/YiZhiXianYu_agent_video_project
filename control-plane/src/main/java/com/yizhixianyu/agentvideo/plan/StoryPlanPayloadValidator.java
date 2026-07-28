@@ -48,8 +48,8 @@ public final class StoryPlanPayloadValidator {
                 errors.add("story role is duplicated: " + role);
             }
 
-            if (!(beat.get("shots") instanceof List<?> shots) || shots.isEmpty()) {
-                errors.add("beats[" + beatIndex + "].shots must be non-empty");
+            if (!(beat.get("shots") instanceof List<?> shots)) {
+                errors.add("beats[" + beatIndex + "].shots must be an array");
                 continue;
             }
 
@@ -108,6 +108,10 @@ public final class StoryPlanPayloadValidator {
             if (actualDuration != null && actualDuration != beatDuration) {
                 errors.add("beats[" + beatIndex + "].actualDurationMs does not match its Shots");
             }
+            var beatTargetDuration = integer(beat.get("targetDurationMs"));
+            if (shots.isEmpty() && beatTargetDuration != null && beatTargetDuration != 0) {
+                errors.add("beats[" + beatIndex + "].targetDurationMs must be 0 when the beat is empty");
+            }
             totalDuration += beatDuration;
         }
 
@@ -123,6 +127,9 @@ public final class StoryPlanPayloadValidator {
         var maxShots = integer(plan.get("maxShots"));
         if (maxShots == null || maxShots < shotCount || maxShots > 100) {
             errors.add("maxShots must cover all selected Shots and must not exceed 100");
+        }
+        if (shotCount == 0) {
+            errors.add("Story Plan must contain at least one Shot");
         }
         failIfInvalid(errors);
     }

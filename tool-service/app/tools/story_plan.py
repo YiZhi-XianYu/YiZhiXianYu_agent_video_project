@@ -86,15 +86,18 @@ class StoryPlanTool:
                 logger.info("Duration prompt '%s' parsed to %d ms", duration_prompt, target_duration)
             else:
                 logger.warning("Duration prompt '%s' could not be parsed, using %d ms", duration_prompt, target_duration)
-        if target_duration < 5000 or target_duration > 60000 or max_shots < 5 or max_shots > 100:
+        if target_duration < 5000 or target_duration > 60000 or max_shots < 1 or max_shots > 100:
             raise ValueError(
                 f"Story Plan duration {target_duration} ms is out of range. "
                 "Supported: 5000–60000 ms (5–60 seconds)."
             )
 
-        candidates = [shot for shot in ranking.get("shots") or [] if shot.get("eligible", True)]
-        if len(candidates) < 5:
-            candidates = list(ranking.get("shots") or [])
+        usable_candidates = _usable_story_candidates(ranking.get("shots") or [])
+        candidates = [shot for shot in usable_candidates if shot.get("eligible", True)]
+        if len(candidates) < len(STORY_BEATS):
+            candidates = usable_candidates
+        if not candidates:
+            raise ValueError("Story Plan requires at least one unique Shot of 600 ms or longer")
 
         semantic_by_shot = _build_semantic_map(request.inputs)
 
@@ -107,7 +110,11 @@ class StoryPlanTool:
         )
 
         provider = get_provider()
-        if provider is not None and provider.name != "noop":
+        if (
+            min(len(candidates), max_shots) >= len(STORY_BEATS)
+            and provider is not None
+            and provider.name != "noop"
+        ):
             llm_result = _try_llm_story_plan(
                 provider, ranking, candidates, target_duration, max_shots, audit, semantic_by_shot
             )
@@ -138,16 +145,26 @@ def _build_deterministic_story_plan(
 ) -> dict[str, Any]:
     """Pure deterministic story plan builder (extracted for fallback reuse)."""
 
-    budgets = _beat_budgets(target_duration)
+    active_beat_indices = _active_beat_indices(min(len(candidates), max_shots))
+    budgets = _beat_budgets_for_active_beats(target_duration, active_beat_indices)
     used_ids: set[str] = set()
     asset_counts = {shot["sourceAssetId"]: 0 for shot in candidates}
     beats = []
     remaining_slots = max_shots
     for beat_index, ((role, _), budget) in enumerate(zip(beats_def, budgets)):
-        remaining_beats = len(beats_def) - beat_index
-        slot_limit = max(1, remaining_slots - (remaining_beats - 1))
+        if beat_index not in active_beat_indices:
+            beats.append({
+                "role": role,
+                "targetDurationMs": 0,
+                "actualDurationMs": 0,
+                "shots": [],
+            })
+            continue
+
+        remaining_active_beats = sum(index > beat_index for index in active_beat_indices)
+        slot_limit = max(1, remaining_slots - remaining_active_beats)
         available_count = sum(shot["shotId"] not in used_ids for shot in candidates)
-        candidate_limit = available_count - (remaining_beats - 1)
+        candidate_limit = available_count - remaining_active_beats
         beat_shots = _select_for_beat(
             role,
             candidates,
@@ -157,7 +174,7 @@ def _build_deterministic_story_plan(
             min(slot_limit, candidate_limit),
         )
         if not beat_shots:
-            raise ValueError(f"No candidate Shot is available for Story beat {role}")
+            raise ValueError(f"No usable Shot could be assigned to active Story beat {role}")
         used_ids.update(shot["shotId"] for shot in beat_shots)
         for shot in beat_shots:
             asset_id = shot["sourceAssetId"]
@@ -241,6 +258,10 @@ def _build_deterministic_story_plan(
         assumptions.append(
             "Source duration and five-beat allocation constraints required beat budgets to follow the selected footage without duplicating or stretching Shots."
         )
+    if len(active_beat_indices) < len(STORY_BEATS):
+        assumptions.append(
+            "The five-beat structure is retained, but beats without enough unique source Shots are intentionally left empty."
+        )
 
     proposal = {
         "schemaVersion": "1.0",
@@ -286,11 +307,17 @@ class StoryProposalValidator:
             target = beat.get("targetDurationMs")
             actual = beat.get("actualDurationMs")
             shots = beat.get("shots")
+            if not isinstance(shots, list):
+                errors.append(f"beats[{beat_index}].shots must be an array")
+                continue
+            if not shots:
+                if target != 0:
+                    errors.append(f"beats[{beat_index}] targetDurationMs must be 0 when the beat is empty")
+                if actual != 0:
+                    errors.append(f"beats[{beat_index}] actualDurationMs must be 0 when the beat is empty")
+                continue
             if not isinstance(target, int) or target < 600:
                 errors.append(f"beats[{beat_index}] has an invalid targetDurationMs")
-            if not isinstance(shots, list) or not shots:
-                errors.append(f"beats[{beat_index}] must contain at least one Shot")
-                continue
             calculated = 0
             for shot_index, shot in enumerate(shots):
                 prefix = f"beats[{beat_index}].shots[{shot_index}]"
@@ -324,6 +351,8 @@ class StoryProposalValidator:
             total_duration += calculated
         if shot_count > max_shots:
             errors.append("Story Plan exceeds maxShots")
+        if shot_count == 0:
+            errors.append("Story Plan must contain at least one Shot")
         if total_duration != target_duration_ms:
             deviation = abs(total_duration - target_duration_ms)
             if deviation > target_duration_ms * 0.10:
@@ -377,8 +406,8 @@ class LlmStoryProposalValidator:
         seen: set[str] = set()
         for beat_index, beat in enumerate(beats):
             shot_ids = beat.get("shotIds")
-            if not isinstance(shot_ids, list) or not shot_ids:
-                errors.append(f"beats[{beat_index}].shotIds must not be empty")
+            if not isinstance(shot_ids, list):
+                errors.append(f"beats[{beat_index}].shotIds must be an array")
                 continue
             for shot_id in shot_ids:
                 if shot_id not in allowed_shot_ids:
@@ -389,6 +418,8 @@ class LlmStoryProposalValidator:
             reason_codes = beat.get("reasonCodes")
             if not isinstance(reason_codes, list) or any(code not in cls.ALLOWED_REASON_CODES for code in reason_codes):
                 errors.append(f"beats[{beat_index}].reasonCodes contains an unsupported value")
+        if not seen:
+            errors.append("Story Plan proposal must contain at least one shotId")
         return errors
 
 
@@ -575,9 +606,6 @@ def _compile_llm_proposal(
                 remaining_slots -= 1
                 slot_limit -= 1
                 remaining -= dur
-
-        if not beat_shots:
-            raise ValueError(f"No valid shots for beat {role}")
 
         # ── Slack distribution round 2 (after hybrid fill) ──
         if remaining > 0 and beat_shots:
@@ -837,6 +865,70 @@ def _beat_budgets(target_duration_ms: int) -> list[int]:
             budgets[index] = 600
             budgets[-1] -= difference
     return budgets
+
+
+def _active_beat_indices(candidate_count: int) -> set[int]:
+    """Spread fewer than five unique shots across the narrative arc."""
+    layouts = {
+        1: (2,),
+        2: (0, 4),
+        3: (0, 3, 4),
+        4: (0, 1, 3, 4),
+    }
+    return set(layouts.get(min(candidate_count, len(STORY_BEATS)), range(len(STORY_BEATS))))
+
+
+def _beat_budgets_for_active_beats(
+    target_duration_ms: int,
+    active_indices: set[int],
+) -> list[int]:
+    if len(active_indices) == len(STORY_BEATS):
+        return _beat_budgets(target_duration_ms)
+
+    weights = [ratio if index in active_indices else 0.0 for index, (_, ratio) in enumerate(STORY_BEATS)]
+    weight_sum = sum(weights)
+    budgets = [0] * len(STORY_BEATS)
+    remaining = target_duration_ms
+    active_order = sorted(active_indices)
+    for index in active_order[:-1]:
+        budget = max(600, round(target_duration_ms * weights[index] / weight_sum))
+        budgets[index] = budget
+        remaining -= budget
+    budgets[active_order[-1]] = max(600, remaining)
+    return budgets
+
+
+def _usable_story_candidates(shots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep unique, renderable ranking shots while preserving ranking order."""
+    usable: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for shot in shots:
+        shot_id = shot.get("shotId")
+        source_asset_id = shot.get("sourceAssetId")
+        source_proxy_id = shot.get("sourceProxyArtifactId")
+        try:
+            start = int(shot.get("startMs"))
+            end = int(shot.get("endMs"))
+            duration = int(shot.get("durationMs", end - start))
+        except (TypeError, ValueError):
+            continue
+        available_duration = min(duration, end - start)
+        if (
+            not isinstance(shot_id, str)
+            or not shot_id
+            or shot_id in seen_ids
+            or not isinstance(source_asset_id, str)
+            or not source_asset_id
+            or not isinstance(source_proxy_id, str)
+            or not source_proxy_id
+            or start < 0
+            or end <= start
+            or available_duration < 600
+        ):
+            continue
+        seen_ids.add(shot_id)
+        usable.append({**shot, "durationMs": available_duration})
+    return usable
 
 
 def _select_for_beat(

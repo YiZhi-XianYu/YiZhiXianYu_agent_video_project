@@ -173,6 +173,60 @@ def test_story_plan_rebalances_beats_for_ten_second_short_footage(tmp_path, monk
     assert payload["validation"] == {"valid": True, "errors": []}
 
 
+def test_story_plan_allows_empty_beats_when_fewer_than_five_shots_exist(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "artifact_root", tmp_path / "artifacts")
+    for candidate_count in range(1, 5):
+        ranking_input = write_input(tmp_path, f"{candidate_count}-shot-ranking.json", {
+            "shots": [
+                ranked_shot(f"s{candidate_count}-{index}", index * 6000, (index + 1) * 6000, index + 1)
+                for index in range(candidate_count)
+            ]
+        })
+
+        output = StoryPlanTool().execute(
+            request(
+                "planning.story-template",
+                {"ranking": ranking_input},
+                {"targetDurationMs": 5000, "maxShots": candidate_count},
+            )
+        )[0]
+        payload = json.loads(
+            (tmp_path / "artifacts" / output.artifact_id / "story-plan.json").read_text(encoding="utf-8")
+        )
+
+        assert len(payload["beats"]) == 5
+        assert sum(bool(beat["shots"]) for beat in payload["beats"]) == candidate_count
+        assert all(
+            beat["targetDurationMs"] == 0 and beat["actualDurationMs"] == 0
+            for beat in payload["beats"]
+            if not beat["shots"]
+        )
+        selected_ids = [shot["shotId"] for beat in payload["beats"] for shot in beat["shots"]]
+        assert len(selected_ids) == len(set(selected_ids)) == candidate_count
+        assert sum(beat["actualDurationMs"] for beat in payload["beats"]) == payload["targetDurationMs"]
+        assert payload["validation"] == {"valid": True, "errors": []}
+
+
+def test_story_plan_rejects_rankings_without_a_usable_shot(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "artifact_root", tmp_path / "artifacts")
+    ranking_input = write_input(tmp_path, "unusable-ranking.json", {
+        "shots": [ranked_shot("too-short", 0, 599, 1)]
+    })
+
+    try:
+        StoryPlanTool().execute(
+            request(
+                "planning.story-template",
+                {"ranking": ranking_input},
+                {"targetDurationMs": 5000, "maxShots": 12},
+            )
+        )
+    except ValueError as exc:
+        assert str(exc) == "Story Plan requires at least one unique Shot of 600 ms or longer"
+    else:
+        raise AssertionError("Expected an explicit unusable-shot error")
+
+
 def test_ranking_rejects_low_quality_and_penalizes_near_duplicates(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "artifact_root", tmp_path / "artifacts")
     quality = write_input(tmp_path, "quality", {"shots": [

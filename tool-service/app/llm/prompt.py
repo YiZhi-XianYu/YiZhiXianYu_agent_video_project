@@ -49,7 +49,9 @@ deterministically by the system; you do NOT need to output or calculate them.
 
 RULES:
 1. Only use shotIds from the provided candidate list. Never invent IDs.
-2. Every beat must have at least 1 shot. Total shots MUST NOT exceed maxShots (given in the user message).
+  2. Keep all five beat objects, but a beat may use an empty shotIds array when the available unique shots
+     are insufficient or the narrative does not need that beat. The whole plan must contain at least one shot.
+     Total shots MUST NOT exceed maxShots (given in the user message).
    For a typical 30-second video with maxShots=12: pick 2 shots per beat on average (HOOK:2, INTRO:2, JOURNEY:3, CLIMAX:3, ENDING:2 = 12).
 3. Each shotId can appear in ONLY ONE beat.
 4. Every beat must include reasonCodes from this list:

@@ -388,3 +388,29 @@ BGM 审核页新增“换一批”。点击后不会创建新 Workflow，也不�
 
 验证结果：BGM 专项测试 4 passed；Python 全量测试 83 passed；Java 全量测试通过；Tool Service 与
 Control Plane Docker 生产构建通过，其中前端 `vue-tsc`、Vite 和 Java package 均成功。
+
+## 第十二阶段补充：少于五个镜头时允许空故事段
+
+服务器上的短素材 Workflow 曾在 `planning.story-template@1.0.0` 失败，错误为
+`No candidate Shot is available for Story beat HOOK`。根因是 Story Plan 虽然只有少于五个可用镜头，生成器和
+Java 人工方案校验仍强制 HOOK、INTRO、JOURNEY、CLIMAX、ENDING 每段至少包含一个不同镜头。后续节点显示
+`SKIPPED` 是上游失败后的正常收敛，并非并发或服务器性能故障。
+
+现在仍保留固定五段结构，但取消“每段必须至少一个镜头”的限制：
+
+- 1～4 个可用镜头会按叙事弧分散到部分段落，其余段落以 `shots=[]`、`targetDurationMs=0`、
+  `actualDurationMs=0` 明确表示为空；
+- 每个镜头仍只能使用一次，且必须具有完整素材/代理 Artifact 标识和不少于 600 ms 的合法源区间；
+- 整份 Story Plan 仍必须至少包含一个镜头，不能继续生成零时长 Highlight、Timeline 或 Render；
+- Python 确定性生成、LLM 输出 Schema/校验、Java 人工保存与应用校验使用相同空段语义；
+- Highlight 与 Timeline 只消费实际存在的镜头。Java Timeline 在跨过空段时保留上一实际镜头的故事角色，
+  因此转场判断不会被空段干扰；
+- 前端故事编辑器原有“此段暂无镜头”状态继续使用，用户可以后续从候选库向空段添加镜头。
+
+同时修复了 BGM 测试对开发者本地 `.env` 的依赖：测试现在显式注入空 Provider 或本地 Provider，个人
+Jamendo 配置和历史音乐缓存不会再改变测试结果。
+
+验证结果：Story Plan 专项测试 16 passed；Python 全量测试 85 passed；Java 全量测试通过；Tool Service 与
+Control Plane 生产镜像构建成功。Tool Service 本地健康检查为 `UP`；Control Plane 本地启动被既有 MySQL
+持久化卷口令与当前 Compose 环境变量不一致阻止，该环境问题未通过清库或写入凭据规避，服务器使用自身
+正确 `.env` 更新后不受影响。

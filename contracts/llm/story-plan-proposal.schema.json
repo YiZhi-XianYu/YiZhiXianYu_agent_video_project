@@ -40,7 +40,7 @@
         "role": { "type": "string" },
         "shotIds": {
           "type": "array",
-          "minItems": 1,
+          "minItems": 0,
           "maxItems": 20,
           "uniqueItems": true,
           "items": { "type": "string", "pattern": "^shot_[a-f0-9]+$" }

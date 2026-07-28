@@ -97,7 +97,9 @@ public final class TimelineComposer {
                 timelineIn += duration;
                 clipIndex++;
             }
-            prevStoryRole = storyRole;
+            if (shots != null && !shots.isEmpty()) {
+                prevStoryRole = storyRole;
+            }
         }
         identitySource.append(width).append(":").append(height).append(":").append(fps);
 
