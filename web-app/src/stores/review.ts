@@ -140,7 +140,8 @@ export const useReviewStore = defineStore('review', () => {
     updateStoryPlan((plan) => {
       const beat = plan.beats.find((item) => item.role === role)
       const shotId = beat?.shotIds[index]
-      if (!beat || beat.shotIds.length <= 1 || shotId === undefined || lockedShotIds.value.has(shotId)) return plan
+      const totalShotCount = plan.beats.reduce((total, item) => total + item.shotIds.length, 0)
+      if (!beat || totalShotCount <= 1 || shotId === undefined || lockedShotIds.value.has(shotId)) return plan
       beat.shotIds.splice(index, 1)
       beat.shots?.splice(index, 1)
       return plan

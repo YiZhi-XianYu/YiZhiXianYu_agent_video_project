@@ -58,6 +58,7 @@ function handleShotPreview(shotId: string, event: MouseEvent): void {
 // ===================== Computed =====================
 
 const beats = computed<StoryBeat[]>(() => review.storyPlan?.beats ?? [])
+const totalStoryShots = computed(() => beats.value.reduce((total, beat) => total + beat.shotIds.length, 0))
 
 const availableCandidates = computed<ShotScore[]>(() => {
   const used = new Set(beats.value.flatMap((beat) => beat.shotIds))
@@ -226,11 +227,15 @@ function planPayload(): Record<string, unknown> {
     }
   })
   const targetDurationMs = normalizedBeats.reduce((sum, beat) => sum + beat.actualDurationMs, 0)
+  const shotCount = normalizedBeats.reduce((sum, beat) => sum + beat.shots.length, 0)
+  if (shotCount === 0) {
+    throw new Error('故事方案至少需要保留一个镜头')
+  }
   return {
     schemaVersion: '1.0',
     template: 'MANUAL_EDIT',
     targetDurationMs,
-    maxShots: normalizedBeats.reduce((sum, beat) => sum + beat.shots.length, 0),
+    maxShots: shotCount,
     beats: normalizedBeats,
   }
 }
@@ -417,8 +422,8 @@ onMounted(loadVersions)
             <!-- 删除 -->
             <button
               class="text-surface-500 hover:text-danger p-0.5 disabled:opacity-30"
-              :disabled="beat.shotIds.length <= 1 || review.lockedShotIds.has(shotId)"
-              title="移除"
+              :disabled="totalStoryShots <= 1 || review.lockedShotIds.has(shotId)"
+              :title="totalStoryShots <= 1 ? '整份故事方案至少需要保留一个镜头' : review.lockedShotIds.has(shotId) ? '请先解锁镜头' : '从此故事段移除'"
               @click.stop="review.removeStoryShot(beat.role, idx)"
             >
               <Trash2 class="w-3.5 h-3.5" />
