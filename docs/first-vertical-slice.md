@@ -511,5 +511,4 @@ docs/modules/control-plane/README.md
 
 - [完整系统设计](Agent-Driven智能视频制作流水线-系统设计文档.md)
 - [Java 控制面模块映射](modules/control-plane/README.md)
-- [VS Code Java 21 配置](vscode-java21.md)
 - [项目根说明](../README.md)
