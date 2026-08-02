@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     oss_access_key_secret: str = ""
     execution_store_path: Path = Path("runtime/executions/tool-executions.sqlite3")
     callback_timeout_seconds: float = 10.0
+    callback_retry_attempts: int = 3
+    callback_retry_backoff_seconds: float = 0.5
     execution_max_workers: int = 4
     execution_light_limit: int = 3
     execution_media_limit: int = 2

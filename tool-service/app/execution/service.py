@@ -4,6 +4,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import logging
+import time
 from pathlib import Path
 from threading import Lock
 from uuid import uuid4
@@ -340,14 +341,21 @@ class ExecutionService:
         if request.callback_url is None:
             return
         payload = record.model_dump(mode="json", by_alias=True)
-        try:
-            with httpx.Client(timeout=settings.callback_timeout_seconds) as client:
-                client.post(str(request.callback_url), json=payload).raise_for_status()
+        attempts = max(1, settings.callback_retry_attempts)
+        for attempt in range(attempts):
+            try:
+                with httpx.Client(timeout=settings.callback_timeout_seconds) as client:
+                    client.post(str(request.callback_url), json=payload).raise_for_status()
                 CALLBACK_TOTAL.labels("success").inc()
-        except httpx.HTTPError:
-            # Java also polls execution status, so a lost callback is recoverable.
-            CALLBACK_TOTAL.labels("failure").inc()
-            return
+                return
+            except httpx.HTTPError:
+                if attempt + 1 < attempts:
+                    delay = max(0.0, settings.callback_retry_backoff_seconds) * (2 ** attempt)
+                    time.sleep(delay)
+        # In RabbitMQ mode callbacks are the authoritative result path because
+        # each worker owns a separate local execution store.
+        CALLBACK_TOTAL.labels("failure").inc()
+        return
 
 
 execution_service = ExecutionService()
