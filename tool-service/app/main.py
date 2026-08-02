@@ -6,6 +6,8 @@ warnings.filterwarnings("ignore", message=".*'alias' attribute.*was provided to 
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api.routes import router
 from app.core.config import settings
@@ -26,3 +28,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(router)
+
+@app.get("/metrics", include_in_schema=False)
+def prometheus_metrics() -> Response:
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)

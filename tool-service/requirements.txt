@@ -5,6 +5,8 @@ pydantic-settings==2.10.1
 pytest==8.4.1
 
 python-dotenv
+prometheus-client==0.22.1
+oss2==2.19.1
 torch>=2.0.0
 transformers>=4.30.0
 pillow>=10.0.0

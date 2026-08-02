@@ -9,6 +9,7 @@ from threading import Lock
 from uuid import uuid4
 
 import httpx
+from prometheus_client import Counter, Gauge, Histogram
 
 from app.core.config import settings
 from app.core.models import (
@@ -20,8 +21,16 @@ from app.core.models import (
 from app.execution.store import ExecutionStore
 from app.execution.resources import LIGHT, MEDIA, MODEL, RENDER, ResourcePolicy, resource_group
 from app.registry.registry import ToolRegistry, registry
+from app.storage.oss_storage import artifact_storage
 
 logger = logging.getLogger(__name__)
+
+EXECUTIONS_TOTAL = Counter("agentvideo_tool_executions_total", "Tool executions by terminal status", ["status", "resource_group"])
+EXECUTION_DURATION = Histogram("agentvideo_tool_execution_duration_seconds", "Tool execution duration", ["resource_group", "tool"])
+QUEUE_DEPTH = Gauge("agentvideo_tool_queue_depth", "Executions waiting for a worker")
+ACTIVE_EXECUTIONS = Gauge("agentvideo_tool_active_executions", "Currently running executions")
+ACTIVE_GROUP = Gauge("agentvideo_tool_active_resource_group", "Active executions by resource group", ["resource_group"])
+CALLBACK_TOTAL = Counter("agentvideo_tool_callbacks_total", "Callback attempts and failures", ["status"])
 
 
 class ExecutionService:
@@ -58,6 +67,10 @@ class ExecutionService:
         self._lock = Lock()
         self._pool: ThreadPoolExecutor | None = None
         self._started = False
+
+    def metrics_snapshot(self) -> dict[str, int]:
+        with self._lock:
+            return {"queue_depth": len(self._pending), "active": self._active_total}
 
     def start(self) -> None:
         callbacks: list[tuple[ToolExecutionRequest, ToolExecutionRecord]] = []
@@ -163,6 +176,7 @@ class ExecutionService:
             return
         self._scheduled.add(execution_id)
         self._pending.append(execution_id)
+        QUEUE_DEPTH.set(len(self._pending))
         self._drain_pending_locked()
 
     def _drain_pending_locked(self) -> None:
@@ -179,6 +193,9 @@ class ExecutionService:
             self._active_by_group[group] = self._active_by_group.get(group, 0) + 1
             self._active_total += 1
             self._active_heavy_weight += self._policy.heavy_weight(group)
+            QUEUE_DEPTH.set(len(self._pending))
+            ACTIVE_EXECUTIONS.set(self._active_total)
+            ACTIVE_GROUP.labels(group).set(self._active_by_group[group])
             self._pool.submit(self._run, execution_id)
 
     def _next_runnable_index_locked(self) -> int | None:
@@ -207,6 +224,8 @@ class ExecutionService:
         return resource_group(manifest)
 
     def _run(self, execution_id: str) -> None:
+        started_at = datetime.now(timezone.utc)
+        group = LIGHT
         try:
             with self._lock:
                 request = self._requests.get(execution_id)
@@ -229,10 +248,13 @@ class ExecutionService:
             )
             try:
                 tool = self._registry.get(request.tool, request.version)
+                group = self._execution_groups.get(execution_id, LIGHT)
+                local_request = artifact_storage.materialize_request(request)
                 outputs = tool.execute(
-                    request,
+                    local_request,
                     lambda progress: self._report_progress(execution_id, progress),
                 )
+                outputs = artifact_storage.publish_outputs(outputs)
                 record = self._update(
                     execution_id,
                     status=ExecutionStatus.SUCCEEDED,
@@ -242,6 +264,7 @@ class ExecutionService:
                     completed_at=datetime.now(timezone.utc),
                 )
                 self._release_models_if_needed(tool)
+                EXECUTIONS_TOTAL.labels("SUCCEEDED", group).inc()
             except Exception as exc:  # Tool failures are normalized at the service boundary.
                 if 'tool' in locals():
                     self._release_models_if_needed(tool)
@@ -257,6 +280,8 @@ class ExecutionService:
                     ),
                     completed_at=datetime.now(timezone.utc),
                 )
+                EXECUTIONS_TOTAL.labels("FAILED", group).inc()
+            EXECUTION_DURATION.labels(group, request.tool).observe((datetime.now(timezone.utc) - started_at).total_seconds())
             self._callback(request, record)
         finally:
             with self._lock:
@@ -268,6 +293,9 @@ class ExecutionService:
                     0,
                     self._active_heavy_weight - self._policy.heavy_weight(group),
                 )
+                QUEUE_DEPTH.set(len(self._pending))
+                ACTIVE_EXECUTIONS.set(self._active_total)
+                ACTIVE_GROUP.labels(group).set(self._active_by_group.get(group, 0))
                 self._drain_pending_locked()
 
     @staticmethod
@@ -315,8 +343,10 @@ class ExecutionService:
         try:
             with httpx.Client(timeout=settings.callback_timeout_seconds) as client:
                 client.post(str(request.callback_url), json=payload).raise_for_status()
+                CALLBACK_TOTAL.labels("success").inc()
         except httpx.HTTPError:
             # Java also polls execution status, so a lost callback is recoverable.
+            CALLBACK_TOTAL.labels("failure").inc()
             return
 
 

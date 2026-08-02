@@ -1,8 +1,9 @@
 package com.yizhixianyu.agentvideo.asset;
 
 import com.yizhixianyu.agentvideo.project.ProjectService;
-import com.yizhixianyu.agentvideo.storage.LocalStorageService;
+import com.yizhixianyu.agentvideo.storage.ArtifactStorage;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -13,12 +14,13 @@ public class AssetService {
 
     private final AssetRepository repository;
     private final ProjectService projectService;
-    private final LocalStorageService storageService;
+    private final ArtifactStorage storageService;
 
+    @Autowired
     public AssetService(
         AssetRepository repository,
         ProjectService projectService,
-        LocalStorageService storageService
+        ArtifactStorage storageService
     ) {
         this.repository = repository;
         this.projectService = projectService;
@@ -28,7 +30,7 @@ public class AssetService {
     @Transactional
     public AssetEntity upload(String projectId, MultipartFile file) {
         projectService.getRequired(projectId);
-        var stored = storageService.storeVideo(projectId, file);
+        var stored = storageService.store(projectId, "assets", file);
         return repository.save(new AssetEntity(
             projectId,
             stored.fileName(),
@@ -42,6 +44,12 @@ public class AssetService {
     public AssetEntity getRequired(String assetId) {
         return repository.findById(assetId)
             .orElseThrow(() -> new IllegalArgumentException("Asset not found: " + assetId));
+    }
+
+    /** Compatibility constructor for existing unit tests and integrations. */
+    public AssetService(AssetRepository repository, ProjectService projectService,
+                        com.yizhixianyu.agentvideo.storage.LocalStorageService storageService) {
+        this(repository, projectService, (ArtifactStorage) storageService);
     }
 
     @Transactional(readOnly = true)

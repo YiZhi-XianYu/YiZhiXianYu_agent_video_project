@@ -1,8 +1,8 @@
-# 第十四阶段计划：可观测性、压测基线与 Artifact Storage / OSS
+# 第十四阶段交接：可观测性、压测基线与 Artifact Storage / OSS
 
-> 计划日期：2026-08-03  
+> 交接日期：2026-08-03
 > 正式仓库：`C:\Users\XRZ\Desktop\ninth\WwDa3B884n8dj`  
-> 阶段目标：先建立可复现的性能与容量基线，再将素材和 Artifact 从单机共享目录迁移为可切换的本地/阿里云 OSS 存储。  
+> 本文已由实施计划更新为阶段交接记录：先建立可复现的性能与容量基线，再将素材和 Artifact 从单机共享目录迁移为可切换的本地/阿里云 OSS 存储。
 > 范围边界：本阶段不引入 RabbitMQ、Redis、运行中 Replan，也不重写现有 Workflow 状态机。
 
 ## 1. 阶段结论
@@ -402,6 +402,15 @@ TOOL_WORKSPACE_RETENTION_HOURS=6
 
 ## 10. 完成标准
 
+### 当前实现进度（2026-08-03）
+
+- 已完成 Java `ArtifactStorage` 接口、Local Provider、URI 路由，以及素材、Artifact、Timeline、BGM 和 JSON 写入路径的统一接入。
+- 已完成 Actuator/Micrometer/Prometheus 与 Tool Service 基础执行指标；压测脚本见 `scripts/stage14-k6.js`，报告模板见 `docs/stage14-baseline-report-template.md`。
+- 已接入阿里云 OSS Java SDK 与 Python `oss2`，完成 OSS 对象上传、私有对象预签名读取、Tool Service 输入物化和输出发布；已通过当前 Bucket 只读鉴权验证。Range/multipart 与写入型故障测试仍需在隔离测试前缀下完成。
+- 已修正 Artifact 分类：视频、音频、图片二进制走 OSS，JSON/SRT/Manifest 保留本地共享卷；历史 OSS JSON 不再走二进制媒体重定向。
+- 音频和图片已完成 OSS 发布策略接入，适用于 BGM、关键帧和其他二进制预览资源。
+- Java Maven 构建暂未在本机完成：IDEA 自带 `mvn.cmd` 被系统拒绝访问；Python `compileall` 已通过。
+
 第十四阶段完成必须同时满足：
 
 - 有可重复执行的压测脚本、固定素材说明和基线报告；
@@ -424,4 +433,3 @@ TOOL_WORKSPACE_RETENTION_HOURS=6
 - 不实现运行中 Replan；
 - 不以 CDN、转码服务或 GPU 作为 OSS 改造的前置条件；
 - 不删除历史本地文件和 Artifact；迁移策略必须另行确认后执行。
-

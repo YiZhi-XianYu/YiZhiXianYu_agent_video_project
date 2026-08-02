@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
     artifact_root: Path = Path("runtime/artifacts")
+    artifact_storage_provider: str = "local"
+    oss_endpoint: str = ""
+    oss_region: str = ""
+    oss_bucket: str = ""
+    oss_access_key_id: str = ""
+    oss_access_key_secret: str = ""
     execution_store_path: Path = Path("runtime/executions/tool-executions.sqlite3")
     callback_timeout_seconds: float = 10.0
     execution_max_workers: int = 4

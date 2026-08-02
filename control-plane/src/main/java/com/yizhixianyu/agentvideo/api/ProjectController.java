@@ -12,8 +12,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
+import com.yizhixianyu.agentvideo.storage.ArtifactStorage;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -27,8 +27,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 import java.time.Instant;
-import java.net.URI;
-import java.nio.file.Path;
+import java.time.Duration;
 
 @RestController
 @RequestMapping("/api/v1/projects")
@@ -37,11 +36,14 @@ public class ProjectController {
     private final ProjectService projectService;
     private final AssetService assetService;
     private final AuthService authService;
+    private final ArtifactStorage storage;
 
-    public ProjectController(ProjectService projectService, AssetService assetService, AuthService authService) {
+    public ProjectController(ProjectService projectService, AssetService assetService, AuthService authService,
+                             ArtifactStorage storage) {
         this.projectService = projectService;
         this.assetService = assetService;
         this.authService = authService;
+        this.storage = storage;
     }
 
     @PostMapping
@@ -108,12 +110,15 @@ public class ProjectController {
         if (!projectId.equals(asset.getProjectId())) {
             throw new IllegalArgumentException("Asset does not belong to project: " + projectId);
         }
-        var uri = URI.create(asset.getStorageUri());
-        if (!"file".equalsIgnoreCase(uri.getScheme())) {
-            throw new IllegalArgumentException("Asset is not available from local storage");
+        var directUrl = storage.createReadUrl(asset.getStorageUri());
+        if (directUrl != null) {
+            return ResponseEntity.status(HttpStatus.TEMPORARY_REDIRECT)
+                .location(directUrl)
+                .cacheControl(CacheControl.maxAge(Duration.ofMinutes(10)).cachePublic())
+                .build();
         }
-        var resource = new FileSystemResource(Path.of(uri));
-        if (!resource.isFile() || !resource.isReadable()) {
+        var resource = storage.resource(asset.getStorageUri());
+        if (!resource.exists() || !resource.isReadable()) {
             throw new IllegalArgumentException("Asset content is not readable: " + assetId);
         }
         return ResponseEntity.ok()

@@ -24,12 +24,34 @@ spring:
       max-file-size: ${UPLOAD_MAX_FILE_SIZE:2GB}
       max-request-size: ${UPLOAD_MAX_REQUEST_SIZE:2GB}
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: ${MANAGEMENT_HEALTH_DETAILS:never}
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name:agent-video-control-plane}
+
 app:
   auth:
     session-days: ${AUTH_SESSION_DAYS:30}
     secure-cookie: ${AUTH_SECURE_COOKIE:false}
   storage:
+    provider: ${ARTIFACT_STORAGE_PROVIDER:local}
     root: ${APP_STORAGE_ROOT:runtime/storage}
+    oss:
+      endpoint: ${OSS_ENDPOINT:}
+      region: ${OSS_REGION:}
+      bucket: ${OSS_BUCKET:}
+      access-key-id: ${OSS_ACCESS_KEY_ID:}
+      access-key-secret: ${OSS_ACCESS_KEY_SECRET:}
+      signed-url-ttl-seconds: ${OSS_SIGNED_URL_TTL_SECONDS:600}
   artifact-root: ${APP_ARTIFACT_ROOT:runtime/artifacts}
   public-base-url: ${APP_PUBLIC_BASE_URL:http://127.0.0.1:8080}
   tool-service:

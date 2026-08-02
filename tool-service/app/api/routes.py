@@ -8,8 +8,14 @@ from app.llm.provider import LlmError, get_provider
 from app.core.models import AcceptedExecution, ToolExecutionRecord, ToolExecutionRequest
 from app.execution.service import execution_service
 from app.registry.registry import registry
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from fastapi.responses import Response
 
 router = APIRouter(prefix="/api/v1")
+
+@router.get("/metrics", include_in_schema=False)
+def metrics() -> Response:
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 class WorkflowIntentRequest(BaseModel):
     goal: str = ""

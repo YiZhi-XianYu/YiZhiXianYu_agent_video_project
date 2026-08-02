@@ -9,6 +9,7 @@ import com.yizhixianyu.agentvideo.asset.AssetEntity;
 import com.yizhixianyu.agentvideo.asset.AssetService;
 import com.yizhixianyu.agentvideo.project.ProjectService;
 import com.yizhixianyu.agentvideo.toolclient.ToolServiceClient;
+import com.yizhixianyu.agentvideo.storage.ArtifactStorage;
 import com.yizhixianyu.agentvideo.plan.CustomStoryPlanRepository;
 import com.yizhixianyu.agentvideo.plan.StoryPlanPayloadValidator;
 import com.yizhixianyu.agentvideo.plan.TimelinePayloadValidator;
@@ -17,10 +18,13 @@ import com.yizhixianyu.agentvideo.workflow.MultiAssetAnalysisTemplate;
 import com.yizhixianyu.agentvideo.workflow.WorkflowDefinition;
 import com.yizhixianyu.agentvideo.workflow.WorkflowDefinitionValidator;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+import io.micrometer.core.instrument.Timer;
+import com.yizhixianyu.agentvideo.observability.WorkflowMetrics;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -65,8 +69,16 @@ public class WorkflowExecutionService {
     private final long dispatchRecoveryTimeoutMs;
     private final int pollFailureLimit;
     private final ApplicationEventPublisher eventPublisher;
-    private final Path artifactRoot;
+    private final ArtifactStorage artifactStorage;
+    private WorkflowMetrics workflowMetrics;
+    private final Map<String, Timer.Sample> taskMetricSamples = new java.util.concurrent.ConcurrentHashMap<>();
 
+    @Autowired(required = false)
+    public void setWorkflowMetrics(WorkflowMetrics workflowMetrics) {
+        this.workflowMetrics = workflowMetrics;
+    }
+
+    @Autowired
     public WorkflowExecutionService(
         WorkflowRunRepository workflowRepository,
         WorkflowAssetRepository workflowAssetRepository,
@@ -85,7 +97,7 @@ public class WorkflowExecutionService {
         @Value("${app.workflow.retry-base-delay-ms:1000}") long retryBaseDelayMs,
         @Value("${app.workflow.dispatch-recovery-timeout-ms:30000}") long dispatchRecoveryTimeoutMs,
         @Value("${app.workflow.poll-failure-limit:10}") int pollFailureLimit,
-        @Value("${app.artifact-root:runtime/artifacts}") Path artifactRoot,
+        ArtifactStorage artifactStorage,
         ApplicationEventPublisher eventPublisher
     ) {
         this.workflowRepository = workflowRepository;
@@ -105,8 +117,37 @@ public class WorkflowExecutionService {
         this.retryBaseDelayMs = Math.max(0, retryBaseDelayMs);
         this.dispatchRecoveryTimeoutMs = Math.max(1000, dispatchRecoveryTimeoutMs);
         this.pollFailureLimit = Math.max(1, pollFailureLimit);
-        this.artifactRoot = artifactRoot.toAbsolutePath().normalize();
+        this.artifactStorage = artifactStorage;
         this.eventPublisher = eventPublisher;
+    }
+
+    /** Compatibility constructor retained for existing tests and integrations. */
+    public WorkflowExecutionService(
+        WorkflowRunRepository workflowRepository,
+        WorkflowAssetRepository workflowAssetRepository,
+        TaskRunRepository taskRepository,
+        TaskDependencyRepository dependencyRepository,
+        ToolExecutionRepository toolExecutionRepository,
+        ArtifactRepository artifactRepository,
+        ProjectService projectService,
+        AssetService assetService,
+        ToolServiceClient toolClient,
+        ObjectMapper objectMapper,
+        MultiAssetAnalysisTemplate analysisTemplate,
+        WorkflowDefinitionValidator definitionValidator,
+        String publicBaseUrl,
+        int maxAttempts,
+        long retryBaseDelayMs,
+        long dispatchRecoveryTimeoutMs,
+        int pollFailureLimit,
+        Path artifactRoot,
+        ApplicationEventPublisher eventPublisher
+    ) {
+        this(workflowRepository, workflowAssetRepository, taskRepository, dependencyRepository,
+            toolExecutionRepository, artifactRepository, projectService, assetService, toolClient,
+            objectMapper, analysisTemplate, definitionValidator, publicBaseUrl, maxAttempts,
+            retryBaseDelayMs, dispatchRecoveryTimeoutMs, pollFailureLimit,
+            new com.yizhixianyu.agentvideo.storage.LocalStorageService(artifactRoot), eventPublisher);
     }
 
     @Transactional
@@ -118,6 +159,7 @@ public class WorkflowExecutionService {
             projectId, assetId, "VIDEO_PROXY_PIPELINE", proxyQuality
         ));
         workflow.start();
+        if (workflowMetrics != null) workflowMetrics.workflowStarted();
         var probeTask = taskRepository.save(new TaskRunEntity(
             workflow.getId(), "video_probe", "video.probe", "1.0.0", null
         ));
@@ -189,6 +231,7 @@ public class WorkflowExecutionService {
         workflow.setAutoMode(autoMode);
         workflow.setGatesJson(toJson(definition.gates()));
         workflow.start();
+        if (workflowMetrics != null) workflowMetrics.workflowStarted();
 
         for (var index = 0; index < assets.size(); index++) {
             var asset = assets.get(index);
@@ -207,23 +250,10 @@ public class WorkflowExecutionService {
 
         var timelineJson = TimelineComposer.compose(customPlan, proxyQuality);
 
-        var artifactId = "art_" + UUID.randomUUID().toString().replace("-", "");
-        var artifactDir = artifactRoot.resolve(artifactId);
-        try {
-            Files.createDirectories(artifactDir);
-            Files.writeString(artifactDir.resolve("timeline.json"), timelineJson, StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            throw new IllegalStateException("Failed to write TIMELINE artifact", e);
-        }
-        var storageUri = artifactDir.resolve("timeline.json").toUri().toString();
         byte[] contentBytes = timelineJson.getBytes(StandardCharsets.UTF_8);
-        String contentHash;
-        try {
-            var digest = MessageDigest.getInstance("SHA-256");
-            contentHash = HexFormat.of().formatHex(digest.digest(contentBytes));
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 not available", e);
-        }
+        var artifactId = "art_" + UUID.randomUUID().toString().replace("-", "");
+        var storedTimeline = artifactStorage.storeBytes(projectId, "artifacts/" + artifactId,
+            "timeline.json", contentBytes, "application/json");
 
         var renderWorkflow = workflowRepository.save(new WorkflowRunEntity(
             projectId,
@@ -243,7 +273,8 @@ public class WorkflowExecutionService {
 
         artifactRepository.save(new ArtifactEntity(
             artifactId, projectId, virtualTask.getId(), "TIMELINE",
-            storageUri, "application/json", contentBytes.length, contentHash, timelineJson
+            storedTimeline.storageUri(), storedTimeline.mediaType(), storedTimeline.sizeBytes(),
+            storedTimeline.contentHash(), timelineJson
         ));
 
         var renderTask = taskRepository.save(new TaskRunEntity(
@@ -406,23 +437,16 @@ public class WorkflowExecutionService {
         }
 
         var artifactId = "art_" + UUID.randomUUID().toString().replace("-", "");
-        var artifactDir = artifactRoot.resolve(artifactId);
-        var audioPath = artifactDir.resolve("bgm-upload" + extension).normalize();
-        if (!audioPath.startsWith(artifactDir)) {
-            throw new IllegalArgumentException("Invalid BGM file name");
-        }
         long contentSize;
         String contentHash;
+        ArtifactStorage.StoredObject storedAudio;
         try {
-            Files.createDirectories(artifactDir);
-            try (InputStream input = file.getInputStream()) {
-                Files.copy(input, audioPath);
-            }
-            contentSize = Files.size(audioPath);
+            storedAudio = artifactStorage.store(workflow.getProjectId(), "artifacts/" + artifactId, file);
+            contentSize = storedAudio.sizeBytes();
             if (contentSize == 0) {
                 throw new IllegalArgumentException("BGM audio file is empty");
             }
-            contentHash = sha256(audioPath);
+            contentHash = storedAudio.contentHash();
         } catch (IllegalArgumentException exc) {
             throw exc;
         } catch (Exception exc) {
@@ -444,7 +468,7 @@ public class WorkflowExecutionService {
             workflow.getProjectId(),
             bgmTask.getId(),
             "BGM_AUDIO",
-            audioPath.toUri().toString(),
+            storedAudio.storageUri(),
             mediaType.isBlank() || "application/octet-stream".equals(mediaType)
                 ? audioMediaType(extension) : mediaType,
             contentSize,
@@ -565,24 +589,16 @@ public class WorkflowExecutionService {
         String fileName,
         String json
     ) {
-        var artifactId = "art_" + UUID.randomUUID().toString().replace("-", "");
-        var artifactDir = artifactRoot.resolve(artifactId);
-        try {
-            Files.createDirectories(artifactDir);
-            Files.writeString(artifactDir.resolve(fileName), json, StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            throw new IllegalStateException("Failed to write " + type + " artifact", e);
-        }
         var contentBytes = json.getBytes(StandardCharsets.UTF_8);
+        var artifactId = "art_" + UUID.randomUUID().toString().replace("-", "");
+        var stored = artifactStorage.storeBytes(projectId, "artifacts/" + artifactId, fileName,
+            contentBytes, "application/json");
         return artifactRepository.save(new ArtifactEntity(
             artifactId,
             projectId,
             producerTaskRunId,
             type,
-            artifactDir.resolve(fileName).toUri().toString(),
-            "application/json",
-            contentBytes.length,
-            sha256(contentBytes),
+            stored.storageUri(), stored.mediaType(), stored.sizeBytes(), stored.contentHash(),
             json
         ));
     }
@@ -593,17 +609,10 @@ public class WorkflowExecutionService {
             .orElseThrow(() -> new IllegalArgumentException("Source workflow run not found: " + sourceWorkflowRunId));
         validateCustomTimeline(timeline);
         var timelineJson = toJson(timeline);
-        var artifactId = "art_" + UUID.randomUUID().toString().replace("-", "");
-        var artifactDir = artifactRoot.resolve(artifactId);
-        try {
-            Files.createDirectories(artifactDir);
-            Files.writeString(artifactDir.resolve("timeline.json"), timelineJson, StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            throw new IllegalStateException("Failed to write custom TIMELINE artifact", e);
-        }
         var contentBytes = timelineJson.getBytes(StandardCharsets.UTF_8);
-        var contentHash = sha256(contentBytes);
-        var storageUri = artifactDir.resolve("timeline.json").toUri().toString();
+        var artifactId = "art_" + UUID.randomUUID().toString().replace("-", "");
+        var storedTimeline = artifactStorage.storeBytes(projectId, "artifacts/" + artifactId,
+            "timeline.json", contentBytes, "application/json");
 
         var renderWorkflow = workflowRepository.save(new WorkflowRunEntity(
             projectId, sourceWorkflow.getAssetId(), "CUSTOM_TIMELINE_RENDER", sourceWorkflow.getProxyQuality()
@@ -618,8 +627,8 @@ public class WorkflowExecutionService {
         virtualTask.markRunning();
         virtualTask.markSucceeded();
         artifactRepository.save(new ArtifactEntity(
-            artifactId, projectId, virtualTask.getId(), "TIMELINE", storageUri,
-            "application/json", contentBytes.length, contentHash, timelineJson
+            artifactId, projectId, virtualTask.getId(), "TIMELINE", storedTimeline.storageUri(),
+            storedTimeline.mediaType(), storedTimeline.sizeBytes(), storedTimeline.contentHash(), timelineJson
         ));
 
         var renderTask = taskRepository.save(new TaskRunEntity(
@@ -795,6 +804,10 @@ public class WorkflowExecutionService {
         var inputs = resolveInputs(task, asset);
         if ("video.render".equals(task.getToolName())) {
             parameters.put("bgmPlaybackMode", resolveBgmPlaybackMode(inputs));
+        }
+        if (workflowMetrics != null) {
+            workflowMetrics.taskDispatched(task.getToolName());
+            taskMetricSamples.put(task.getId(), workflowMetrics.taskStarted());
         }
         var request = new ToolServiceClient.CreateToolExecutionRequest(
             task.getToolName(),
@@ -1023,6 +1036,7 @@ public class WorkflowExecutionService {
                 }
             }
             task.markSucceeded();
+            recordTaskMetric(task, "SUCCEEDED");
             evaluateWorkflow(task.getWorkflowRunId());
             return;
         }
@@ -1034,8 +1048,14 @@ public class WorkflowExecutionService {
             } else {
                 task.markFailed(message);
             }
+            recordTaskMetric(task, response.status());
             evaluateWorkflow(task.getWorkflowRunId());
         }
+    }
+
+    private void recordTaskMetric(TaskRunEntity task, String status) {
+        if (workflowMetrics == null || task == null) return;
+        workflowMetrics.taskFinished(task.getToolName(), status, taskMetricSamples.remove(task.getId()));
     }
 
 
@@ -1171,6 +1191,7 @@ public class WorkflowExecutionService {
 
     private void evaluateWorkflow(String workflowRunId) {
         var workflow = workflowRepository.findLockedById(workflowRunId).orElseThrow();
+        var previousWorkflowStatus = workflow.getStatus();
         var tasks = taskRepository.findByWorkflowRunIdOrderByCreatedAtAsc(workflowRunId);
         var tasksById = tasks.stream().collect(Collectors.toMap(TaskRunEntity::getId, Function.identity()));
         var dependencies = dependencyRepository.findByTaskRunIdIn(tasksById.keySet().stream().toList()).stream()
@@ -1245,6 +1266,10 @@ public class WorkflowExecutionService {
                 workflow.succeed();
             } else {
                 workflow.fail("One or more required Tasks were skipped");
+            }
+            if (workflowMetrics != null && previousWorkflowStatus != workflow.getStatus()
+                && (workflow.getStatus() == RunStatus.SUCCEEDED || workflow.getStatus() == RunStatus.FAILED)) {
+                workflowMetrics.workflowCompleted(workflow.getStatus() == RunStatus.SUCCEEDED);
             }
         } else if (workflow.getStatus() == RunStatus.RUNNING) {
             workflow.start();

@@ -255,15 +255,15 @@ npm run dev
 
 ## 后续方向
 
-第十三阶段已结束。后续重点是现有闭环的生产化加固，不再规划面向用户的运行中 Replan：
+第十三阶段已结束。第十四阶段已开始进行生产化加固，不再规划面向用户的运行中 Replan：
 
-1. 第十四阶段：建立可观测性与压测基线，完成 Artifact Storage 抽象和阿里云 OSS；
+1. 第十四阶段：可观测性、压测基线与 Artifact Storage/阿里云 OSS 已完成交接；视频、音频、图片二进制上传 OSS，JSON/SRT/Manifest 继续使用本地共享卷，媒体支持预签名直连预览，后续只需补充隔离前缀下的写入、Range、multipart 和故障恢复压测；
 2. 第十五阶段：引入 RabbitMQ、Transactional Outbox、分资源 Worker 横向扩展和 Redis 草稿/缓存；
 3. 建立由 Tool Manifest 驱动的版本化 `Capability Catalog`，减少 Java/Python 双端能力声明；
 4. 按实际审计需求持久化 Workflow Intent、Definition hash、确认人和幂等信息；
 5. 增加浏览器级自动化回归并补齐限流、账号恢复、发布回滚等安全加固。
 
-实施计划见 [`docs/fourteenth-stage-plan.md`](docs/fourteenth-stage-plan.md) 和 [`docs/fifteenth-stage-plan.md`](docs/fifteenth-stage-plan.md)。
+第十四阶段交接见 [`docs/fourteenth-stage-handoff.md`](docs/fourteenth-stage-handoff.md)（兼容保留 [`docs/fourteenth-stage-plan.md`](docs/fourteenth-stage-plan.md)），第十五阶段计划见 [`docs/fifteenth-stage-plan.md`](docs/fifteenth-stage-plan.md)。
 
 动态编排的边界保持不变：Agent 负责理解意图，Planner/Validator 决定允许的实现方式，现有执行引擎负责可靠执行；动态规划失败时回退到经过验证的固定模板。Workflow 在执行前 Gate 确认后冻结拓扑，需求变化时创建新的 Workflow，而不是修改正在运行的实例。
 

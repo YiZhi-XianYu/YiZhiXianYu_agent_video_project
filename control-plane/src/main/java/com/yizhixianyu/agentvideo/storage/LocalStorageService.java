@@ -1,6 +1,8 @@
 package com.yizhixianyu.agentvideo.storage;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -15,7 +17,7 @@ import java.util.HexFormat;
 import java.util.UUID;
 
 @Service
-public class LocalStorageService {
+public class LocalStorageService implements ArtifactStorage {
 
     private final Path root;
 
@@ -23,26 +25,44 @@ public class LocalStorageService {
         this.root = root.toAbsolutePath().normalize();
     }
 
+    @Override
+    public StoredObject store(String projectId, String category, String fileName, InputStream input,
+                              String mediaType) {
+        var originalName = sanitize(fileName);
+        var targetDir = root.resolve("projects").resolve(sanitize(projectId)).resolve(sanitize(category));
+        var target = targetDir.resolve(UUID.randomUUID() + "-" + originalName).normalize();
+        if (!target.startsWith(targetDir)) throw new IllegalArgumentException("Invalid file name");
+        try {
+            Files.createDirectories(targetDir);
+            Files.copy(input, target, StandardCopyOption.REPLACE_EXISTING);
+            return new StoredObject(originalName, target.toUri().toString(), Files.size(target), sha256(target),
+                mediaType == null || mediaType.isBlank() ? "application/octet-stream" : mediaType);
+        } catch (IOException exc) {
+            throw new IllegalStateException("Failed to store artifact", exc);
+        }
+    }
+
     public StoredFile storeVideo(String projectId, MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("Video file is required");
         }
-        var originalName = sanitize(file.getOriginalFilename());
-        var targetDir = root.resolve("projects").resolve(projectId).resolve("assets");
-        var target = targetDir.resolve(UUID.randomUUID() + "-" + originalName).normalize();
-        if (!target.startsWith(targetDir)) {
-            throw new IllegalArgumentException("Invalid file name");
+        StoredObject object;
+        try (var input = file.getInputStream()) {
+            object = store(projectId, "assets", file.getOriginalFilename(), input, file.getContentType());
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to read uploaded video", e);
         }
+        return new StoredFile(object.fileName(), object.storageUri(), object.sizeBytes(), object.contentHash());
+    }
+
+    @Override
+    public Resource resource(String storageUri) {
         try {
-            Files.createDirectories(targetDir);
-            try (InputStream input = file.getInputStream()) {
-                Files.copy(input, target, StandardCopyOption.REPLACE_EXISTING);
-            }
-            var hash = sha256(target);
-            return new StoredFile(originalName, target.toUri().toString(), Files.size(target), hash);
-        } catch (IOException exc) {
-            throw new IllegalStateException("Failed to store uploaded video", exc);
-        }
+            var uri = java.net.URI.create(storageUri);
+            if (!"file".equalsIgnoreCase(uri.getScheme()))
+                throw new IllegalArgumentException("Unsupported storage URI: " + storageUri);
+            return new FileSystemResource(Path.of(uri));
+        } catch (RuntimeException e) { throw e; }
     }
 
     private static String sanitize(String name) {
