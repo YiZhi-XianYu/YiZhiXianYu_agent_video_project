@@ -112,13 +112,124 @@
  }
 
  /** 创建多素材分析 Workflow 请求 */
- export interface CreateAnalysisRunRequest {
+export interface CreateAnalysisRunRequest {
    assetIds: string[]
    quality: '4K' | '2K' | '1080P' | '720P'
    durationPrompt?: string
    /** 是否开启全自动模式（跳过所有 Gate） */
    autoMode: boolean
  }
+
+ export interface WorkflowCapabilities {
+   vlmAnalysis: boolean
+   sourceTranscription: boolean
+   subtitles: boolean
+   bgm: boolean
+ }
+
+ export interface WorkflowPlanNode {
+   nodeKey: string
+   toolName: string
+   toolVersion: string
+   scope: 'ASSET' | 'WORKFLOW'
+   inputBinding: 'PROJECT_ASSET' | 'UPSTREAM_ARTIFACT'
+   parameters: Record<string, unknown>
+ }
+
+ export interface WorkflowPlanEdge {
+   from: string
+   to: string
+   dependencyType: 'REQUIRED' | 'OPTIONAL'
+ }
+
+ export interface WorkflowPlanGate {
+   gateKey: string
+   afterNodeKey: string
+   label: string
+   description: string
+ }
+
+ export interface WorkflowPlanDefinition {
+   definitionKey: string
+   definitionVersion: number
+   nodes: WorkflowPlanNode[]
+   edges: WorkflowPlanEdge[]
+   gates: WorkflowPlanGate[]
+ }
+
+ export interface WorkflowPlanNodeExplanation {
+   nodeKey: string
+   label: string
+   reason: string
+   tool: string
+   optional: boolean
+ }
+
+export interface WorkflowPlanPreview {
+   intent: {
+     goal: string
+     targetDuration: string
+     explanation: string
+  capabilities: WorkflowCapabilities
+   }
+   definition: WorkflowPlanDefinition
+   defaultDefinition: WorkflowPlanDefinition
+   explanations: WorkflowPlanNodeExplanation[]
+  defaultSelected: boolean
+  canvas: WorkflowCanvasGraph
+  llmUsed: boolean
+}
+
+export interface WorkflowCanvasNode {
+  id: string
+  logicalNodeKey: string
+  label: string
+  toolName: string
+  toolVersion: string
+  scope: 'ASSET' | 'WORKFLOW'
+  assetId?: string | null
+  assetIndex?: number | null
+  x: number
+  y: number
+  optional: boolean
+}
+
+export interface WorkflowCanvasEdge {
+  id: string
+  from: string
+  to: string
+  dependencyType: 'REQUIRED' | 'OPTIONAL'
+  deletable: boolean
+}
+
+export interface WorkflowCanvasGraph {
+  nodes: WorkflowCanvasNode[]
+  edges: WorkflowCanvasEdge[]
+}
+
+export interface PreviewWorkflowPlanRequest {
+  assetIds: string[]
+  quality: CreateAnalysisRunRequest['quality']
+  durationPrompt?: string
+  goal?: string
+   autoMode: boolean
+  capabilities?: WorkflowCapabilities
+   useDefault: boolean
+}
+
+export interface ConfirmWorkflowPlanRequest extends CreateAnalysisRunRequest {
+  goal?: string
+  capabilities?: WorkflowCapabilities
+  useDefault: boolean
+  removedNodeIds?: string[]
+  removedEdgeIds?: string[]
+  addedEdges?: WorkflowCanvasEdge[]
+}
+
+export interface WorkflowPlanValidationResult {
+  valid: boolean
+  errors: string[]
+}
 
  /** Workflow 运行详情（含 Task 列表） */
  export interface WorkflowRunDetail extends WorkflowRun {

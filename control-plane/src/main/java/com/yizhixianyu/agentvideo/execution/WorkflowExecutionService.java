@@ -146,6 +146,25 @@ public class WorkflowExecutionService {
         String durationPrompt,
         boolean autoMode
     ) {
+        return createMultiAssetAnalysisRun(
+            projectId,
+            requestedAssetIds,
+            proxyQuality,
+            durationPrompt,
+            autoMode,
+            analysisTemplate.create(proxyQuality, durationPrompt, autoMode)
+        );
+    }
+
+    @Transactional
+    public WorkflowRunEntity createMultiAssetAnalysisRun(
+        String projectId,
+        List<String> requestedAssetIds,
+        ProxyQuality proxyQuality,
+        String durationPrompt,
+        boolean autoMode,
+        WorkflowDefinition definition
+    ) {
         projectService.getRequired(projectId);
         if (requestedAssetIds == null || requestedAssetIds.isEmpty()) {
             throw new IllegalArgumentException("At least one Asset is required");
@@ -157,7 +176,6 @@ public class WorkflowExecutionService {
         var assets = uniqueAssetIds.stream().map(assetService::getRequiredAvailable).toList();
         assets.forEach(asset -> requireProjectAsset(projectId, asset));
 
-        var definition = analysisTemplate.create(proxyQuality, durationPrompt, autoMode);
         definitionValidator.validate(definition);
         var workflow = workflowRepository.save(new WorkflowRunEntity(
             projectId,

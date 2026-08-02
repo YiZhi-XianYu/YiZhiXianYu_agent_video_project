@@ -53,6 +53,16 @@ public class ToolServiceClient {
         return send(httpRequest, ToolExecutionResponse.class);
     }
 
+    public WorkflowIntentResponse requestWorkflowIntent(WorkflowIntentRequest request) {
+        var httpRequest = HttpRequest.newBuilder(resolve("api/v1/workflow-planning/intent"))
+            .timeout(Duration.ofSeconds(35))
+            .header("Content-Type", "application/json; charset=UTF-8")
+            .header("Accept", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(toJson(request), StandardCharsets.UTF_8))
+            .build();
+        return send(httpRequest, WorkflowIntentResponse.class);
+    }
+
     private <T> T send(HttpRequest request, Class<T> responseType) {
         try {
             var response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
@@ -127,4 +137,19 @@ public class ToolServiceClient {
         ToolError error
     ) {
     }
+
+    public record WorkflowIntentRequest(
+        String goal,
+        String targetDuration,
+        int assetCount,
+        List<String> availableCapabilities
+    ) {}
+
+    public record WorkflowIntentResponse(
+        boolean llmUsed,
+        Map<String, String> capabilities,
+        String pacing,
+        String explanation,
+        int targetDurationMs
+    ) {}
 }

@@ -162,6 +162,17 @@ function findArtifact(nodeKey: string, type: string): ArtifactSnapshot {
   return artifact
 }
 
+/**
+ * Return every artifact produced by a node key.  Asset-scoped nodes are
+ * instantiated once per input asset, so using `find()` here silently drops
+ * all but the first asset's output.
+ */
+function findArtifacts(nodeKey: string, type: string): ArtifactSnapshot[] {
+  return workflowStore.tasks
+    .filter((task) => task.nodeKey === nodeKey)
+    .flatMap((task) => task.artifacts.filter((artifact) => artifact.type === type))
+}
+
 async function loadArtifactJson(nodeKey: string, type: string): Promise<Record<string, any>> {
   const artifact = findArtifact(nodeKey, type)
   return await fetch(artifact.contentUrl).then(async (response) => {
@@ -189,6 +200,16 @@ function mapShotScores(payload: Record<string, any>): ShotScore[] {
     sourceProxyArtifactId: shot.sourceProxyArtifactId ? String(shot.sourceProxyArtifactId) : undefined,
     startMs: Number(shot.startMs ?? 0),
     endMs: Number(shot.endMs ?? shot.durationMs ?? 0),
+  }))
+}
+
+async function loadArtifactJsonList(nodeKey: string, type: string): Promise<Record<string, any>[]> {
+  const artifacts = findArtifacts(nodeKey, type)
+  if (!artifacts.length) throw new Error(`缺少 ${type} Artifact，无法加载当前审核页`)
+  return await Promise.all(artifacts.map(async (artifact) => {
+    const response = await fetch(artifact.contentUrl)
+    if (!response.ok) throw new Error(`${type} Artifact 加载失败：HTTP ${response.status}`)
+    return await response.json() as Record<string, any>
   }))
 }
 
@@ -247,10 +268,10 @@ function mapTimeline(payload: Record<string, any>): Timeline {
 /** 从视频检测任务中提取每个镜头的关键帧 URL 和代理视频地址，合并到 ShotScore */
 async function enrichShotScores(scores: ShotScore[]): Promise<ShotScore[]> {
   try {
-    /* 1. 加载 SHOT_LIST（含 keyframeArtifactId 和时间） */
-    const shotListPayload = await loadArtifactJson('video_shot_detect', 'SHOT_LIST')
+    /* 1. 加载所有素材级 SHOT_LIST（含 keyframeArtifactId 和时间） */
+    const shotListPayloads = await loadArtifactJsonList('video_shot_detect', 'SHOT_LIST')
     const shotMetaMap = new Map<string, { keyframeArtifactId: string; startMs: number; endMs: number; sourceAssetId: string; sourceProxyArtifactId: string }>(
-      (shotListPayload.shots ?? []).map((s: Record<string, any>) => [
+      shotListPayloads.flatMap((payload) => (payload.shots ?? [])).map((s: Record<string, any>) => [
         String(s.shotId),
         {
           keyframeArtifactId: String(s.keyframeArtifactId),
@@ -262,14 +283,20 @@ async function enrichShotScores(scores: ShotScore[]): Promise<ShotScore[]> {
       ])
     )
 
-    /* 2. 获取代理视频 URL */
-    const proxyTask = workflowStore.tasks.find((t) => t.nodeKey === 'video_proxy_generate')
-    const proxyUrl = proxyTask?.artifacts.find((a) => a.type === 'VIDEO_PROXY')?.contentUrl ?? null
+    /* 2. 获取每个代理 Artifact 的 URL（按 externalArtifactId 匹配镜头来源） */
+    const proxyUrlMap = new Map<string, string>(
+      workflowStore.tasks
+        .filter((task) => task.nodeKey === 'video_proxy_generate')
+        .flatMap((task) => task.artifacts.filter((artifact) => artifact.type === 'VIDEO_PROXY'))
+        .map((artifact) => [artifact.externalArtifactId, artifact.contentUrl]),
+    )
 
-    /* 3. 从 video_shot_detect 任务的 artifacts 中构建 externalArtifactId → contentUrl 映射 */
-    const shotDetectTask = workflowStore.tasks.find((t) => t.nodeKey === 'video_shot_detect')
+    /* 3. 从所有 video_shot_detect 任务的 artifacts 中构建 externalArtifactId → contentUrl 映射 */
     const artifactUrlMap = new Map<string, string>(
-      (shotDetectTask?.artifacts ?? []).map((a) => [a.externalArtifactId, a.contentUrl])
+      workflowStore.tasks
+        .filter((task) => task.nodeKey === 'video_shot_detect')
+        .flatMap((task) => task.artifacts)
+        .map((artifact) => [artifact.externalArtifactId, artifact.contentUrl]),
     )
 
     /* 4. 合并到 scores */
@@ -278,7 +305,7 @@ async function enrichShotScores(scores: ShotScore[]): Promise<ShotScore[]> {
       return {
         ...shot,
         keyframeUrl: meta ? artifactUrlMap.get(meta.keyframeArtifactId) : undefined,
-        proxyVideoUrl: proxyUrl ?? undefined,
+        proxyVideoUrl: meta ? proxyUrlMap.get(meta.sourceProxyArtifactId) : undefined,
         startMs: meta?.startMs,
         endMs: meta?.endMs,
         sourceAssetId: meta?.sourceAssetId || shot.sourceAssetId,

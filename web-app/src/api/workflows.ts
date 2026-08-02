@@ -8,6 +8,10 @@
    WorkflowRunDetail,
    WorkflowHistoryItem,
    CreateAnalysisRunRequest,
+  PreviewWorkflowPlanRequest,
+  WorkflowPlanPreview,
+  ConfirmWorkflowPlanRequest,
+  WorkflowPlanValidationResult,
  } from '@/api/types'
 
  /**
@@ -15,6 +19,10 @@
   */
 export async function listWorkflowRuns(projectId: string): Promise<WorkflowHistoryItem[]> {
   return get<WorkflowHistoryItem[]>(`/api/v1/projects/${projectId}/workflow-runs`)
+}
+
+export async function validateWorkflowPlan(projectId: string, request: ConfirmWorkflowPlanRequest): Promise<WorkflowPlanValidationResult> {
+  return post<WorkflowPlanValidationResult>(`/api/v1/projects/${projectId}/workflow-plans/validate`, request)
 }
 
  /**
@@ -33,6 +41,23 @@ export async function listWorkflowRuns(projectId: string): Promise<WorkflowHisto
  ): Promise<{ workflowRunId: string; status: string; statusUrl: string }> {
    return post<{ workflowRunId: string; status: string; statusUrl: string }>(
      `/api/v1/projects/${projectId}/multi-asset-analysis-runs`,
+     request,
+   )
+ }
+
+ export async function previewWorkflowPlan(
+   projectId: string,
+   request: PreviewWorkflowPlanRequest,
+ ): Promise<WorkflowPlanPreview> {
+  return post<WorkflowPlanPreview>(`/api/v1/projects/${projectId}/workflow-plans/preview`, request)
+ }
+
+ export async function confirmWorkflowPlan(
+   projectId: string,
+   request: ConfirmWorkflowPlanRequest,
+ ): Promise<{ workflowRunId: string; status: string; statusUrl: string }> {
+   return post<{ workflowRunId: string; status: string; statusUrl: string }>(
+     `/api/v1/projects/${projectId}/workflow-plans/confirm`,
      request,
    )
  }

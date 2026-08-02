@@ -10,7 +10,7 @@ C:\Users\XRZ\Desktop\ninth\WwDa3B884n8dj
 
 ## 当前状态
 
-答辩后的固定主流程已经形成可操作闭环：
+答辩后的固定主流程和第十三阶段执行前动态编排已经形成可操作闭环：
 
 - Vue 3 + TypeScript + Vite 前端工作台已完成重写；
 - 注册、登录、服务端 Session、退出和项目所有权隔离已完成；
@@ -23,7 +23,9 @@ C:\Users\XRZ\Desktop\ninth\WwDa3B884n8dj
 - 素材软删除、不可变 Artifact、完整血缘和原 Workflow 内的下游重执行已完成；
 - Python SQLite Execution Journal、幂等执行和重启恢复已完成；
 - 资源感知调度、模型释放、Render 资源限制和服务器部署配置已完成；
-- 前端左侧栏已集成动态助手“初雪”，可感知 Workflow 完成并提示用户。
+- 前端左侧栏已集成动态助手“初雪”，可感知 Workflow 完成并提示用户；
+- 第十三阶段执行前动态 DAG 已完成：LLM 自然语言规划、中文拓扑画布、受控编辑、默认 DAG 回退、服务端校验和半自动/全自动选择均已落地；
+- 多素材镜头画廊、故事编辑和时间线中的关键帧、时长及代理视频映射已完成修复。
 
 ## 主 Workflow
 
@@ -53,15 +55,47 @@ timeline.compose + audio.bgm-select(optional) + subtitle.compose(optional)
   -> video.render
 ```
 
-工作流包含 5 个用户审核 Gate：
+从产品流程看，系统共包含 6 个用户确认 Gate：1 个执行前编排 Gate，以及 5 个运行中业务审核 Gate。
 
-1. 镜头排序审核；
-2. 故事安排编辑；
-3. 时间线预览与调整；
-4. BGM 候选试听与选择；
-5. 最终成片预览。
+1. 动态 DAG 编排与确认（执行前）；
+2. 镜头排序审核；
+3. 故事安排编辑；
+4. 时间线预览与调整；
+5. BGM 候选试听与选择；
+6. 最终成片预览。
+
+其中后 5 个 Gate 记录在 `WorkflowDefinition.gates` 中，并由运行时状态机暂停和恢复；动态 DAG Gate 位于 Workflow 创建之前，因此不属于运行时 Definition 内的 Gate 数组，但在产品交互和阶段统计中按第 1 个 Gate 计算。
 
 故事和时间线的人工修改会在原 Workflow 内写入新的不可变 Artifact，重置尚未执行的下游 Task 后继续执行，不创建脱离原血缘的临时 Workflow。已完成 Artifact 不会被覆盖或删除。
+
+## 动态 DAG 编排
+
+第十三阶段在固定模板之上增加了执行前动态规划层。用户先用自然语言描述成片目标和时长，LLM 只返回受控能力意图，Java Planner 再基于默认模板生成候选 `WorkflowDefinition`：
+
+```text
+自然语言需求
+  -> 受控 Workflow Intent
+  -> 候选 DAG / 默认 DAG
+  -> 素材级拓扑展开
+  -> 用户拖拽、增删节点与连线
+  -> 服务端 DAG 校验
+  -> 半自动 / 全自动确认
+  -> 既有 WorkflowExecutionService
+```
+
+当前交互包括：
+
+- 时长直接写在自然语言需求中，支持秒、分钟、半分钟和英文时间表达；
+- LLM 生成初版 DAG，失败时确定性回退默认 DAG；
+- 中文流程图按依赖分层，多素材任务并行展开；
+- 支持缩放、画布高度调整、节点拖动、手动连线和两次点击删除节点/连线；
+- 可选能力卡片直接拖入画布，拖入后不自动连线；
+- 已选能力只读展示，当前受控能力为 VLM、源音频转写、字幕和 BGM；
+- 字幕强制依赖源音频转写，禁用转写时后端同步禁用字幕；
+- 非法 DAG 无法确认，最终结构由服务端重新校验；
+- 用户可以随时恢复系统默认 DAG，并在确认时选择半自动（保留 5 个运行中 Gate）或全自动（跳过运行中 Gate）执行。
+
+阶段交接和边界说明见 [`docs/thirteenth-stage-handoff.md`](docs/thirteenth-stage-handoff.md)。动态 DAG Gate 确认后，本次 Workflow 拓扑冻结；运行中的 5 个 Gate 只允许编辑镜头、故事、时间线、BGM 等业务 Artifact，不允许增删节点或修改依赖。
 
 ## 主要产品能力
 
@@ -111,7 +145,7 @@ Vue 3 + TypeScript + Vite
           | REST / Session / Artifact Content API
           v
 Java 21 + Spring Boot Control Plane
-  用户、项目、Workflow、DAG、Task 状态机、Gate、Artifact 血缘、LLM 审计
+  用户、项目、Workflow、动态 DAG Planner、服务端校验、Task 状态机、Gate、Artifact 血缘、LLM 审计
           |
           | 版本化 HTTP Tool API + 内部回调
           v
@@ -202,7 +236,9 @@ npm run dev
 - Vue `vue-tsc --noEmit` 和 Vite 生产构建通过；
 - 本地 Docker Compose 配置、Control Plane 和 Tool Service 生产构建通过；
 - 已验证 BGM、字幕、混合转场、无 BGM 降级、短素材故事计划、执行恢复和资源限制场景；
-- 已完成真实浏览器工作台、项目隔离、素材预览、Workflow 监控、最终成片预览和下载验证。
+- 已完成真实浏览器工作台、项目隔离、素材预览、Workflow 监控、最终成片预览和下载验证；
+- 第十三阶段已验证自然语言时长提取、LLM/默认 DAG、素材级拓扑展开、依赖校验和半自动/全自动创建；
+- 本机 `control-plane` 生产镜像已重新构建并更新，动态编排前端和多素材镜头预览修复已实际生效。
 
 服务器部署配置位于 `deploy/`，详细说明见 [`docs/deployment-aliyun.md`](docs/deployment-aliyun.md)。线上环境仍应在拉取最新提交后重新执行一次真实 Workflow 验收，确认模型下载、内存限制、字幕字体、Render 和重启恢复符合当前服务器配置。
 
@@ -217,18 +253,16 @@ npm run dev
 - `scripts/`：本地启动、测试和数据库辅助脚本；
 - `samples/`：最小测试素材或示例输入。
 
-## 下一阶段方向
+## 后续方向
 
-答辩已经结束，后续重点从稳定演示转向生产化和智能编排升级：
+第十三阶段已结束。后续重点是现有闭环的生产化加固，不再规划面向用户的运行中 Replan：
 
-1. 对当前固定 Workflow 做源码、Manifest、Artifact 和真实环境的基线审计；
-2. 引入用户感知层 Agent，将用户目标转换为结构化 `Workflow Intent`；
-3. 建立受控 `Capability Catalog` 和确定性 DAG Compiler；
-4. 增加用户拓扑编辑与确认 Gate，支持受控节点/依赖修改和版本化 `WorkflowDefinition Revision`；
-5. 在人工 Gate 处实现只影响未执行下游的受控 Replan，同时隔离历史 Artifact、Task 和迟到回调；
-6. 补齐线上安全加固、对象存储、限流、CSRF、账号恢复和发布回滚流程。
+1. 建立由 Tool Manifest 驱动的版本化 `Capability Catalog`，减少 Java/Python 双端能力声明；
+2. 按实际审计需求持久化 Workflow Intent、Definition hash、确认人和幂等信息，不为运行中改拓扑设计复杂 Revision 迁移机制；
+3. 增加浏览器级自动化回归，覆盖多素材布局、能力拖入、连线编辑、非法 DAG 和默认回退；
+4. 补齐线上对象存储、限流、账号恢复、发布回滚及其他安全加固。
 
-动态编排的边界保持不变：Agent 负责理解意图，编译器决定允许的实现方式，现有执行引擎负责可靠执行；动态规划失败时回退到经过验证的固定模板。
+动态编排的边界保持不变：Agent 负责理解意图，Planner/Validator 决定允许的实现方式，现有执行引擎负责可靠执行；动态规划失败时回退到经过验证的固定模板。Workflow 在执行前 Gate 确认后冻结拓扑，需求变化时创建新的 Workflow，而不是修改正在运行的实例。
 
 ## 备份目录说明
 

@@ -18,8 +18,12 @@ public class MultiAssetAnalysisTemplate {
     }
 
     public WorkflowDefinition create(ProxyQuality quality, String durationPrompt, boolean autoMode) {
+        return create(quality, durationPrompt, autoMode, 30000);
+    }
+
+    public WorkflowDefinition create(ProxyQuality quality, String durationPrompt, boolean autoMode, int targetDurationMs) {
         var storyParams = new java.util.LinkedHashMap<String, Object>();
-        storyParams.put("targetDurationMs", 30000);
+        storyParams.put("targetDurationMs", Math.max(5000, Math.min(300000, targetDurationMs)));
         storyParams.put("maxShots", 18);
         if (durationPrompt != null && !durationPrompt.isBlank()) {
             storyParams.put("durationPrompt", durationPrompt.strip());
@@ -111,7 +115,7 @@ public class MultiAssetAnalysisTemplate {
                 new WorkflowDefinition.Edge("timeline_compose", "bgm_select"),
                 new WorkflowDefinition.Edge("timeline_compose", "subtitle_compose"),
                 new WorkflowDefinition.Edge(
-                    "source_transcribe", "subtitle_compose", WorkflowDefinition.DependencyType.OPTIONAL
+                    "source_transcribe", "subtitle_compose", WorkflowDefinition.DependencyType.REQUIRED
                 ),
                 new WorkflowDefinition.Edge("timeline_compose", "video_render"),
                 new WorkflowDefinition.Edge(

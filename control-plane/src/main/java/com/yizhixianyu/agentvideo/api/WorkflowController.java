@@ -4,6 +4,8 @@ import com.yizhixianyu.agentvideo.auth.AuthService;
 import com.yizhixianyu.agentvideo.execution.WorkflowExecutionService;
 import com.yizhixianyu.agentvideo.execution.ProxyQuality;
 import com.yizhixianyu.agentvideo.project.ProjectService;
+import com.yizhixianyu.agentvideo.workflow.DynamicWorkflowPlanner;
+import com.yizhixianyu.agentvideo.workflow.WorkflowDefinition;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -27,15 +29,18 @@ public class WorkflowController {
     private final WorkflowExecutionService workflowService;
     private final ProjectService projectService;
     private final AuthService authService;
+    private final DynamicWorkflowPlanner dynamicPlanner;
 
     public WorkflowController(
         WorkflowExecutionService workflowService,
         ProjectService projectService,
-        AuthService authService
+        AuthService authService,
+        DynamicWorkflowPlanner dynamicPlanner
     ) {
         this.workflowService = workflowService;
         this.projectService = projectService;
         this.authService = authService;
+        this.dynamicPlanner = dynamicPlanner;
     }
 
     @PostMapping("/projects/{projectId}/video-proxy-runs")
@@ -63,6 +68,51 @@ public class WorkflowController {
             projectId, request.assetIds(), request.quality(), request.durationPrompt(), request.autoMode()
         );
         return new RunAccepted(run.getId(), run.getStatus().name(), "/api/v1/workflow-runs/" + run.getId());
+    }
+
+    /** 生成执行前候选 DAG。只返回后端受控的节点、边和中文解释，不创建 Task。 */
+    @PostMapping("/projects/{projectId}/workflow-plans/preview")
+    public DynamicWorkflowPlanner.WorkflowPlanPreview previewWorkflowPlan(
+        @PathVariable String projectId,
+        @Valid @RequestBody PreviewWorkflowPlanRequest request,
+        HttpServletRequest servletRequest
+    ) {
+        requireProject(projectId, servletRequest);
+        return dynamicPlanner.preview(
+            request.quality(), request.durationPrompt(), request.autoMode(),
+            request.plannerCapabilities(), request.useDefault(), request.goal(), request.assetIds()
+        );
+    }
+
+    /** 确认候选 DAG 并创建真实 Workflow。前端只能提交后端返回的结构化 Definition。 */
+    @PostMapping("/projects/{projectId}/workflow-plans/confirm")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public RunAccepted confirmWorkflowPlan(
+        @PathVariable String projectId,
+        @Valid @RequestBody ConfirmWorkflowPlanRequest request,
+        HttpServletRequest servletRequest
+    ) {
+        requireProject(projectId, servletRequest);
+        var preview = dynamicPlanner.preview(
+            request.quality(), request.durationPrompt(), request.autoMode(),
+            request.plannerCapabilities(), request.useDefault(), request.goal(), request.assetIds()
+        );
+        var definition = dynamicPlanner.applyCanvasEdits(preview.definition(), request.removedNodeIds(), request.removedEdgeIds(), request.addedEdges());
+        var run = workflowService.createMultiAssetAnalysisRun(
+            projectId, request.assetIds(), request.quality(), request.durationPrompt(), request.autoMode(), definition
+        );
+        return new RunAccepted(run.getId(), run.getStatus().name(), "/api/v1/workflow-runs/" + run.getId());
+    }
+
+    @PostMapping("/projects/{projectId}/workflow-plans/validate")
+    public DynamicWorkflowPlanner.ValidationResult validateWorkflowPlan(
+        @PathVariable String projectId,
+        @Valid @RequestBody ConfirmWorkflowPlanRequest request,
+        HttpServletRequest servletRequest
+    ) {
+        requireProject(projectId, servletRequest);
+        var preview = dynamicPlanner.preview(request.quality(), request.durationPrompt(), request.autoMode(), request.plannerCapabilities(), request.useDefault(), request.goal(), request.assetIds());
+        return dynamicPlanner.validateCanvasEdits(preview.definition(), request.removedNodeIds(), request.removedEdgeIds(), request.addedEdges());
     }
 
     /** 从 PAUSED 状态恢复 Workflow，继续执行下游 Task */
@@ -112,6 +162,53 @@ public class WorkflowController {
         String durationPrompt,
         boolean autoMode
     ) {}
+
+    public record WorkflowCapabilitiesRequest(
+        boolean vlmAnalysis,
+        boolean sourceTranscription,
+        boolean subtitles,
+        boolean bgm
+    ) {
+        public DynamicWorkflowPlanner.WorkflowCapabilities toCapabilities() {
+            return new DynamicWorkflowPlanner.WorkflowCapabilities(
+                vlmAnalysis, sourceTranscription, subtitles, bgm
+            );
+        }
+    }
+
+    public record PreviewWorkflowPlanRequest(
+        @NotNull @Size(min = 1, max = 20) List<@NotBlank String> assetIds,
+        @NotNull ProxyQuality quality,
+        String durationPrompt,
+        String goal,
+        boolean autoMode,
+        WorkflowCapabilitiesRequest capabilities,
+        boolean useDefault,
+        List<String> removedNodeIds,
+        List<String> removedEdgeIds,
+        List<DynamicWorkflowPlanner.CanvasEdge> addedEdges
+    ) {
+        public DynamicWorkflowPlanner.WorkflowCapabilities plannerCapabilities() {
+            return capabilities == null ? null : capabilities.toCapabilities();
+        }
+    }
+
+    public record ConfirmWorkflowPlanRequest(
+        @NotNull @Size(min = 1, max = 20) List<@NotBlank String> assetIds,
+        @NotNull ProxyQuality quality,
+        String durationPrompt,
+        String goal,
+        boolean autoMode,
+        WorkflowCapabilitiesRequest capabilities,
+        boolean useDefault,
+        List<String> removedNodeIds,
+        List<String> removedEdgeIds,
+        List<DynamicWorkflowPlanner.CanvasEdge> addedEdges
+    ) {
+        public DynamicWorkflowPlanner.WorkflowCapabilities plannerCapabilities() {
+            return capabilities == null ? null : capabilities.toCapabilities();
+        }
+    }
 
     public record RunAccepted(String workflowRunId, String status, String statusUrl) {
     }
