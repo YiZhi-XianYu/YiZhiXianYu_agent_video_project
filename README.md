@@ -257,10 +257,13 @@ npm run dev
 
 第十三阶段已结束。后续重点是现有闭环的生产化加固，不再规划面向用户的运行中 Replan：
 
-1. 建立由 Tool Manifest 驱动的版本化 `Capability Catalog`，减少 Java/Python 双端能力声明；
-2. 按实际审计需求持久化 Workflow Intent、Definition hash、确认人和幂等信息，不为运行中改拓扑设计复杂 Revision 迁移机制；
-3. 增加浏览器级自动化回归，覆盖多素材布局、能力拖入、连线编辑、非法 DAG 和默认回退；
-4. 补齐线上对象存储、限流、账号恢复、发布回滚及其他安全加固。
+1. 第十四阶段：建立可观测性与压测基线，完成 Artifact Storage 抽象和阿里云 OSS；
+2. 第十五阶段：引入 RabbitMQ、Transactional Outbox、分资源 Worker 横向扩展和 Redis 草稿/缓存；
+3. 建立由 Tool Manifest 驱动的版本化 `Capability Catalog`，减少 Java/Python 双端能力声明；
+4. 按实际审计需求持久化 Workflow Intent、Definition hash、确认人和幂等信息；
+5. 增加浏览器级自动化回归并补齐限流、账号恢复、发布回滚等安全加固。
+
+实施计划见 [`docs/fourteenth-stage-plan.md`](docs/fourteenth-stage-plan.md) 和 [`docs/fifteenth-stage-plan.md`](docs/fifteenth-stage-plan.md)。
 
 动态编排的边界保持不变：Agent 负责理解意图，Planner/Validator 决定允许的实现方式，现有执行引擎负责可靠执行；动态规划失败时回退到经过验证的固定模板。Workflow 在执行前 Gate 确认后冻结拓扑，需求变化时创建新的 Workflow，而不是修改正在运行的实例。
 

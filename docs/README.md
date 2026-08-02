@@ -20,6 +20,8 @@
 - `third-stage-handoff.md`：第三阶段，多素材 DAG、Shot Detection 与关键帧；
 - `tenth-stage-handoff.md` 至 `twelfth-stage-handoff.md`：主链路收敛、用户工作台、服务器部署和后续修复记录；
 - `thirteenth-stage-handoff.md`：执行前动态 DAG、中文拓扑画布、服务端校验、默认回退和多素材预览修复。
+- `fourteenth-stage-plan.md`：可观测性、压测基线、Artifact Storage 抽象和阿里云 OSS 计划；
+- `fifteenth-stage-plan.md`：RabbitMQ、Transactional Outbox、Worker 横向扩展与 Redis 草稿/缓存计划。
 
 ## 后续内容
 
