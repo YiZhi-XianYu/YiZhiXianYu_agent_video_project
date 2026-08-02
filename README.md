@@ -255,9 +255,9 @@ npm run dev
 
 ## 后续方向
 
-第十三阶段已结束。第十四阶段已开始进行生产化加固，不再规划面向用户的运行中 Replan：
+第十三阶段和第十四阶段均已完成并完成交接。当前进入第十五阶段规划，不再规划面向用户的运行中 Replan：
 
-1. 第十四阶段：可观测性、压测基线与 Artifact Storage/阿里云 OSS 已完成交接；视频、音频、图片二进制上传 OSS，JSON/SRT/Manifest 继续使用本地共享卷，媒体支持预签名直连预览，后续只需补充隔离前缀下的写入、Range、multipart 和故障恢复压测；
+1. 第十四阶段：已完成——可观测性、压测基线、Artifact Storage 抽象与阿里云 OSS 已交接；视频、音频、图片二进制上传 OSS，JSON/SRT/Manifest 继续使用本地共享卷，媒体支持预签名直连预览。隔离前缀下的写入、Range、multipart 和故障恢复属于后续生产加固验证；
 2. 第十五阶段：引入 RabbitMQ、Transactional Outbox、分资源 Worker 横向扩展和 Redis 草稿/缓存；
 3. 建立由 Tool Manifest 驱动的版本化 `Capability Catalog`，减少 Java/Python 双端能力声明；
 4. 按实际审计需求持久化 Workflow Intent、Definition hash、确认人和幂等信息；
