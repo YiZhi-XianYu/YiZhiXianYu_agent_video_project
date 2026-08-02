@@ -1,0 +1,20 @@
+CREATE TABLE outbox_messages (
+    id                  VARCHAR(40) NOT NULL,
+    created_at          DATETIME(6) NOT NULL,
+    updated_at          DATETIME(6) NOT NULL,
+    version             BIGINT NOT NULL DEFAULT 0,
+    message_id          VARCHAR(80) NOT NULL,
+    aggregate_type      VARCHAR(60) NOT NULL,
+    aggregate_id        VARCHAR(80) NOT NULL,
+    event_type          VARCHAR(80) NOT NULL,
+    payload_json        LONGTEXT NOT NULL,
+    status              VARCHAR(20) NOT NULL,
+    attempts            INT NOT NULL DEFAULT 0,
+    next_attempt_at     DATETIME(6) NULL,
+    published_at        DATETIME(6) NULL,
+    last_error          VARCHAR(2000) NULL,
+    PRIMARY KEY (id),
+    CONSTRAINT uk_outbox_message UNIQUE (message_id),
+    INDEX idx_outbox_pending (status, next_attempt_at, created_at),
+    INDEX idx_outbox_aggregate (aggregate_type, aggregate_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

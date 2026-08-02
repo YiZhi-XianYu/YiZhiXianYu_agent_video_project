@@ -55,6 +55,15 @@ class Settings(BaseSettings):
     # ASR
     asr_model_size: str = "small"  # "tiny", "small", "medium", "large-v3"
     release_models_after_execution: bool = True
+    rabbitmq_enabled: bool = False
+    rabbitmq_host: str = "127.0.0.1"
+    rabbitmq_port: int = 5672
+    rabbitmq_username: str = "agentvideo"
+    rabbitmq_password: str = "agentvideo"
+    rabbitmq_prefetch: int = 1
+    worker_resource_group: str = "LIGHT"
+    control_plane_base_url: str = "http://127.0.0.1:8080"
+    rabbitmq_worker_token: str = ""
 
     model_config = SettingsConfigDict(
         env_prefix="TOOL_SERVICE_",

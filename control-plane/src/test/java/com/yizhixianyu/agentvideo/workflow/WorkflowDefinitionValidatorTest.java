@@ -26,8 +26,9 @@ class WorkflowDefinitionValidatorTest {
         assertThat(definition.nodes().stream()
             .filter(node -> node.scope() == WorkflowDefinition.NodeScope.WORKFLOW)).hasSize(7);
         assertThat(definition.edges()).hasSize(19);
+        // 字幕必须等待源转录；因此只有 BGM 和字幕到渲染是可选边。
         assertThat(definition.edges().stream()
-            .filter(edge -> edge.dependencyType() == WorkflowDefinition.DependencyType.OPTIONAL)).hasSize(3);
+            .filter(edge -> edge.dependencyType() == WorkflowDefinition.DependencyType.OPTIONAL)).hasSize(2);
         assertThat(definition.gates()).extracting(WorkflowDefinition.Gate::gateKey)
             .containsExactly(
                 "gate_shot_ranking", "gate_story_edit", "gate_timeline_preview",

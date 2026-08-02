@@ -1,0 +1,1 @@
+"""RabbitMQ task consumer integration."""

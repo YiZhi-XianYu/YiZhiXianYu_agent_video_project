@@ -7,6 +7,27 @@ x-logging: &default-logging
     max-file: "5"
 
 services:
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: avp-prod-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-agentvideo}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-Xrz-060625}
+    volumes:
+      - ${DEPLOY_ROOT:-/opt/agent-video}/data/rabbitmq:/var/lib/rabbitmq
+    networks:
+      - backend
+  redis:
+    image: redis:7-alpine
+    container_name: avp-prod-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - ${DEPLOY_ROOT:-/opt/agent-video}/data/redis:/data
+    networks:
+      - backend
+
   mysql:
     image: mysql:8.0
     container_name: avp-prod-mysql
@@ -59,6 +80,14 @@ services:
       OSS_SIGNED_URL_TTL_SECONDS: ${OSS_SIGNED_URL_TTL_SECONDS:-600}
       AUTH_SESSION_DAYS: ${AUTH_SESSION_DAYS:-30}
       AUTH_SECURE_COOKIE: ${AUTH_SECURE_COOKIE:-false}
+      REDIS_ENABLED: ${REDIS_ENABLED:-false}
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_ENABLED: ${RABBITMQ_ENABLED:-false}
+      RABBITMQ_WORKER_TOKEN: ${RABBITMQ_WORKER_TOKEN:-}
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: "5672"
+      SPRING_RABBITMQ_USERNAME: ${RABBITMQ_DEFAULT_USER:-agentvideo}
+      SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_DEFAULT_PASS:-Xrz-060625}
       UPLOAD_MAX_FILE_SIZE: ${UPLOAD_MAX_FILE_SIZE:-500MB}
       UPLOAD_MAX_REQUEST_SIZE: ${UPLOAD_MAX_REQUEST_SIZE:-1GB}
       JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=75.0 -XX:+ExitOnOutOfMemoryError
@@ -101,6 +130,15 @@ services:
       TOOL_SERVICE_OSS_BUCKET: ${OSS_BUCKET:-}
       TOOL_SERVICE_OSS_ACCESS_KEY_ID: ${OSS_ACCESS_KEY_ID:-}
       TOOL_SERVICE_OSS_ACCESS_KEY_SECRET: ${OSS_ACCESS_KEY_SECRET:-}
+      TOOL_SERVICE_RABBITMQ_ENABLED: ${RABBITMQ_ENABLED:-false}
+      TOOL_SERVICE_RABBITMQ_HOST: rabbitmq
+      TOOL_SERVICE_RABBITMQ_PORT: "5672"
+      TOOL_SERVICE_RABBITMQ_USERNAME: ${RABBITMQ_DEFAULT_USER:-agentvideo}
+      TOOL_SERVICE_RABBITMQ_PASSWORD: ${RABBITMQ_DEFAULT_PASS:-Xrz-060625}
+      TOOL_SERVICE_RABBITMQ_WORKER_TOKEN: ${RABBITMQ_WORKER_TOKEN:-}
+      TOOL_SERVICE_WORKER_RESOURCE_GROUP: ${TOOL_WORKER_RESOURCE_GROUP:-LIGHT}
+      TOOL_SERVICE_RABBITMQ_PREFETCH: ${TOOL_RABBITMQ_PREFETCH:-1}
+      TOOL_SERVICE_CONTROL_PLANE_BASE_URL: http://control-plane:8080
       TOOL_SERVICE_EXECUTION_STORE_PATH: /app/runtime/executions/tool-executions.sqlite3
       TOOL_SERVICE_BGM_LIBRARY_ROOT: /app/runtime/bgm
       TOOL_SERVICE_MUSIC_CACHE_ROOT: /app/runtime/music-cache
@@ -151,6 +189,34 @@ services:
     shm_size: 512m
     stop_grace_period: 2m
     logging: *default-logging
+
+  # Optional resource-group workers. Enable with --profile workers and set RABBITMQ_ENABLED=true.
+  tool-worker-media:
+    profiles: ["workers"]
+    extends:
+      service: tool-service
+    container_name: avp-prod-tool-worker-media
+    environment:
+      TOOL_SERVICE_WORKER_RESOURCE_GROUP: MEDIA
+      TOOL_SERVICE_EXECUTION_STORE_PATH: /app/runtime/executions/tool-executions-media.sqlite3
+
+  tool-worker-model:
+    profiles: ["workers"]
+    extends:
+      service: tool-service
+    container_name: avp-prod-tool-worker-model
+    environment:
+      TOOL_SERVICE_WORKER_RESOURCE_GROUP: MODEL
+      TOOL_SERVICE_EXECUTION_STORE_PATH: /app/runtime/executions/tool-executions-model.sqlite3
+
+  tool-worker-render:
+    profiles: ["workers"]
+    extends:
+      service: tool-service
+    container_name: avp-prod-tool-worker-render
+    environment:
+      TOOL_SERVICE_WORKER_RESOURCE_GROUP: RENDER
+      TOOL_SERVICE_EXECUTION_STORE_PATH: /app/runtime/executions/tool-executions-render.sqlite3
 
   caddy:
     image: caddy:2-alpine

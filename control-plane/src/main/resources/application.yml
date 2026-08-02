@@ -23,6 +23,13 @@ spring:
     multipart:
       max-file-size: ${UPLOAD_MAX_FILE_SIZE:2GB}
       max-request-size: ${UPLOAD_MAX_REQUEST_SIZE:2GB}
+  data:
+    redis:
+      url: ${REDIS_URL:redis://127.0.0.1:6379}
+  rabbitmq:
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    connection-timeout: ${RABBITMQ_CONNECTION_TIMEOUT_MS:5000}
 
 management:
   endpoints:
@@ -39,6 +46,16 @@ management:
       application: ${spring.application.name:agent-video-control-plane}
 
 app:
+  redis:
+    enabled: ${REDIS_ENABLED:false}
+    url: ${REDIS_URL:redis://127.0.0.1:6379}
+  messaging:
+    rabbit:
+      enabled: ${RABBITMQ_ENABLED:false}
+      task-exchange: ${RABBITMQ_TASK_EXCHANGE:avp.task.v1}
+      publisher-interval-ms: ${RABBITMQ_PUBLISHER_INTERVAL_MS:1000}
+      worker-token: ${RABBITMQ_WORKER_TOKEN:}
+
   auth:
     session-days: ${AUTH_SESSION_DAYS:30}
     secure-cookie: ${AUTH_SECURE_COOKIE:false}

@@ -12,13 +12,16 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from app.api.routes import router
 from app.core.config import settings
 from app.execution.service import execution_service
+from app.messaging.rabbit_worker import rabbit_worker
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     settings.artifact_root.mkdir(parents=True, exist_ok=True)
     execution_service.start()
+    rabbit_worker.start()
     yield
+    rabbit_worker.stop()
     execution_service.shutdown()
 
 

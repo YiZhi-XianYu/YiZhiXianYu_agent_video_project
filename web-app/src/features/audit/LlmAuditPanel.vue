@@ -3,7 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { AlertTriangle, CheckCircle2, Clock, Cpu, Loader2, ShieldAlert, Zap } from 'lucide-vue-next'
 import { useProjectStore } from '@/stores/project'
-import { getWorkflowRun, listWorkflowRuns } from '@/api/workflows'
+import { get } from '@/api/client'
 
 const props = defineProps<{
   projectId?: string
@@ -22,18 +22,6 @@ interface AuditRecord {
   createdAt: string
 }
 
-interface StoryPlanPayload {
-  llmAudit?: {
-    requestId?: string
-    provider?: string
-    model?: string
-    durationMs?: number
-    finalSource?: string
-    validationErrors?: unknown[]
-    timestamp?: string
-  }
-}
-
 const router = useRouter()
 const projectStore = useProjectStore()
 const records = ref<AuditRecord[]>([])
@@ -47,42 +35,10 @@ async function loadRecords(): Promise<void> {
   error.value = null
   try {
     await projectStore.fetchProjects()
-    const projects = props.projectId
-      ? projectStore.projects.filter((project) => project.id === props.projectId)
-      : projectStore.projects
-    const collected: AuditRecord[] = []
-
-    for (const project of projects) {
-      const runs = await listWorkflowRuns(project.id)
-      for (const run of runs) {
-        const detail = await getWorkflowRun(run.id)
-        const artifact = detail.tasks
-          .flatMap((task) => task.artifacts)
-          .find((item) => item.type === 'STORY_PLAN')
-        if (!artifact) continue
-
-        const response = await fetch(artifact.contentUrl)
-        if (!response.ok) continue
-        const story = await response.json() as StoryPlanPayload
-        const audit = story.llmAudit
-        if (!audit) continue
-
-        collected.push({
-          id: audit.requestId || `${run.id}:story-plan`,
-          projectId: project.id,
-          projectName: project.name,
-          runId: run.id,
-          provider: audit.provider || 'none',
-          model: audit.model || 'none',
-          latencyMs: Number(audit.durationMs ?? 0),
-          result: audit.finalSource === 'LLM' ? 'ai' : 'fallback',
-          errors: (audit.validationErrors ?? []).map(String),
-          createdAt: audit.timestamp || run.createdAt,
-        })
-      }
-    }
-
-    records.value = collected.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    const response = await get<{ items: AuditRecord[] }>(`/api/v1/llm-audits`, {
+      params: { projectId: props.projectId, page: 0, size: 100 },
+    })
+    records.value = response.items || []
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'LLM 审计记录加载失败'
   } finally {
