@@ -5,6 +5,8 @@ import { useWorkflowStore } from '@/stores/workflow';
 import { useReviewStore } from '@/stores/review';
 import { useUiStore } from '@/stores/ui';
 import { usePolling } from '@/shared/composables/usePolling';
+import { ApiError } from '@/api/client';
+import { getGateDraft, saveGateDraft } from '@/api/workflows';
 import { WORKFLOW_POLL_INTERVAL_MS, RUN_STATUS_LABEL } from '@/shared/constants';
 import ProgressBar from '@/components/ProgressBar.vue';
 import StatusBadge from '@/components/StatusBadge.vue';
@@ -20,6 +22,9 @@ const router = useRouter();
 const workflowStore = useWorkflowStore();
 const reviewStore = useReviewStore();
 const uiStore = useUiStore();
+const gateDraftStatus = ref('idle');
+let gateDraftTimer = null;
+let hydratingGateDraft = false;
 /** Gate 1 视图模式：true = 画廊视图, false = 列表视图 */
 const showGalleryView = ref(true);
 const renderedVideo = computed(() => workflowStore.tasks
@@ -92,6 +97,18 @@ watch(() => workflowStore.isTerminal, (terminal) => {
 watch(() => workflowStore.run?.currentGateKey, () => {
     syncGate();
 });
+watch(() => ({
+    gate: reviewStore.currentGate?.gateKey,
+    shotScores: reviewStore.shotScores,
+    excludedShotIds: [...reviewStore.excludedShotIds],
+    forcedShotIds: [...reviewStore.forcedShotIds],
+    storyPlan: reviewStore.storyPlan,
+    lockedShotIds: [...reviewStore.lockedShotIds],
+    timeline: reviewStore.timeline,
+}), () => {
+    if (!hydratingGateDraft && workflowStore.currentGate && workflowStore.isPaused)
+        scheduleGateDraftSave();
+}, { deep: true });
 onUnmounted(() => {
     stopPolling();
     workflowStore.clear();
@@ -103,6 +120,8 @@ async function syncGate() {
     reviewStore.activateGate(gate);
     if (!gate)
         return;
+    hydratingGateDraft = true;
+    gateDraftStatus.value = 'idle';
     try {
         if (gate.gateKey === 'gate_shot_ranking') {
             const payload = await loadArtifactJson('shot_ranking', 'SHOT_RANKING');
@@ -128,9 +147,57 @@ async function syncGate() {
                 throw new Error('缺少 RENDERED_VIDEO Artifact，无法打开当前审核页');
             reviewStore.setRenderedVideo(artifact.contentUrl);
         }
+        await restoreGateDraft(gate.gateKey);
     }
     catch (error) {
         uiStore.showToast(error instanceof Error ? error.message : '审核数据加载失败', 'error');
+    }
+    finally {
+        hydratingGateDraft = false;
+    }
+}
+function gateDraftPayload() {
+    return { version: 1, gateKey: reviewStore.currentGate?.gateKey, shotScores: reviewStore.shotScores, excludedShotIds: [...reviewStore.excludedShotIds], forcedShotIds: [...reviewStore.forcedShotIds], storyPlan: reviewStore.storyPlan, lockedShotIds: [...reviewStore.lockedShotIds], timeline: reviewStore.timeline };
+}
+function scheduleGateDraftSave() {
+    const gateKey = workflowStore.currentGate?.gateKey;
+    if (!gateKey || !workflowStore.isPaused)
+        return;
+    gateDraftStatus.value = 'saving';
+    if (gateDraftTimer)
+        clearTimeout(gateDraftTimer);
+    gateDraftTimer = setTimeout(async () => {
+        try {
+            await saveGateDraft(props.runId, gateKey, gateDraftPayload());
+            gateDraftStatus.value = 'saved';
+        }
+        catch {
+            gateDraftStatus.value = 'error';
+        }
+    }, 700);
+}
+async function restoreGateDraft(gateKey) {
+    try {
+        const draft = await getGateDraft(props.runId, gateKey);
+        if (!draft || draft.version !== 1 || draft.gateKey !== gateKey)
+            return;
+        if (Array.isArray(draft.shotScores) && draft.shotScores.length)
+            reviewStore.setShotScores(draft.shotScores);
+        if (Array.isArray(draft.excludedShotIds))
+            reviewStore.setExcludedShotIds(draft.excludedShotIds);
+        if (Array.isArray(draft.forcedShotIds))
+            reviewStore.setForcedShotIds(draft.forcedShotIds);
+        if (draft.storyPlan)
+            reviewStore.setStoryPlan(draft.storyPlan);
+        if (Array.isArray(draft.lockedShotIds))
+            reviewStore.setLockedShotIds(draft.lockedShotIds);
+        if (draft.timeline)
+            reviewStore.setTimeline(draft.timeline);
+        gateDraftStatus.value = 'saved';
+    }
+    catch (error) {
+        if (!(error instanceof ApiError && error.status === 404))
+            gateDraftStatus.value = 'error';
     }
 }
 function findArtifact(nodeKey, type) {
@@ -451,6 +518,26 @@ else {
     const __VLS_19 = __VLS_18({
         tasks: (__VLS_ctx.workflowStore.tasks),
     }, ...__VLS_functionalComponentArgsRest(__VLS_18));
+    if (__VLS_ctx.workflowStore.isPaused && __VLS_ctx.workflowStore.currentGate) {
+        __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+            ...{ class: "mb-3 text-right text-[11px]" },
+        });
+        if (__VLS_ctx.gateDraftStatus === 'saving') {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                ...{ class: "text-surface-500" },
+            });
+        }
+        else if (__VLS_ctx.gateDraftStatus === 'saved') {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                ...{ class: "text-emerald-400" },
+            });
+        }
+        else if (__VLS_ctx.gateDraftStatus === 'error') {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                ...{ class: "text-warning" },
+            });
+        }
+    }
     if (__VLS_ctx.workflowStore.isPaused && __VLS_ctx.workflowStore.currentGate?.gateKey === 'gate_shot_ranking') {
         __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
             ...{ class: "flex gap-1 mb-3" },
@@ -841,6 +928,12 @@ var __VLS_90;
 /** @type {__VLS_StyleScopedClasses['section-title-row']} */ ;
 /** @type {__VLS_StyleScopedClasses['mb-4']} */ ;
 /** @type {__VLS_StyleScopedClasses['section-eyebrow']} */ ;
+/** @type {__VLS_StyleScopedClasses['mb-3']} */ ;
+/** @type {__VLS_StyleScopedClasses['text-right']} */ ;
+/** @type {__VLS_StyleScopedClasses['text-[11px]']} */ ;
+/** @type {__VLS_StyleScopedClasses['text-surface-500']} */ ;
+/** @type {__VLS_StyleScopedClasses['text-emerald-400']} */ ;
+/** @type {__VLS_StyleScopedClasses['text-warning']} */ ;
 /** @type {__VLS_StyleScopedClasses['flex']} */ ;
 /** @type {__VLS_StyleScopedClasses['gap-1']} */ ;
 /** @type {__VLS_StyleScopedClasses['mb-3']} */ ;
@@ -982,6 +1075,7 @@ const __VLS_self = (await import('vue')).defineComponent({
             FinalReview: FinalReview,
             workflowStore: workflowStore,
             uiStore: uiStore,
+            gateDraftStatus: gateDraftStatus,
             showGalleryView: showGalleryView,
             renderedVideo: renderedVideo,
             renderedVideoDownloadUrl: renderedVideoDownloadUrl,

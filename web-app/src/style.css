@@ -207,7 +207,35 @@
   .video-modal video { @apply aspect-video w-full bg-black; }
 
   .workflow-overview { @apply rounded-2xl border border-surface-700 bg-surface-800/90 p-6; }
-  .task-list { @apply space-y-3; }
+  .task-summary-grid { @apply grid gap-3; }
+  .task-summary-section { @apply min-w-0; }
+  .task-summary-card { @apply flex w-full items-start gap-4 rounded-2xl border border-surface-700 bg-surface-800/80 p-4 text-left transition hover:border-surface-500 hover:bg-surface-800; }
+  .task-summary-card.expanded { @apply border-accent/40 bg-accent/[0.04]; }
+  .task-summary-icon { @apply flex h-10 w-10 shrink-0 items-center justify-center rounded-xl; }
+  .task-summary-icon svg { @apply h-5 w-5; }
+  .task-summary-icon.parallel { @apply bg-accent/15 text-accent-light; }
+  .task-summary-icon.unified { @apply bg-violet-400/15 text-violet-300; }
+  .task-summary-main { @apply min-w-0 flex-1; }
+  .task-summary-heading { @apply flex items-center justify-between gap-3 text-sm text-surface-100; }
+  .task-summary-heading svg { @apply h-4 w-4 shrink-0 text-surface-500 transition-transform; }
+  .task-summary-main > p { @apply mt-1 text-xs text-surface-400; }
+  .task-summary-meta { @apply mt-2 flex flex-wrap gap-3 text-[10px] text-surface-500; }
+  .task-summary-meta span:first-child { @apply text-amber-300/80; }
+  .task-summary-meta span:nth-child(2) { @apply text-accent-light; }
+  .task-summary-meta span:nth-child(3) { @apply text-surface-400; }
+  .task-summary-details { @apply rounded-2xl border border-surface-700/80 bg-surface-900/40 p-4; }
+  .parallel-details { @apply grid gap-4 md:grid-cols-2; }
+  .asset-progress-row { @apply min-w-0 rounded-xl border border-surface-700/70 bg-surface-800/50 p-3; }
+  .asset-progress-title, .asset-progress-foot { @apply flex items-center justify-between gap-3 text-xs; }
+  .asset-progress-title strong { @apply text-surface-200; }
+  .asset-progress-title span, .asset-progress-foot { @apply text-[10px] text-surface-500; }
+  .asset-progress-foot { @apply mt-2; }
+  .unified-details { @apply space-y-3; }
+  .unified-progress-row { @apply rounded-xl border border-surface-700/70 bg-surface-800/50 p-3; }
+  .unified-progress-title { @apply flex items-start justify-between gap-3; }
+  .unified-progress-title strong { @apply block text-xs font-medium text-surface-200; }
+  .unified-progress-title small { @apply mt-1 block text-[10px] text-surface-500; }
+  .task-empty { @apply col-span-full py-3 text-center text-xs text-surface-500; }
   .task-row { @apply flex gap-4 rounded-2xl border border-surface-700 bg-surface-800/80 p-4 transition; }
   .task-row.running, .task-row.dispatching { @apply border-accent/35 bg-accent/[0.05]; }
   .task-row.failed { @apply border-danger/30; }
