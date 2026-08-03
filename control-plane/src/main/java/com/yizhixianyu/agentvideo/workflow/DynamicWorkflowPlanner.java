@@ -98,7 +98,10 @@ public class DynamicWorkflowPlanner {
         if (addedEdges != null) for (var edge : addedEdges) {
             var from = logicalKey(edge.from()); var to = logicalKey(edge.to());
             if (from != null && to != null && !from.equals(to) && edges.stream().noneMatch(e -> e.from().equals(from) && e.to().equals(to))) {
-                edges.add(new WorkflowDefinition.Edge(from, to, WorkflowDefinition.DependencyType.OPTIONAL));
+                // User-created canvas connections are explicit execution dependencies.
+                // Optional edges are reserved for the system-defined subtitle/render
+                // enhancements and are not exposed by the canvas editor.
+                edges.add(new WorkflowDefinition.Edge(from, to, WorkflowDefinition.DependencyType.REQUIRED));
             }
         }
         var gates = definition.gates().stream().filter(gate -> nodeKeys.contains(gate.afterNodeKey())).toList();
