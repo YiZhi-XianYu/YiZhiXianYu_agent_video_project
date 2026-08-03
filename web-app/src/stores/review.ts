@@ -50,6 +50,9 @@ export const useReviewStore = defineStore('review', () => {
   }
 
   function setShotScores(scores: ShotScore[]): void { shotScores.value = scores }
+  function setExcludedShotIds(ids: string[]): void { excludedShotIds.value = new Set(ids) }
+  function setForcedShotIds(ids: string[]): void { forcedShotIds.value = new Set(ids) }
+  function setLockedShotIds(ids: string[]): void { lockedShotIds.value = new Set(ids) }
   function setStoryPlan(plan: StoryPlan): void { storyPlan.value = plan }
   function setTimeline(tl: Timeline): void { timeline.value = tl }
   function setRenderedVideo(url: string): void { renderedVideoUrl.value = url }
@@ -260,7 +263,7 @@ export const useReviewStore = defineStore('review', () => {
     storyPlan, lockedShotIds, timeline,
     renderedVideoUrl, dirty,
     activateGate, resetAll,
-    setShotScores, setStoryPlan, setTimeline,
+    setShotScores, setExcludedShotIds, setForcedShotIds, setLockedShotIds, setStoryPlan, setTimeline,
     setRenderedVideo,
     toggleForced, toggleExcluded, toggleLockShot, markSaved, markDirty,
     updateStoryPlan, moveStoryShot, canMoveStoryShot, removeStoryShot, addStoryShot,

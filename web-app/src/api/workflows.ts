@@ -3,7 +3,7 @@
   *
   * 封装 Workflow 启动、查询和继续的 HTTP 请求。
   */
- import { get, post } from '@/api/client'
+ import { get, post, put } from '@/api/client'
  import type {
    WorkflowRunDetail,
    WorkflowHistoryItem,
@@ -65,6 +65,22 @@ export async function validateWorkflowPlan(projectId: string, request: ConfirmWo
  /**
   * 继续暂停的 Workflow（通过 Gate）
   */
- export async function continueWorkflow(runId: string): Promise<{ workflowRunId: string; status: string; statusUrl: string }> {
+export async function continueWorkflow(runId: string): Promise<{ workflowRunId: string; status: string; statusUrl: string }> {
    return post<{ workflowRunId: string; status: string; statusUrl: string }>(`/api/v1/workflow-runs/${runId}/continue`)
  }
+
+export async function saveDagDraft(projectId: string, draftId: string, body: unknown): Promise<{ saved: boolean; key: string }> {
+  return put<{ saved: boolean; key: string }>(`/api/v1/projects/${projectId}/dag-drafts/${draftId}`, body)
+}
+
+export async function getDagDraft<T = unknown>(projectId: string, draftId: string): Promise<T> {
+  return get<T>(`/api/v1/projects/${projectId}/dag-drafts/${draftId}`)
+}
+
+export async function saveGateDraft(workflowRunId: string, gateKey: string, body: unknown): Promise<{ saved: boolean; key: string }> {
+  return put<{ saved: boolean; key: string }>(`/api/v1/workflow-runs/${workflowRunId}/gate-drafts/${encodeURIComponent(gateKey)}`, body)
+}
+
+export async function getGateDraft<T = unknown>(workflowRunId: string, gateKey: string): Promise<T> {
+  return get<T>(`/api/v1/workflow-runs/${workflowRunId}/gate-drafts/${encodeURIComponent(gateKey)}`)
+}

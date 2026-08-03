@@ -73,6 +73,23 @@ flowchart TD
 
 RabbitMQ、Redis 和四类 Worker 已接入本地 Compose。RabbitMQ 临时密码通过 `.env` 的 `RABBITMQ_DEFAULT_PASS` 配置，当前学习环境使用的密码不要复制到其他环境。
 
+### 并发参数
+
+任务并发由三层参数共同控制：Worker 的 Python 资源组槽位、重任务总上限，以及 RabbitMQ 消费者的 `prefetch`。当前 Compose 默认值是 LIGHT=4、MEDIA=3、MODEL=2、RENDER=2、重任务总上限=4、`prefetch=2`。可通过以下环境变量调整：
+
+```dotenv
+TOOL_EXECUTION_LIGHT_LIMIT=4
+TOOL_EXECUTION_MEDIA_LIMIT=3
+TOOL_EXECUTION_MODEL_LIMIT=2
+TOOL_EXECUTION_RENDER_LIMIT=2
+TOOL_EXECUTION_HEAVY_LIMIT=4
+TOOL_RABBITMQ_PREFETCH=2
+```
+
+模型和渲染通常更占内存、CPU、磁盘，并发不是越大越好；调整后应观察 Worker 资源、RabbitMQ Ready/Unacked 消息和任务耗时。
+
+`prefetch` 不是实际执行线程数。Worker 在成功提交到本地 `ExecutionService` 后确认 Rabbit 消息，实际同时执行数量由资源组槽位决定。要提高吞吐，优先调整槽位或增加同一资源组 Worker 副本；横向扩展前必须规划每个副本的独立 ExecutionStore，避免多个进程争用同一个 SQLite 文件。
+
 ### 2.2 启动全部服务
 
 在正式项目根目录执行：
@@ -278,7 +295,7 @@ Task READY
   → OSS 输入物化
   → Python Tool 执行
   → 输出上传 OSS
-  → Callback/Poller
+  → Callback（RabbitMQ 模式）/ Poller（HTTP 回退模式）
   → MySQL Artifact + Task 状态
   → 下游 Task 变 READY
 ```
@@ -301,6 +318,7 @@ RABBITMQ_WORKER_TOKEN=内部 Worker token
 - RabbitMQ 异常：设置 `RABBITMQ_ENABLED=false`，回到 HTTP Tool dispatch；
 - Redis 异常：设置 `REDIS_ENABLED=false`，使用内存/数据库回退；
 - Worker 崩溃：RabbitMQ 会重新投递，幂等键和 Attempt 防止旧结果污染；
+- RabbitMQ 模式下每个资源组 Worker 使用独立执行存储，Control Plane 不再用主 Tool Service 轮询其他 Worker 的 executionId；Worker 回调是结果的权威路径；
 - Outbox 发布失败：记录 `FAILED`、`attempts`、`nextAttemptAt`，等待重试；
 - Poison message：进入 DLQ，不无限 requeue。
 

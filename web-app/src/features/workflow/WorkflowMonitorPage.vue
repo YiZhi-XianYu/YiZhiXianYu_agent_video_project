@@ -12,6 +12,8 @@ import { useWorkflowStore } from '@/stores/workflow'
 import { useReviewStore } from '@/stores/review'
 import { useUiStore } from '@/stores/ui'
 import { usePolling } from '@/shared/composables/usePolling'
+import { ApiError } from '@/api/client'
+import { getGateDraft, saveGateDraft } from '@/api/workflows'
 import { WORKFLOW_POLL_INTERVAL_MS, RUN_STATUS_LABEL } from '@/shared/constants'
 import ProgressBar from '@/components/ProgressBar.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
@@ -34,6 +36,9 @@ const router = useRouter()
 const workflowStore = useWorkflowStore()
 const reviewStore = useReviewStore()
 const uiStore = useUiStore()
+const gateDraftStatus = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
+let gateDraftTimer: ReturnType<typeof setTimeout> | null = null
+let hydratingGateDraft = false
 
 /** Gate 1 视图模式：true = 画廊视图, false = 列表视图 */
 const showGalleryView = ref(true)
@@ -116,6 +121,18 @@ watch(() => workflowStore.run?.currentGateKey, () => {
   syncGate()
 })
 
+watch(() => ({
+  gate: reviewStore.currentGate?.gateKey,
+  shotScores: reviewStore.shotScores,
+  excludedShotIds: [...reviewStore.excludedShotIds],
+  forcedShotIds: [...reviewStore.forcedShotIds],
+  storyPlan: reviewStore.storyPlan,
+  lockedShotIds: [...reviewStore.lockedShotIds],
+  timeline: reviewStore.timeline,
+}), () => {
+  if (!hydratingGateDraft && workflowStore.currentGate && workflowStore.isPaused) scheduleGateDraftSave()
+}, { deep: true })
+
 onUnmounted(() => {
   stopPolling()
   workflowStore.clear()
@@ -129,6 +146,8 @@ async function syncGate(): Promise<void> {
   reviewStore.activateGate(gate)
   if (!gate) return
 
+  hydratingGateDraft = true
+  gateDraftStatus.value = 'idle'
   try {
     if (gate.gateKey === 'gate_shot_ranking') {
       const payload = await loadArtifactJson('shot_ranking', 'SHOT_RANKING')
@@ -149,8 +168,42 @@ async function syncGate(): Promise<void> {
       if (!artifact) throw new Error('缺少 RENDERED_VIDEO Artifact，无法打开当前审核页')
       reviewStore.setRenderedVideo(artifact.contentUrl)
     }
+    await restoreGateDraft(gate.gateKey)
   } catch (error) {
     uiStore.showToast(error instanceof Error ? error.message : '审核数据加载失败', 'error')
+  } finally {
+    hydratingGateDraft = false
+  }
+}
+
+function gateDraftPayload(): Record<string, unknown> {
+  return { version: 1, gateKey: reviewStore.currentGate?.gateKey, shotScores: reviewStore.shotScores, excludedShotIds: [...reviewStore.excludedShotIds], forcedShotIds: [...reviewStore.forcedShotIds], storyPlan: reviewStore.storyPlan, lockedShotIds: [...reviewStore.lockedShotIds], timeline: reviewStore.timeline }
+}
+
+function scheduleGateDraftSave(): void {
+  const gateKey = workflowStore.currentGate?.gateKey
+  if (!gateKey || !workflowStore.isPaused) return
+  gateDraftStatus.value = 'saving'
+  if (gateDraftTimer) clearTimeout(gateDraftTimer)
+  gateDraftTimer = setTimeout(async () => {
+    try { await saveGateDraft(props.runId, gateKey, gateDraftPayload()); gateDraftStatus.value = 'saved' }
+    catch { gateDraftStatus.value = 'error' }
+  }, 700)
+}
+
+async function restoreGateDraft(gateKey: string): Promise<void> {
+  try {
+    const draft = await getGateDraft<Record<string, any>>(props.runId, gateKey)
+    if (!draft || draft.version !== 1 || draft.gateKey !== gateKey) return
+    if (Array.isArray(draft.shotScores) && draft.shotScores.length) reviewStore.setShotScores(draft.shotScores)
+    if (Array.isArray(draft.excludedShotIds)) reviewStore.setExcludedShotIds(draft.excludedShotIds)
+    if (Array.isArray(draft.forcedShotIds)) reviewStore.setForcedShotIds(draft.forcedShotIds)
+    if (draft.storyPlan) reviewStore.setStoryPlan(draft.storyPlan)
+    if (Array.isArray(draft.lockedShotIds)) reviewStore.setLockedShotIds(draft.lockedShotIds)
+    if (draft.timeline) reviewStore.setTimeline(draft.timeline)
+    gateDraftStatus.value = 'saved'
+  } catch (error) {
+    if (!(error instanceof ApiError && error.status === 404)) gateDraftStatus.value = 'error'
   }
 }
 
@@ -409,6 +462,11 @@ function goBack(): void {
       </div>
 
       <!-- ===== Gate 人在回路审核区 ===== -->
+      <div v-if="workflowStore.isPaused && workflowStore.currentGate" class="mb-3 text-right text-[11px]">
+        <span v-if="gateDraftStatus === 'saving'" class="text-surface-500">正在自动保存当前审核草稿…</span>
+        <span v-else-if="gateDraftStatus === 'saved'" class="text-emerald-400">当前审核草稿已保存</span>
+        <span v-else-if="gateDraftStatus === 'error'" class="text-warning">草稿保存失败，当前页面内容仍保留</span>
+      </div>
 
       <!-- Gate 1: 镜头排序（画廊 / 列表 双视图切换） -->
       <template v-if="workflowStore.isPaused && workflowStore.currentGate?.gateKey === 'gate_shot_ranking'">
