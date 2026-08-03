@@ -71,11 +71,17 @@ public class WorkflowExecutionService {
     private final ApplicationEventPublisher eventPublisher;
     private final ArtifactStorage artifactStorage;
     private WorkflowMetrics workflowMetrics;
+    private com.yizhixianyu.agentvideo.cache.RedisDraftService redisCache;
     private final Map<String, Timer.Sample> taskMetricSamples = new java.util.concurrent.ConcurrentHashMap<>();
 
     @Autowired(required = false)
     public void setWorkflowMetrics(WorkflowMetrics workflowMetrics) {
         this.workflowMetrics = workflowMetrics;
+    }
+
+    @Autowired(required = false)
+    public void setRedisCache(org.springframework.beans.factory.ObjectProvider<com.yizhixianyu.agentvideo.cache.RedisDraftService> provider) {
+        this.redisCache = provider.getIfAvailable();
     }
 
     @Autowired
@@ -593,7 +599,7 @@ public class WorkflowExecutionService {
         var artifactId = "art_" + UUID.randomUUID().toString().replace("-", "");
         var stored = artifactStorage.storeBytes(projectId, "artifacts/" + artifactId, fileName,
             contentBytes, "application/json");
-        return artifactRepository.save(new ArtifactEntity(
+        var saved = artifactRepository.save(new ArtifactEntity(
             artifactId,
             projectId,
             producerTaskRunId,
@@ -601,6 +607,14 @@ public class WorkflowExecutionService {
             stored.storageUri(), stored.mediaType(), stored.sizeBytes(), stored.contentHash(),
             json
         ));
+        invalidateLlmAuditCache(type);
+        return saved;
+    }
+
+    private void invalidateLlmAuditCache(String artifactType) {
+        if (!"STORY_PLAN".equals(artifactType) || redisCache == null) return;
+        try { redisCache.deleteByPrefix("avp:v1:llm:audit:list:"); }
+        catch (RuntimeException ignored) { }
     }
 
     @Transactional
@@ -1033,6 +1047,7 @@ public class WorkflowExecutionService {
                         output.artifactId(), workflow.getProjectId(), task.getId(), output.type(), output.uri(),
                         output.mediaType(), output.size(), output.contentHash(), toJson(output.metadata())
                     ));
+                    invalidateLlmAuditCache(output.type());
                 }
             }
             task.markSucceeded();
