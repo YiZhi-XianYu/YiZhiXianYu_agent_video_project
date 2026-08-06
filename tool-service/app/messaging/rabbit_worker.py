@@ -11,6 +11,7 @@ from prometheus_client import Counter, Gauge
 from app.core.config import settings
 from app.core.models import ToolExecutionRequest
 from app.execution.service import execution_service
+from app.registry.governance import normalize_manifest
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,14 @@ class RabbitTaskWorker:
             if not message.get("taskRunId") or not message.get("workflowRunId"):
                 raise ValueError("workflowRunId and taskRunId are required")
             request = ToolExecutionRequest.model_validate(message["request"])
+            tool = execution_service._registry.get(request.tool, request.version)
+            governance_fn = getattr(execution_service._registry, "governance", None)
+            governance = governance_fn(request.tool, request.version) if callable(governance_fn) else normalize_manifest(tool.manifest())
+            attempt = int(message.get("attempt", 1))
+            if attempt > int(governance["maxAttempts"]):
+                raise ValueError(
+                    f"Tool attempt {attempt} exceeds governance maxAttempts={governance['maxAttempts']} for {request.tool}"
+                )
             # Persist first, claim in Control Plane, then schedule.  Without
             # this hand-off a short task can finish and callback before the
             # MySQL ToolExecution row exists, losing the terminal result.

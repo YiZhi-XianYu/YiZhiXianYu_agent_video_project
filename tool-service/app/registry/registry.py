@@ -17,6 +17,7 @@ from app.tools.audio_transcribe import SpeechTranscribeTool
 from app.tools.vision_vlm_analyze import VisionVlmAnalyzeTool
 from app.tools.audio_source_transcribe import SourceTranscribeTool
 from app.tools.subtitle_compose import SubtitleComposeTool
+from app.registry.governance import normalize_manifest
 
 
 class Tool(Protocol):
@@ -50,8 +51,11 @@ class ToolRegistry:
             raise ValueError(f"Tool not found or disabled: {name}@{version}")
         return tool
 
+    def governance(self, name: str, version: str) -> dict:
+        return normalize_manifest(self.get(name, version).manifest())
+
     def manifests(self) -> list[dict]:
-        return [tool.manifest() for tool in self._tools.values()]
+        return [normalize_manifest(tool.manifest()) for tool in self._tools.values()]
 
 
 registry = ToolRegistry()

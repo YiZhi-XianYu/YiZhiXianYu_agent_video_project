@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from datetime import datetime, timedelta, timezone
 import logging
 import threading
@@ -21,6 +22,7 @@ from app.core.models import (
 )
 from app.execution.store import ExecutionStore
 from app.execution.resources import LIGHT, MEDIA, MODEL, RENDER, ResourcePolicy, resource_group
+from app.registry.governance import normalize_manifest
 from app.registry.registry import ToolRegistry, registry
 from app.storage.oss_storage import artifact_storage
 
@@ -262,6 +264,11 @@ class ExecutionService:
         manifest = tool.manifest() if hasattr(tool, "manifest") else None
         return resource_group(manifest)
 
+    def _governance(self, name: str, version: str) -> dict:
+        tool = self._registry.get(name, version)
+        governance = getattr(self._registry, "governance", None)
+        return governance(name, version) if callable(governance) else normalize_manifest(tool.manifest())
+
     def _run(self, execution_id: str) -> None:
         started_at = datetime.now(timezone.utc)
         group = LIGHT
@@ -287,12 +294,29 @@ class ExecutionService:
             )
             try:
                 tool = self._registry.get(request.tool, request.version)
+                manifest = self._governance(request.tool, request.version)
                 group = self._execution_groups.get(execution_id, LIGHT)
                 local_request = artifact_storage.materialize_request(request)
-                outputs = tool.execute(
+                # Run the tool behind a bounded future. Python cannot forcibly
+                # interrupt a native FFmpeg/model call, but the execution is
+                # still terminalized at the governance deadline and no result
+                # can be published after that point.
+                call_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tool-call")
+                future = call_pool.submit(
+                    tool.execute,
                     local_request,
                     lambda progress: self._report_progress(execution_id, progress),
                 )
+                try:
+                    outputs = future.result(timeout=float(manifest["timeoutSeconds"]))
+                except FutureTimeoutError as exc:
+                    future.cancel()
+                    call_pool.shutdown(wait=False, cancel_futures=True)
+                    raise ToolTimeoutError(
+                        f"Tool exceeded governance timeout ({manifest['timeoutSeconds']}s): {request.tool}"
+                    ) from exc
+                else:
+                    call_pool.shutdown(wait=True)
                 outputs = artifact_storage.publish_outputs(outputs)
                 record = self._update_terminal(
                     request,
@@ -358,7 +382,6 @@ class ExecutionService:
             return explicit_retryable
         # Contract and parameter failures are deterministic; runtime and I/O failures may recover.
         return not isinstance(exc, ValueError)
-
     def _report_progress(self, execution_id: str, progress: int) -> None:
         self._update(execution_id, progress=max(10, min(progress, 99)))
 
@@ -411,6 +434,10 @@ class ExecutionService:
                 delay = max(0.2, settings.callback_retry_backoff_seconds) * (2 ** min(entry.attempts, 8))
                 self._store.mark_callback_failed(entry.execution_id, str(exc), datetime.now(timezone.utc) + timedelta(seconds=delay))
                 CALLBACK_TOTAL.labels("failure").inc()
+
+
+class ToolTimeoutError(TimeoutError):
+    retryable = True
 
 
 execution_service = ExecutionService()

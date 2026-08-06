@@ -14,28 +14,6 @@ import java.util.regex.Pattern;
 public class WorkflowDefinitionValidator {
 
     private static final Pattern NODE_KEY = Pattern.compile("^[a-z][a-z0-9_]{1,99}$");
-    private static final Set<String> KNOWN_TOOLS = Set.of(
-        "video.probe@1.0.0",
-        "video.proxy-generate@1.0.0",
-        "video.shot-detect@1.0.0",
-        "vision.quality-score@1.0.0",
-        "vision.scene-classify@1.0.0",
-        "vision.object-detect@1.0.0",
-        "vision.person-detect@1.0.0",
-        "decision.shot-rank@1.0.0",
-        "planning.story-template@1.0.0",
-        "decision.highlight-select@1.0.0",
-        "timeline.compose@1.0.0",
-        "timeline.compose@1.1.0",
-        "video.render@1.0.0",
-        "video.render@1.1.0",
-        "audio.bgm-select@1.0.0",
-        "audio.speech-transcribe@1.0.0",
-        "audio.source-transcribe@1.0.0",
-        "subtitle.compose@1.0.0",
-        "vision.vlm-analyze@1.0.0"
-    );
-
     public void validate(WorkflowDefinition definition) {
         if (definition == null || definition.nodes() == null || definition.nodes().isEmpty()) {
             throw new IllegalArgumentException("WorkflowDefinition must contain at least one node");
@@ -56,8 +34,15 @@ public class WorkflowDefinitionValidator {
                 throw new IllegalArgumentException("Duplicate workflow node: " + node.nodeKey());
             }
             var toolKey = node.toolName() + "@" + node.toolVersion();
-            if (!KNOWN_TOOLS.contains(toolKey)) {
+            if (!ToolGovernanceCatalog.contains(node.toolName(), node.toolVersion())) {
                 throw new IllegalArgumentException("Unknown or disabled Tool: " + toolKey);
+            }
+            var policy = ToolGovernanceCatalog.policy(node.toolName());
+            if (policy.maxAttempts() < 1 || policy.maxAttempts() > 10) {
+                throw new IllegalArgumentException("Invalid Tool maxAttempts: " + toolKey);
+            }
+            if (!Set.of("LIGHT", "MEDIA", "MODEL", "RENDER").contains(policy.resourceGroup())) {
+                throw new IllegalArgumentException("Invalid Tool resourceGroup: " + toolKey);
             }
             validateParameters(node);
             if (node.scope() == null) {

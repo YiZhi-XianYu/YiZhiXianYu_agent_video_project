@@ -48,8 +48,13 @@ public class DynamicWorkflowPlanner {
         validator.validate(candidate);
         var intent = new WorkflowIntentView("TRAVEL_HIGHLIGHT", String.valueOf(targetDurationMs),
             llmIntent == null ? "已按用户选择生成受控候选流程图" : llmIntent.explanation(), capabilities);
-        var explanations = candidate.nodes().stream().map(node -> new NodeExplanation(node.nodeKey(), chineseLabel(node.nodeKey()), chineseReason(node.nodeKey()), node.toolName() + "@" + node.toolVersion(), OPTIONAL_NODE_KEYS.contains(node.nodeKey()))).toList();
-        return new WorkflowPlanPreview(intent, candidate, defaultDefinition, explanations, capabilities.equals(defaults), expandCanvas(candidate, assetIds), llmIntent != null && llmIntent.llmUsed());
+        var explanations = candidate.nodes().stream().map(node -> {
+            var policy = ToolGovernanceCatalog.policy(node.toolName());
+            return new NodeExplanation(node.nodeKey(), chineseLabel(node.nodeKey()), chineseReason(node.nodeKey()), node.toolName() + "@" + node.toolVersion(), OPTIONAL_NODE_KEYS.contains(node.nodeKey()), policy.automationPolicy(), policy.requiresUserConfirmation(), policy.maxAttempts(), policy.resourceGroup());
+        }).toList();
+        var governanceWarnings = explanations.stream().filter(NodeExplanation::requiresUserConfirmation)
+            .map(item -> item.tool() + " requires user confirmation before execution").toList();
+        return new WorkflowPlanPreview(intent, candidate, defaultDefinition, explanations, capabilities.equals(defaults), expandCanvas(candidate, assetIds), llmIntent != null && llmIntent.llmUsed(), governanceWarnings, !governanceWarnings.isEmpty());
     }
 
     public WorkflowPlanPreview previewWithBlackboard(String userId, String sessionId, ProxyQuality quality,
@@ -186,9 +191,12 @@ public class DynamicWorkflowPlanner {
         public WorkflowCapabilities normalized() { return new WorkflowCapabilities(true, sourceTranscription, subtitles, bgm); }
     }
     public record WorkflowIntentView(String goal, String targetDuration, String explanation, WorkflowCapabilities capabilities) {}
-    public record NodeExplanation(String nodeKey, String label, String reason, String tool, boolean optional) {}
+    public record NodeExplanation(String nodeKey, String label, String reason, String tool, boolean optional,
+                                  String automationPolicy, boolean requiresUserConfirmation, int maxAttempts,
+                                  String resourceGroup) {}
     public record WorkflowPlanPreview(WorkflowIntentView intent, WorkflowDefinition definition, WorkflowDefinition defaultDefinition,
-                                      List<NodeExplanation> explanations, boolean defaultSelected, CanvasGraph canvas, boolean llmUsed) {}
+                                      List<NodeExplanation> explanations, boolean defaultSelected, CanvasGraph canvas, boolean llmUsed,
+                                      List<String> governanceWarnings, boolean requiresConfirmation) {}
     public record CanvasGraph(List<CanvasNode> nodes, List<CanvasEdge> edges) {}
     public record CanvasNode(String id, String logicalNodeKey, String label, String toolName, String toolVersion, String scope,
                              String assetId, Integer assetIndex, int x, int y, boolean optional) {}
