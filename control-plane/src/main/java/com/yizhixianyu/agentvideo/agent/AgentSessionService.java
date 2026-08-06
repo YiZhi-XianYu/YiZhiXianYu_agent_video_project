@@ -54,6 +54,15 @@ public class AgentSessionService {
             null, null, "agent-runtime", null, session.getStatus(), java.util.Map.of("dagVersion", dagVersion));
     }
 
+    @Transactional
+    public void recordPlan(String userId, String sessionId, String turnId, String planId, int dagVersion) {
+        var session = requireOwned(userId, sessionId);
+        session.recordPlan(turnId, planId, dagVersion);
+        if (turnId != null) turns.findById(turnId).ifPresent(turn -> turn.linkPlan(planId));
+        trace.record("SESSION_PLAN_CREATED", null, sessionId, turnId, planId, null, null, null, null,
+            "planner", null, session.getStatus(), java.util.Map.of("dagVersion", dagVersion));
+    }
+
     @Transactional(readOnly = true)
     public AgentSessionEntity requireOwned(String userId, String sessionId) {
         var session = sessions.findById(sessionId).orElseThrow(() -> new IllegalArgumentException("Agent Session not found"));

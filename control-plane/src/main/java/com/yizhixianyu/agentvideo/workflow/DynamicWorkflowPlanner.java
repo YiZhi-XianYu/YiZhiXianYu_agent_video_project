@@ -2,6 +2,7 @@ package com.yizhixianyu.agentvideo.workflow;
 
 import com.yizhixianyu.agentvideo.execution.ProxyQuality;
 import com.yizhixianyu.agentvideo.toolclient.ToolServiceClient;
+import com.yizhixianyu.agentvideo.agent.BlackboardService;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
 
@@ -17,16 +18,18 @@ public class DynamicWorkflowPlanner {
     private final MultiAssetAnalysisTemplate template;
     private final WorkflowDefinitionValidator validator;
     private final ToolServiceClient toolClient;
+    private final BlackboardService blackboard;
 
     @Autowired
-    public DynamicWorkflowPlanner(MultiAssetAnalysisTemplate template, WorkflowDefinitionValidator validator, ToolServiceClient toolClient) {
+    public DynamicWorkflowPlanner(MultiAssetAnalysisTemplate template, WorkflowDefinitionValidator validator, ToolServiceClient toolClient, BlackboardService blackboard) {
         this.template = template;
         this.validator = validator;
         this.toolClient = toolClient;
+        this.blackboard = blackboard;
     }
 
     public DynamicWorkflowPlanner(MultiAssetAnalysisTemplate template, WorkflowDefinitionValidator validator) {
-        this(template, validator, null);
+        this(template, validator, null, null);
     }
 
     public WorkflowPlanPreview preview(ProxyQuality quality, String durationPrompt, boolean autoMode,
@@ -47,6 +50,15 @@ public class DynamicWorkflowPlanner {
             llmIntent == null ? "已按用户选择生成受控候选流程图" : llmIntent.explanation(), capabilities);
         var explanations = candidate.nodes().stream().map(node -> new NodeExplanation(node.nodeKey(), chineseLabel(node.nodeKey()), chineseReason(node.nodeKey()), node.toolName() + "@" + node.toolVersion(), OPTIONAL_NODE_KEYS.contains(node.nodeKey()))).toList();
         return new WorkflowPlanPreview(intent, candidate, defaultDefinition, explanations, capabilities.equals(defaults), expandCanvas(candidate, assetIds), llmIntent != null && llmIntent.llmUsed());
+    }
+
+    public WorkflowPlanPreview previewWithBlackboard(String userId, String sessionId, ProxyQuality quality,
+                                                     String durationPrompt, boolean autoMode,
+                                                     WorkflowCapabilities requested, boolean useDefault,
+                                                     String goal, List<String> assetIds) {
+        var board = blackboard == null ? null : blackboard.get(userId, sessionId);
+        var effectiveGoal = goal == null || goal.isBlank() ? board == null ? "" : board.goal() : goal;
+        return preview(quality, durationPrompt, autoMode, requested, useDefault, effectiveGoal, assetIds);
     }
 
     private ToolServiceClient.WorkflowIntentResponse requestIntent(String goal, int assetCount) {

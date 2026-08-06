@@ -95,3 +95,23 @@ LLM 只生成受约束的候选 Workflow Definition；Tool Policy、DAG Validato
 - Workflow Plan Confirm 请求支持可选 `sessionId`、`turnId`；绑定后，Workflow 创建事务内固化 `sessionId/turnId/planId/traceId`，首个 Rabbit Task 即可继承完整上下文。
 - Session 归属由 `userId + projectId` 校验；未提供 Session 的旧 HTTP API 保持兼容。
 - 下一阶段是 Blackboard 投影：MySQL 作为事实来源，Redis 保存带 revision/TTL 的可重建快照。
+
+## Blackboard（已实现）
+
+- 新增 `BlackboardService`，聚合 Session、Turns、当前 Workflow、Task、Artifact 和 Agent Trace。
+- MySQL 是事实来源；Redis Key 为：
+
+  ```text
+  avp:v1:agent:blackboard:{sessionId}
+  ```
+
+- Redis 快照使用 Hash + JSON payload、revision、TTL 和 Lua CAS；Redis 不可用或快照失效时从 MySQL 重建。
+- API：
+
+  ```text
+  GET  /api/v1/agent-sessions/{sessionId}/blackboard
+  POST /api/v1/agent-sessions/{sessionId}/blackboard/refresh?expectedRevision=
+  ```
+
+- Planner 在请求携带 `sessionId` 时读取受控 Blackboard View；Confirm 后将 Plan 版本回写 Session。旧的无 Session Planner 路径保持兼容。
+- Blackboard 不允许直接写入最终 Workflow/Artifact 状态，避免 Redis 取代 MySQL 事实源。

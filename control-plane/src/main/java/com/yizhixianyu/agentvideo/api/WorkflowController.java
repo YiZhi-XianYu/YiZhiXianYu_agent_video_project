@@ -88,6 +88,12 @@ public class WorkflowController {
         HttpServletRequest servletRequest
     ) {
         requireProject(projectId, servletRequest);
+        var user = authService.requireUser(servletRequest);
+        if (request.sessionId() != null) {
+            agentSessions.requireOwned(user.id(), request.sessionId());
+            return dynamicPlanner.previewWithBlackboard(user.id(), request.sessionId(), request.quality(), request.durationPrompt(),
+                request.autoMode(), request.plannerCapabilities(), request.useDefault(), request.goal(), request.assetIds());
+        }
         return dynamicPlanner.preview(
             request.quality(), request.durationPrompt(), request.autoMode(),
             request.plannerCapabilities(), request.useDefault(), request.goal(), request.assetIds()
@@ -103,18 +109,19 @@ public class WorkflowController {
         HttpServletRequest servletRequest
     ) {
         requireProject(projectId, servletRequest);
-        var preview = dynamicPlanner.preview(
-            request.quality(), request.durationPrompt(), request.autoMode(),
-            request.plannerCapabilities(), request.useDefault(), request.goal(), request.assetIds()
-        );
-        var definition = dynamicPlanner.applyCanvasEdits(preview.definition(), request.removedNodeIds(), request.removedEdgeIds(), request.addedEdges());
         var user = authService.requireUser(servletRequest);
         var session = request.sessionId() == null ? null : agentSessions.requireOwned(user.id(), request.sessionId());
+        var preview = dynamicPlanner.preview(
+            request.quality(), request.durationPrompt(), request.autoMode(), request.plannerCapabilities(), request.useDefault(),
+            session == null ? request.goal() : (request.goal() == null || request.goal().isBlank() ? session.getNaturalLanguageGoal() : request.goal()), request.assetIds()
+        );
+        var definition = dynamicPlanner.applyCanvasEdits(preview.definition(), request.removedNodeIds(), request.removedEdgeIds(), request.addedEdges());
         var planId = session == null ? null : "plan-" + java.util.UUID.randomUUID();
         var traceId = session == null ? null : java.util.UUID.randomUUID().toString();
         var run = admissionCoordinator.createMultiAssetAnalysisRun(projectId, request.assetIds(), request.quality(), request.durationPrompt(), request.autoMode(), definition,
             session == null ? null : new WorkflowExecutionService.AgentContext(session.getId(), request.turnId(), planId, traceId));
         if (session != null) {
+            agentSessions.recordPlan(user.id(), session.getId(), request.turnId(), planId, definition.definitionVersion());
             agentSessions.attachWorkflow(user.id(), session.getId(), request.turnId(), planId, run.getId(), definition.definitionVersion());
         }
         return new RunAccepted(run.getId(), run.getStatus().name(), "/api/v1/workflow-runs/" + run.getId());
