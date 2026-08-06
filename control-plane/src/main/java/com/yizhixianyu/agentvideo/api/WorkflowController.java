@@ -8,6 +8,7 @@ import com.yizhixianyu.agentvideo.execution.ProxyQuality;
 import com.yizhixianyu.agentvideo.project.ProjectService;
 import com.yizhixianyu.agentvideo.workflow.DynamicWorkflowPlanner;
 import com.yizhixianyu.agentvideo.workflow.WorkflowDefinition;
+import com.yizhixianyu.agentvideo.agent.AgentSessionService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -34,6 +35,7 @@ public class WorkflowController {
     private final DynamicWorkflowPlanner dynamicPlanner;
     private final WorkflowAdvanceCoordinator advanceCoordinator;
     private final WorkflowAdmissionCoordinator admissionCoordinator;
+    private final AgentSessionService agentSessions;
 
     public WorkflowController(
         WorkflowExecutionService workflowService,
@@ -41,7 +43,8 @@ public class WorkflowController {
         AuthService authService,
         DynamicWorkflowPlanner dynamicPlanner,
         WorkflowAdvanceCoordinator advanceCoordinator,
-        WorkflowAdmissionCoordinator admissionCoordinator
+        WorkflowAdmissionCoordinator admissionCoordinator,
+        AgentSessionService agentSessions
     ) {
         this.workflowService = workflowService;
         this.projectService = projectService;
@@ -49,6 +52,7 @@ public class WorkflowController {
         this.dynamicPlanner = dynamicPlanner;
         this.advanceCoordinator = advanceCoordinator;
         this.admissionCoordinator = admissionCoordinator;
+        this.agentSessions = agentSessions;
     }
 
     @PostMapping("/projects/{projectId}/video-proxy-runs")
@@ -104,7 +108,15 @@ public class WorkflowController {
             request.plannerCapabilities(), request.useDefault(), request.goal(), request.assetIds()
         );
         var definition = dynamicPlanner.applyCanvasEdits(preview.definition(), request.removedNodeIds(), request.removedEdgeIds(), request.addedEdges());
-        var run = admissionCoordinator.createMultiAssetAnalysisRun(projectId, request.assetIds(), request.quality(), request.durationPrompt(), request.autoMode(), definition);
+        var user = authService.requireUser(servletRequest);
+        var session = request.sessionId() == null ? null : agentSessions.requireOwned(user.id(), request.sessionId());
+        var planId = session == null ? null : "plan-" + java.util.UUID.randomUUID();
+        var traceId = session == null ? null : java.util.UUID.randomUUID().toString();
+        var run = admissionCoordinator.createMultiAssetAnalysisRun(projectId, request.assetIds(), request.quality(), request.durationPrompt(), request.autoMode(), definition,
+            session == null ? null : new WorkflowExecutionService.AgentContext(session.getId(), request.turnId(), planId, traceId));
+        if (session != null) {
+            agentSessions.attachWorkflow(user.id(), session.getId(), request.turnId(), planId, run.getId(), definition.definitionVersion());
+        }
         return new RunAccepted(run.getId(), run.getStatus().name(), "/api/v1/workflow-runs/" + run.getId());
     }
 
@@ -185,6 +197,8 @@ public class WorkflowController {
         @NotNull ProxyQuality quality,
         String durationPrompt,
         String goal,
+        String sessionId,
+        String turnId,
         boolean autoMode,
         WorkflowCapabilitiesRequest capabilities,
         boolean useDefault,
@@ -202,6 +216,8 @@ public class WorkflowController {
         @NotNull ProxyQuality quality,
         String durationPrompt,
         String goal,
+        String sessionId,
+        String turnId,
         boolean autoMode,
         WorkflowCapabilitiesRequest capabilities,
         boolean useDefault,

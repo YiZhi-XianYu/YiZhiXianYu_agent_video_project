@@ -219,6 +219,18 @@ public class WorkflowExecutionService {
     }
 
     @Transactional
+    public WorkflowRunEntity attachAgentContext(String workflowRunId, String sessionId, String turnId,
+                                                String planId, String traceId) {
+        var workflow = workflowRepository.findLockedById(workflowRunId).orElseThrow();
+        workflow.attachAgentContext(sessionId, turnId, planId, traceId);
+        if (agentTrace != null) {
+            agentTrace.record("WORKFLOW_ATTACHED_TO_SESSION", traceId, sessionId, turnId, planId,
+                workflowRunId, null, null, null, "agent-runtime", null, workflow.getStatus().name(), Map.of());
+        }
+        return workflow;
+    }
+
+    @Transactional
     public WorkflowRunEntity createMultiAssetAnalysisRun(
         String projectId,
         List<String> requestedAssetIds,
@@ -226,6 +238,19 @@ public class WorkflowExecutionService {
         String durationPrompt,
         boolean autoMode,
         WorkflowDefinition definition
+    ) {
+        return createMultiAssetAnalysisRun(projectId, requestedAssetIds, proxyQuality, durationPrompt, autoMode, definition, null);
+    }
+
+    @Transactional
+    public WorkflowRunEntity createMultiAssetAnalysisRun(
+        String projectId,
+        List<String> requestedAssetIds,
+        ProxyQuality proxyQuality,
+        String durationPrompt,
+        boolean autoMode,
+        WorkflowDefinition definition,
+        AgentContext agentContext
     ) {
         projectService.getRequired(projectId);
         if (requestedAssetIds == null || requestedAssetIds.isEmpty()) {
@@ -250,6 +275,9 @@ public class WorkflowExecutionService {
         ));
         workflow.setAutoMode(autoMode);
         workflow.setGatesJson(toJson(definition.gates()));
+        if (agentContext != null) {
+            workflow.attachAgentContext(agentContext.sessionId(), agentContext.turnId(), agentContext.planId(), agentContext.traceId());
+        }
         workflow.start();
         if (workflowMetrics != null) workflowMetrics.workflowStarted();
 
@@ -1567,6 +1595,7 @@ public class WorkflowExecutionService {
     }
 
     public record DispatchContext(String idempotencyKey, ToolServiceClient.CreateToolExecutionRequest request, int attempt) {}
+    public record AgentContext(String sessionId, String turnId, String planId, String traceId) {}
     public record WorkflowDispatchRequested(String workflowRunId, String taskRunId) {}
 
     public record WorkflowSnapshot(

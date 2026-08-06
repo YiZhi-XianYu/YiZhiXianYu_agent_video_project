@@ -79,3 +79,19 @@ LLM 只生成受约束的候选 Workflow Definition；Tool Policy、DAG Validato
 
 - Session 查询暂不开放：在 Agent Session 建表并建立 User/Project 归属前，不能仅凭 `sessionId` 做权限判断。
 - `sessionId/turnId/planId` 已加入 Tool TraceContext，当前为空时保持兼容，后续 Agent Session 可直接透传。
+
+## Agent Session（已实现）
+
+- 新增 `agent_sessions` 与 `agent_session_turns`，Session 记录用户、项目、自然语言目标、目标时长、当前计划、Workflow、Gate 和状态。
+- API：
+
+  ```text
+  POST /api/v1/agent-sessions
+  GET  /api/v1/agent-sessions/{sessionId}
+  GET  /api/v1/agent-sessions/{sessionId}/turns
+  POST /api/v1/agent-sessions/{sessionId}/turns
+  ```
+
+- Workflow Plan Confirm 请求支持可选 `sessionId`、`turnId`；绑定后，Workflow 创建事务内固化 `sessionId/turnId/planId/traceId`，首个 Rabbit Task 即可继承完整上下文。
+- Session 归属由 `userId + projectId` 校验；未提供 Session 的旧 HTTP API 保持兼容。
+- 下一阶段是 Blackboard 投影：MySQL 作为事实来源，Redis 保存带 revision/TTL 的可重建快照。

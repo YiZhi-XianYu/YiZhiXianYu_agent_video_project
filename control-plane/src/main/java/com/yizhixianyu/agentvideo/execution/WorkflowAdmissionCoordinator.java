@@ -27,6 +27,13 @@ public class WorkflowAdmissionCoordinator {
     }
 
     public WorkflowRunEntity createMultiAssetAnalysisRun(String projectId, java.util.List<String> assetIds,
+                                                          ProxyQuality quality, String durationPrompt, boolean autoMode,
+                                                          WorkflowDefinition definition,
+                                                          WorkflowExecutionService.AgentContext agentContext) {
+        return create(projectId, () -> workflows.createMultiAssetAnalysisRun(projectId, assetIds, quality, durationPrompt, autoMode, definition, agentContext));
+    }
+
+    public WorkflowRunEntity createMultiAssetAnalysisRun(String projectId, java.util.List<String> assetIds,
                                                           ProxyQuality quality, String durationPrompt, boolean autoMode) {
         return create(projectId, () -> workflows.createMultiAssetAnalysisRun(projectId, assetIds, quality, durationPrompt, autoMode));
     }

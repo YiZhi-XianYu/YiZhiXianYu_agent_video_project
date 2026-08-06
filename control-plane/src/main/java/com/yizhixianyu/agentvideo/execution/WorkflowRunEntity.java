@@ -63,6 +63,15 @@ public class WorkflowRunEntity extends BaseEntity {
     @Column(length = 2000)
     private String errorMessage;
 
+    @Column(name = "agent_session_id", length = 40)
+    private String agentSessionId;
+    @Column(name = "agent_turn_id", length = 80)
+    private String agentTurnId;
+    @Column(name = "agent_plan_id", length = 80)
+    private String agentPlanId;
+    @Column(name = "agent_trace_id", length = 80)
+    private String agentTraceId;
+
     protected WorkflowRunEntity() {
     }
 
@@ -220,4 +229,15 @@ public class WorkflowRunEntity extends BaseEntity {
     public String getErrorMessage() {
         return errorMessage;
     }
+
+    public void attachAgentContext(String sessionId, String turnId, String planId, String traceId) {
+        this.agentSessionId = sessionId;
+        this.agentTurnId = turnId;
+        this.agentPlanId = planId;
+        this.agentTraceId = traceId;
+    }
+    public String getAgentSessionId() { return agentSessionId; }
+    public String getAgentTurnId() { return agentTurnId; }
+    public String getAgentPlanId() { return agentPlanId; }
+    public String getAgentTraceId() { return agentTraceId; }
 }
