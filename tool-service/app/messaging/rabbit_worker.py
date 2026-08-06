@@ -94,7 +94,10 @@ class RabbitTaskWorker:
                     response = client.post(
                         f"{settings.control_plane_base_url.rstrip('/')}/internal/tool-claims/{workflow_id}/{task_id}",
                         json={"idempotencyKey": request.idempotency_key, "executionId": record.execution_id,
-                              "status": record.status, "workerToken": settings.rabbitmq_worker_token},
+                              "status": record.status, "workerToken": settings.rabbitmq_worker_token,
+                              "messageId": message.get("messageId"), "traceId": message.get("traceId"),
+                              "sessionId": request.trace_context.session_id, "turnId": request.trace_context.turn_id,
+                              "planId": request.trace_context.plan_id},
                         headers={"X-Internal-Worker-Token": settings.rabbitmq_worker_token} if settings.rabbitmq_worker_token else {},
                     )
                     response.raise_for_status()

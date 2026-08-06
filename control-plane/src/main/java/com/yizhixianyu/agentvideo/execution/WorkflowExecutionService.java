@@ -74,6 +74,7 @@ public class WorkflowExecutionService {
     private WorkflowMetrics workflowMetrics;
     private com.yizhixianyu.agentvideo.cache.RedisDraftService redisCache;
     private WorkflowConcurrencyService workflowConcurrency;
+    private com.yizhixianyu.agentvideo.trace.AgentTraceService agentTrace;
     private final Map<String, Timer.Sample> taskMetricSamples = new java.util.concurrent.ConcurrentHashMap<>();
 
     @Autowired(required = false)
@@ -89,6 +90,11 @@ public class WorkflowExecutionService {
     @Autowired(required = false)
     public void setWorkflowConcurrency(ObjectProvider<WorkflowConcurrencyService> provider) {
         this.workflowConcurrency = provider.getIfAvailable();
+    }
+
+    @Autowired(required = false)
+    public void setAgentTrace(ObjectProvider<com.yizhixianyu.agentvideo.trace.AgentTraceService> provider) {
+        this.agentTrace = provider.getIfAvailable();
     }
 
 
@@ -840,6 +846,12 @@ public class WorkflowExecutionService {
             publicBaseUrl + "/internal/tool-callbacks",
             new ToolServiceClient.TraceContext(UUID.randomUUID().toString(), workflow.getId(), task.getId())
         );
+        if (agentTrace != null) {
+            agentTrace.record("TASK_DISPATCH_PREPARED", request.traceContext().traceId(), request.traceContext().sessionId(),
+                request.traceContext().turnId(), request.traceContext().planId(), workflowRunId, taskRunId,
+                null, null, "workflow-dispatcher", request.tool(), "DISPATCHING",
+                Map.of("attempt", task.getAttempt(), "idempotencyKey", idempotencyKey));
+        }
         return new DispatchContext(idempotencyKey, request, task.getAttempt());
     }
 
@@ -1016,6 +1028,11 @@ public class WorkflowExecutionService {
                 taskRunId, idempotencyKey, accepted.executionId(), accepted.status()
             ))
         );
+        if (agentTrace != null) {
+            agentTrace.record("TOOL_CLAIMED", null, null, null, null, workflowRunId, taskRunId,
+                null, accepted.executionId(), "rabbit-worker", null, accepted.status(),
+                Map.of("idempotencyKey", idempotencyKey));
+        }
         return true;
     }
 
@@ -1042,6 +1059,11 @@ public class WorkflowExecutionService {
         var execution = toolExecutionRepository.findLockedByExternalExecutionId(response.executionId())
             .orElseThrow(() -> new IllegalArgumentException("Unknown Tool execution: " + response.executionId()));
         if (execution.isTerminal()) {
+            if (agentTrace != null) {
+                agentTrace.record("TOOL_RESULT_DUPLICATE", null, null, null, null, workflowRunId,
+                    execution.getTaskRunId(), null, response.executionId(), "control-plane", response.tool(),
+                    response.status(), Map.of("idempotencyKey", String.valueOf(response.idempotencyKey())));
+            }
             return;
         }
         var task = taskRepository.findLockedById(execution.getTaskRunId()).orElseThrow();
@@ -1053,6 +1075,11 @@ public class WorkflowExecutionService {
         }
         var expectedKey = task.getNodeKey() + ":" + task.getId() + ":" + task.getAttempt();
         if (!expectedKey.equals(execution.getIdempotencyKey())) {
+            if (agentTrace != null) {
+                agentTrace.record("TOOL_RESULT_STALE", null, null, null, null, workflowRunId,
+                    execution.getTaskRunId(), null, response.executionId(), "control-plane", response.tool(),
+                    response.status(), Map.of("idempotencyKey", String.valueOf(response.idempotencyKey())));
+            }
             return;
         }
         execution.updateStatus(response.status());

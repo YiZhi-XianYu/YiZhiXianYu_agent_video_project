@@ -66,3 +66,16 @@ Result Outbox
 ```
 
 LLM 只生成受约束的候选 Workflow Definition；Tool Policy、DAG Validator 和人工 Gate 控制准入，冻结后的 Workflow 不允许运行中无约束 Replan。
+
+## Trace 主干（已实现）
+
+- 新增 `agent_trace_events` 表，统一保存 `traceId/sessionId/turnId/planId/workflowRunId/taskRunId/messageId/executionId`。
+- Rabbit dispatch、Worker claim、重复结果和旧 attempt 结果会产生结构化 Trace Event。
+- 当前安全开放 Workflow 时间线查询：
+
+  ```text
+  GET /api/v1/agent-traces/workflow-runs/{workflowRunId}
+  ```
+
+- Session 查询暂不开放：在 Agent Session 建表并建立 User/Project 归属前，不能仅凭 `sessionId` 做权限判断。
+- `sessionId/turnId/planId` 已加入 Tool TraceContext，当前为空时保持兼容，后续 Agent Session 可直接透传。

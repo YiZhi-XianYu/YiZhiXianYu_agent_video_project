@@ -30,6 +30,9 @@ class ArtifactInput(BaseModel):
 
 class TraceContext(BaseModel):
     trace_id: str | None = Field(default=None, alias="traceId")
+    session_id: str | None = Field(default=None, alias="sessionId")
+    turn_id: str | None = Field(default=None, alias="turnId")
+    plan_id: str | None = Field(default=None, alias="planId")
     workflow_run_id: str | None = Field(default=None, alias="workflowRunId")
     task_run_id: str | None = Field(default=None, alias="taskRunId")
 

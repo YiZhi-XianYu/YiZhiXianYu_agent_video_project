@@ -1,10 +1,12 @@
 package com.yizhixianyu.agentvideo.execution;
 
 import com.yizhixianyu.agentvideo.outbox.OutboxService;
+import com.yizhixianyu.agentvideo.trace.AgentTraceService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Prepares a task and persists its Outbox record in the same database
@@ -15,10 +17,12 @@ import java.util.LinkedHashMap;
 public class RabbitDispatchService {
     private final WorkflowExecutionService workflowService;
     private final OutboxService outboxService;
+    private final AgentTraceService traceService;
 
-    public RabbitDispatchService(WorkflowExecutionService workflowService, OutboxService outboxService) {
+    public RabbitDispatchService(WorkflowExecutionService workflowService, OutboxService outboxService, AgentTraceService traceService) {
         this.workflowService = workflowService;
         this.outboxService = outboxService;
+        this.traceService = traceService;
     }
 
     @Transactional
@@ -34,7 +38,12 @@ public class RabbitDispatchService {
         payload.put("traceId", request.traceContext() == null ? null : request.traceContext().traceId());
         payload.put("resourceGroup", resourceGroup(request.tool()));
         payload.put("request", request);
-        outboxService.enqueueTask(workflowRunId, taskRunId, payload);
+        var outbox = outboxService.enqueueTask(workflowRunId, taskRunId, payload);
+        var trace = request.traceContext();
+        traceService.record("TASK_ENQUEUED", trace == null ? null : trace.traceId(), trace == null ? null : trace.sessionId(),
+            trace == null ? null : trace.turnId(), trace == null ? null : trace.planId(), workflowRunId, taskRunId,
+            outbox.getMessageId(), null, "workflow-dispatcher", request.tool(), "PENDING",
+            Map.of("attempt", context.attempt(), "resourceGroup", resourceGroup(request.tool())));
         return context;
     }
 

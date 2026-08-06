@@ -95,7 +95,11 @@ public class ToolServiceClient {
     public record ArtifactInput(String artifactId, String uri, String fileName) {
     }
 
-    public record TraceContext(String traceId, String workflowRunId, String taskRunId) {
+    public record TraceContext(String traceId, String sessionId, String turnId, String planId,
+                               String workflowRunId, String taskRunId) {
+        public TraceContext(String traceId, String workflowRunId, String taskRunId) {
+            this(traceId, null, null, null, workflowRunId, taskRunId);
+        }
     }
 
     public record CreateToolExecutionRequest(
