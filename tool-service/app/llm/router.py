@@ -51,6 +51,12 @@ TEXT_CAPABILITIES = {"STRUCTURED_INTENT", "STORY_PLAN"}
 VLM_CAPABILITIES = {"SHOT_SEMANTICS"}
 ASR_CAPABILITIES = {"LONG_AUDIO_TRANSCRIPTION"}
 
+MODEL_COST_PER_1K_TOKENS = {
+    "deepseek": 0.0014,
+    "openai": 0.005,
+    "claude": 0.008,
+}
+
 
 @dataclass(frozen=True)
 class RouteDecision:
@@ -63,6 +69,7 @@ class RouteDecision:
     selection_reason: str
     available: bool
     fallback_reason: str | None = None
+    estimated_cost_usd: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -75,6 +82,7 @@ class RouteDecision:
             "selectionReason": self.selection_reason,
             "available": self.available,
             "fallbackReason": self.fallback_reason,
+            "estimatedCostUsd": self.estimated_cost_usd,
         }
 
 
@@ -86,14 +94,14 @@ class ModelRouter:
         route_id = request_id or uuid.uuid4().hex[:12]
         if capability in ASR_CAPABILITIES:
             model = getattr(settings, "asr_model_size", "small") or "small"
-            return RouteDecision(route_id, capability, "whisper-local", model, ("whisper-local",), "CONFIG", "Long audio is handled by the local Whisper runtime", True)
+            return RouteDecision(route_id, capability, "whisper-local", model, ("whisper-local",), "CONFIG", "Long audio is handled by the local Whisper runtime", True, None, estimate_cost_usd("whisper-local"))
         if capability in VLM_CAPABILITIES:
             provider = (getattr(settings, "vlm_provider", "") or settings.llm_provider or "").lower()
             model = getattr(settings, "vlm_model", "") or settings.llm_model or "unknown"
             key = getattr(settings, "vlm_api_key", "") or settings.llm_api_key
             if provider in {"openai", "openai-compatible"} and key and provider_health.available(provider):
-                return RouteDecision(route_id, capability, provider, model, (provider, "clip-local"), "CONFIG", "Vision capability requires an image-capable provider", True)
-            return RouteDecision(route_id, capability, "clip-local", "openai/clip-vit-base-patch32", ("clip-local",), "CAPABILITY_CHECK", "No configured vision-capable provider", True, "VLM_UNAVAILABLE")
+                return RouteDecision(route_id, capability, provider, model, (provider, "clip-local"), "CONFIG", "Vision capability requires an image-capable provider", True, None, estimate_cost_usd(provider))
+            return RouteDecision(route_id, capability, "clip-local", "openai/clip-vit-base-patch32", ("clip-local",), "CAPABILITY_CHECK", "No configured vision-capable provider", True, "VLM_UNAVAILABLE", estimate_cost_usd("clip-local"))
         provider = (settings.llm_provider or "").lower()
         if provider == "deepseek" and not settings.llm_api_key and settings.llm_openai_api_key:
             provider = "openai"
@@ -136,6 +144,17 @@ def record_route_call(capability: str, provider: str, *, latency_ms: int, prompt
         provider_health.success(provider)
     else:
         provider_health.failure(provider, fallback_reason or "MODEL_CALL_FAILED")
+
+
+def estimate_cost_usd(provider: str, prompt_tokens: int = 0, completion_tokens: int = 0,
+                      *, duration_ms: int = 0) -> float:
+    if provider in MODEL_COST_PER_1K_TOKENS:
+        return round((prompt_tokens + completion_tokens) / 1000 * MODEL_COST_PER_1K_TOKENS[provider], 6)
+    if provider == "whisper-local":
+        return round(max(0, duration_ms) / 60000 * 0.002, 6)
+    if provider == "clip-local":
+        return round(max(0, duration_ms) / 1000 * 0.0001, 6)
+    return 0.0
 
 
 def prompt_hash(value: str) -> str:

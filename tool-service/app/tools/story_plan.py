@@ -10,7 +10,7 @@ from typing import Any
 
 from app.llm.audit import LlmAuditRecord
 from app.llm.provider import LlmError, generate_json_with_fallback, get_provider
-from app.llm.router import model_router
+from app.llm.router import model_router, estimate_cost_usd
 from app.llm.prompt import DurationParsingPrompt, StoryProposalPrompt
 from app.core.models import ArtifactDescriptor, ToolExecutionRequest
 from app.tools.artifact_json import matching_inputs, read_json_artifact, write_json_artifact
@@ -128,6 +128,9 @@ class StoryPlanTool:
 
         # deterministic fallback
         if audit.final_source == "DETERMINISTIC_FALLBACK":
+            if audit.quality_status == "UNKNOWN":
+                audit.quality_status = "DETERMINISTIC_VALIDATED"
+                audit.quality_score = 1.0
             logger.warning(
                 "Story Plan [%s] LLM unavailable or validation failed, using deterministic fallback",
                 audit.request_id,
@@ -462,6 +465,7 @@ def _try_llm_story_plan(
         audit.provider = str(route.get("provider", provider.name))
         audit.model = str(route.get("model", getattr(provider, "model", provider.name)))
         audit.fallback_reason = str(route.get("fallbackReason") or audit.fallback_reason)
+        audit.estimated_cost_usd = float(route.get("estimatedCostUsd") or estimate_cost_usd(audit.provider))
     except (LlmError, Exception) as exc:
         logger.warning("LLM call failed [%s]: %s", audit.request_id, exc)
         audit.mark_llm_error(getattr(provider, "name", "router"), getattr(provider, "model", "unknown"))
@@ -470,12 +474,16 @@ def _try_llm_story_plan(
 
     audit.mark_llm_success(provider.name, getattr(provider, "model", provider.name), raw)
     audit.duration_ms = int((time.monotonic() - start) * 1000)
+    audit.quality_status = "VALIDATED"
+    audit.quality_score = 1.0
 
     allowed_ids = {shot["shotId"] for shot in ranking.get("shots", [])}
     errors = LlmStoryProposalValidator.validate(raw, allowed_ids, target_duration, max_shots)
     if errors:
         logger.warning("LLM proposal validation failed [%s]: %s", audit.request_id, errors)
         audit.mark_validation_failed(errors)
+        audit.quality_status = "SCHEMA_INVALID"
+        audit.quality_score = 0.0
         return None
 
     proposal = _compile_llm_proposal(raw, ranking, candidates, target_duration, max_shots)
@@ -484,6 +492,8 @@ def _try_llm_story_plan(
     if errors:
         logger.warning("LLM compiled Story Plan validation failed [%s]: %s", audit.request_id, errors)
         audit.mark_validation_failed(errors)
+        audit.quality_status = "CONTRACT_INVALID"
+        audit.quality_score = 0.0
         return None
 
     proposal["validation"] = {"valid": True, "errors": []}

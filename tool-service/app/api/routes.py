@@ -8,7 +8,7 @@ from app.llm.provider import LlmError, generate_json_with_fallback
 from app.core.models import AcceptedExecution, ToolExecutionRecord, ToolExecutionRequest
 from app.execution.service import execution_service
 from app.registry.registry import registry
-from app.llm.router import model_router, provider_health
+from app.llm.router import model_router, provider_health, ROUTE_CALLS, ROUTE_LATENCY, ROUTE_TOKENS
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from fastapi.responses import Response
 

@@ -30,6 +30,11 @@ class LlmAuditRecord:
     selection_reason: str = ""
     fallback_reason: str = ""
     fallback_chain: list[str] = field(default_factory=list)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    estimated_cost_usd: float = 0.0
+    quality_status: str = "UNKNOWN"
+    quality_score: float | None = None
 
     def start(self) -> str:
         """Record the start time and return a request_id."""
@@ -69,6 +74,11 @@ class LlmAuditRecord:
             "selectionReason": self.selection_reason,
             "fallbackReason": self.fallback_reason,
             "fallbackChain": self.fallback_chain,
+            "promptTokens": self.prompt_tokens,
+            "completionTokens": self.completion_tokens,
+            "estimatedCostUsd": self.estimated_cost_usd,
+            "qualityStatus": self.quality_status,
+            "qualityScore": self.quality_score,
         }
         if self.raw_response is not None:
             result["rawResponse"] = self.raw_response

@@ -24,7 +24,7 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
-from app.llm.router import model_router, record_route_call
+from app.llm.router import model_router, record_route_call, estimate_cost_usd
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +73,9 @@ class LlmProvider(ABC):
         Claude via tool_use) can skip post-hoc JSON parsing validation.
         """
         return False
+
+    def usage(self) -> dict[str, int]:
+        return getattr(self, "_last_usage", {"promptTokens": 0, "completionTokens": 0})
 
     def supports_tool_calling(self) -> bool:
         """Override to True when this provider implements function-calling.
@@ -177,6 +180,8 @@ class DeepSeekProvider(LlmProvider):
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
         body = resp.json()
+        self._last_usage = {"promptTokens": int(body.get("usage", {}).get("prompt_tokens", 0) or 0),
+                            "completionTokens": int(body.get("usage", {}).get("completion_tokens", 0) or 0)}
 
         if "choices" not in body or not body["choices"]:
             raise LlmError("DeepSeek returned no choices")
@@ -305,6 +310,8 @@ class OpenAIProvider(LlmProvider):
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
         body = resp.json()
+        self._last_usage = {"promptTokens": int(body.get("usage", {}).get("prompt_tokens", 0) or 0),
+                            "completionTokens": int(body.get("usage", {}).get("completion_tokens", 0) or 0)}
 
         if "choices" not in body or not body["choices"]:
             raise LlmError("OpenAI returned no choices")
@@ -437,6 +444,8 @@ class ClaudeProvider(LlmProvider):
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
         body = resp.json()
+        self._last_usage = {"promptTokens": int(body.get("usage", {}).get("input_tokens", 0) or 0),
+                            "completionTokens": int(body.get("usage", {}).get("output_tokens", 0) or 0)}
 
         # Extract the tool call input from the response.
         content_blocks = body.get("content", [])
@@ -559,11 +568,16 @@ def generate_json_with_fallback(
         try:
             result = provider.generate_json(system_prompt, user_prompt, json_schema,
                 temperature=temperature, max_tokens=max_tokens, request_id=request_id)
-            record_route_call(capability, provider_name, latency_ms=int((time.monotonic() - started) * 1000), success=True)
+            usage = provider.usage()
+            record_route_call(capability, provider_name, latency_ms=int((time.monotonic() - started) * 1000),
+                prompt_tokens=usage["promptTokens"], completion_tokens=usage["completionTokens"], success=True)
             route["provider"] = provider_name
             route["model"] = getattr(provider, "model", provider_name)
             route["selectedBy"] = "FALLBACK" if provider_name != decision.provider else decision.selected_by
             route["fallbackReason"] = None if provider_name == decision.provider else "PRIMARY_CALL_FAILED"
+            route["promptTokens"] = usage["promptTokens"]
+            route["completionTokens"] = usage["completionTokens"]
+            route["estimatedCostUsd"] = estimate_cost_usd(provider_name, usage["promptTokens"], usage["completionTokens"])
             return result, route, provider
         except Exception as exc:
             last_error = exc

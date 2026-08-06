@@ -90,11 +90,19 @@ public class LlmAuditController {
                 projectNames.getOrDefault(run.getProjectId(), ""), runId, audit.path("provider").asText("none"),
                 audit.path("model").asText("none"), audit.path("durationMs").asLong(0),
                 "LLM".equals(audit.path("finalSource").asText()) ? "ai" : "fallback", errors,
-                audit.path("timestamp").asText(run.getCreatedAt() == null ? null : run.getCreatedAt().toString()));
+                audit.path("timestamp").asText(run.getCreatedAt() == null ? null : run.getCreatedAt().toString()),
+                audit.path("capability").asText("STORY_PLAN"), audit.path("routeId").asText(""),
+                audit.path("promptTokens").asInt(0), audit.path("completionTokens").asInt(0),
+                audit.path("estimatedCostUsd").asDouble(0.0), audit.path("qualityStatus").asText("UNKNOWN"),
+                audit.path("qualityScore").isNumber() ? audit.path("qualityScore").asDouble() : null,
+                audit.path("fallbackReason").asText(""));
         } catch (Exception ignored) { return null; }
     }
 
     public record AuditPage(List<AuditRecord> items, int total, int page, int size) {}
     public record AuditRecord(String id, String projectId, String projectName, String runId, String provider,
-                              String model, long latencyMs, String result, List<String> errors, String createdAt) {}
+                              String model, long latencyMs, String result, List<String> errors, String createdAt,
+                              String capability, String routeId, int promptTokens, int completionTokens,
+                              double estimatedCostUsd, String qualityStatus, Double qualityScore,
+                              String fallbackReason) {}
 }
