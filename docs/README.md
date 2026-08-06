@@ -25,6 +25,8 @@
 
 ## 后续内容
 
+简历与后续迭代路线：[`resume-iteration-roadmap-backend-agent.md`](resume-iteration-roadmap-backend-agent.md)。
+
 后续可增加开发指南、测试策略、演示手册和故障排查文档。
 
 控制面模块说明位于 [`modules/control-plane`](modules/control-plane/README.md)。
