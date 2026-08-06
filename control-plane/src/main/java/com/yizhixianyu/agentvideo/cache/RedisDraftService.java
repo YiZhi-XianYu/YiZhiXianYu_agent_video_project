@@ -59,8 +59,6 @@ public class RedisDraftService {
             List<String> found = new ArrayList<>();
             try (var cursor = connection.scan(ScanOptions.scanOptions().match(prefix + "*").count(100).build())) {
                 cursor.forEachRemaining(key -> found.add(new String(key, java.nio.charset.StandardCharsets.UTF_8)));
-            } catch (java.io.IOException ex) {
-                throw new IllegalStateException("Redis scan failed", ex);
             }
             return found;
         });
