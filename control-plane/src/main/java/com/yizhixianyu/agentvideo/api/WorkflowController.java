@@ -2,6 +2,7 @@ package com.yizhixianyu.agentvideo.api;
 
 import com.yizhixianyu.agentvideo.auth.AuthService;
 import com.yizhixianyu.agentvideo.execution.WorkflowExecutionService;
+import com.yizhixianyu.agentvideo.execution.WorkflowAdvanceCoordinator;
 import com.yizhixianyu.agentvideo.execution.ProxyQuality;
 import com.yizhixianyu.agentvideo.project.ProjectService;
 import com.yizhixianyu.agentvideo.workflow.DynamicWorkflowPlanner;
@@ -30,17 +31,20 @@ public class WorkflowController {
     private final ProjectService projectService;
     private final AuthService authService;
     private final DynamicWorkflowPlanner dynamicPlanner;
+    private final WorkflowAdvanceCoordinator advanceCoordinator;
 
     public WorkflowController(
         WorkflowExecutionService workflowService,
         ProjectService projectService,
         AuthService authService,
-        DynamicWorkflowPlanner dynamicPlanner
+        DynamicWorkflowPlanner dynamicPlanner,
+        WorkflowAdvanceCoordinator advanceCoordinator
     ) {
         this.workflowService = workflowService;
         this.projectService = projectService;
         this.authService = authService;
         this.dynamicPlanner = dynamicPlanner;
+        this.advanceCoordinator = advanceCoordinator;
     }
 
     @PostMapping("/projects/{projectId}/video-proxy-runs")
@@ -121,7 +125,7 @@ public class WorkflowController {
         @PathVariable String workflowRunId, HttpServletRequest request
     ) {
         requireWorkflow(workflowRunId, request);
-        workflowService.continueWorkflow(workflowRunId);
+        advanceCoordinator.continueWorkflow(workflowRunId);
         return workflowService.getSnapshot(workflowRunId);
     }
 

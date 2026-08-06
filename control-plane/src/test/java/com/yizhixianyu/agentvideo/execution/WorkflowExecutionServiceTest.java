@@ -32,6 +32,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.never;
 
 @ExtendWith(MockitoExtension.class)
 class WorkflowExecutionServiceTest {
@@ -61,6 +62,17 @@ class WorkflowExecutionServiceTest {
             objectMapper, template, new WorkflowDefinitionValidator(), "http://control-plane", 3,
             0, 30_000, 10, Path.of("target/test-artifacts"), eventPublisher
         );
+    }
+
+    @Test
+    void recoveryStillUsesDatabaseLockWhenRedisLockIsAbsent() {
+        var workflow = workflow(true);
+        stubWorkflow(workflow, List.of(), List.of());
+
+        service.recoverWorkflow("workflow-1");
+
+        verify(workflowRepository, org.mockito.Mockito.atLeastOnce()).findLockedById("workflow-1");
+        verify(eventPublisher, never()).publishEvent(any());
     }
 
     @Test

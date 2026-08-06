@@ -8,6 +8,8 @@
 - 支持 WebSocket 进度 Pub/Sub。
 - 实现限流、取消信号和性能优化型分布式锁。
 - 提供 Redis 失效后的安全降级策略。
+- Workflow 推进使用短 TTL token lease，释放时通过 Lua 校验 token，避免误删其他请求持有的锁。
+- 继续 Gate、BGM/Story/Timeline 人工确认和恢复扫描均通过协调层获取锁；事务提交完成后才释放锁。
 
 ## 当前已实现
 
@@ -23,4 +25,6 @@
 Redis 不保存唯一权威任务状态，清空 Redis 后系统应能从 MySQL 恢复。
 
 草稿 CAS 只保护临时编辑状态，不替代确认 DAG 时的服务端校验、MySQL 事务和 Workflow 拓扑冻结。
+
+Workflow 锁只减少同一运行实例的并发推进，不替代 Workflow/Task 的数据库行锁。Redis 不可用时请求直接走数据库锁路径；锁竞争返回 HTTP 409 `WORKFLOW_ADVANCE_IN_PROGRESS`，恢复扫描遇到竞争则跳过本轮。
 

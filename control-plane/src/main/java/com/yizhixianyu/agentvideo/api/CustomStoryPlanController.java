@@ -6,6 +6,7 @@ import com.yizhixianyu.agentvideo.artifact.ArtifactRepository;
 import com.yizhixianyu.agentvideo.auth.AuthService;
 import com.yizhixianyu.agentvideo.execution.TaskRunRepository;
 import com.yizhixianyu.agentvideo.execution.WorkflowExecutionService;
+import com.yizhixianyu.agentvideo.execution.WorkflowAdvanceCoordinator;
 import com.yizhixianyu.agentvideo.execution.WorkflowRunRepository;
 import com.yizhixianyu.agentvideo.plan.CustomStoryPlanEntity;
 import com.yizhixianyu.agentvideo.plan.CustomStoryPlanRepository;
@@ -36,6 +37,7 @@ public class CustomStoryPlanController {
 
     private final CustomStoryPlanRepository repository;
     private final WorkflowExecutionService workflowService;
+    private final WorkflowAdvanceCoordinator advanceCoordinator;
     private final WorkflowRunRepository workflowRunRepository;
     private final TaskRunRepository taskRunRepository;
     private final ArtifactRepository artifactRepository;
@@ -46,6 +48,7 @@ public class CustomStoryPlanController {
     public CustomStoryPlanController(
         CustomStoryPlanRepository repository,
         WorkflowExecutionService workflowService,
+        WorkflowAdvanceCoordinator advanceCoordinator,
         WorkflowRunRepository workflowRunRepository,
         TaskRunRepository taskRunRepository,
         ArtifactRepository artifactRepository,
@@ -55,6 +58,7 @@ public class CustomStoryPlanController {
     ) {
         this.repository = repository;
         this.workflowService = workflowService;
+        this.advanceCoordinator = advanceCoordinator;
         this.workflowRunRepository = workflowRunRepository;
         this.taskRunRepository = taskRunRepository;
         this.artifactRepository = artifactRepository;
@@ -119,7 +123,7 @@ public class CustomStoryPlanController {
             .orElseThrow(() -> new IllegalArgumentException("No DRAFT custom story plan found. Save a plan first."));
         var plan = parsePlanJson(draft.getPlanJson());
         validatePlan(plan);
-        var continuedRunId = workflowService.applyCustomStoryPlan(workflowRunId, plan);
+        var continuedRunId = advanceCoordinator.applyCustomStoryPlan(workflowRunId, plan);
         draft.setStatus(STATUS_APPLIED);
         repository.save(draft);
         return new ApplyResponse(continuedRunId, "/api/v1/workflow-runs/" + continuedRunId);
@@ -139,7 +143,7 @@ public class CustomStoryPlanController {
         }
         @SuppressWarnings("unchecked")
         var timelineMap = (Map<String, Object>) timeline;
-        var continuedRunId = workflowService.applyCustomTimeline(workflowRunId, timelineMap);
+        var continuedRunId = advanceCoordinator.applyCustomTimeline(workflowRunId, timelineMap);
         return new ApplyResponse(continuedRunId, "/api/v1/workflow-runs/" + continuedRunId);
     }
 

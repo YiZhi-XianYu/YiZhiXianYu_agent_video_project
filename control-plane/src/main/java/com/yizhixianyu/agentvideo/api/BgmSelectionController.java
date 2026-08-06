@@ -2,6 +2,7 @@ package com.yizhixianyu.agentvideo.api;
 
 import com.yizhixianyu.agentvideo.auth.AuthService;
 import com.yizhixianyu.agentvideo.execution.WorkflowExecutionService;
+import com.yizhixianyu.agentvideo.execution.WorkflowAdvanceCoordinator;
 import com.yizhixianyu.agentvideo.execution.WorkflowRunRepository;
 import com.yizhixianyu.agentvideo.project.ProjectService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -21,17 +22,20 @@ import org.springframework.web.multipart.MultipartFile;
 public class BgmSelectionController {
 
     private final WorkflowExecutionService workflowService;
+    private final WorkflowAdvanceCoordinator advanceCoordinator;
     private final WorkflowRunRepository workflowRepository;
     private final ProjectService projectService;
     private final AuthService authService;
 
     public BgmSelectionController(
         WorkflowExecutionService workflowService,
+        WorkflowAdvanceCoordinator advanceCoordinator,
         WorkflowRunRepository workflowRepository,
         ProjectService projectService,
         AuthService authService
     ) {
         this.workflowService = workflowService;
+        this.advanceCoordinator = advanceCoordinator;
         this.workflowRepository = workflowRepository;
         this.projectService = projectService;
         this.authService = authService;
@@ -45,7 +49,7 @@ public class BgmSelectionController {
         HttpServletRequest servletRequest
     ) {
         requireWorkflow(workflowRunId, servletRequest);
-        var continuedRunId = workflowService.selectBgmCandidate(workflowRunId, request.candidateArtifactId());
+        var continuedRunId = advanceCoordinator.selectBgmCandidate(workflowRunId, request.candidateArtifactId());
         return new ApplyResponse(continuedRunId, "/api/v1/workflow-runs/" + continuedRunId);
     }
 
@@ -56,7 +60,7 @@ public class BgmSelectionController {
         HttpServletRequest servletRequest
     ) {
         requireWorkflow(workflowRunId, servletRequest);
-        var continuedRunId = workflowService.continueWithoutBgm(workflowRunId);
+        var continuedRunId = advanceCoordinator.continueWithoutBgm(workflowRunId);
         return new ApplyResponse(continuedRunId, "/api/v1/workflow-runs/" + continuedRunId);
     }
 
@@ -83,7 +87,7 @@ public class BgmSelectionController {
         HttpServletRequest servletRequest
     ) {
         requireWorkflow(workflowRunId, servletRequest);
-        var continuedRunId = workflowService.refreshBgmCandidates(workflowRunId);
+        var continuedRunId = advanceCoordinator.refreshBgmCandidates(workflowRunId);
         return new ApplyResponse(continuedRunId, "/api/v1/workflow-runs/" + continuedRunId);
     }
 

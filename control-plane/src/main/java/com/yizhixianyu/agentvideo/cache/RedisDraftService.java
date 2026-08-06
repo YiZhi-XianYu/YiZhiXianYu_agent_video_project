@@ -55,7 +55,7 @@ public class RedisDraftService {
     /** Deletes matching keys without issuing the blocking KEYS command. */
     public void deleteByPrefix(String prefix) {
         if (prefix == null || prefix.isBlank()) return;
-        List<String> keys = redis.execute(connection -> {
+        List<String> keys = redis.execute((org.springframework.data.redis.core.RedisCallback<List<String>>) connection -> {
             List<String> found = new ArrayList<>();
             try (var cursor = connection.scan(ScanOptions.scanOptions().match(prefix + "*").count(100).build())) {
                 cursor.forEachRemaining(key -> found.add(new String(key, java.nio.charset.StandardCharsets.UTF_8)));

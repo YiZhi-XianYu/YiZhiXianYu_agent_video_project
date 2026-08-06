@@ -9,12 +9,14 @@ import org.springframework.stereotype.Component;
 public class ToolExecutionPoller {
 
     private final WorkflowExecutionService workflowService;
+    private final WorkflowAdvanceCoordinator advanceCoordinator;
     private final ToolServiceClient toolClient;
     private final boolean rabbitEnabled;
 
-    public ToolExecutionPoller(WorkflowExecutionService workflowService, ToolServiceClient toolClient,
+    public ToolExecutionPoller(WorkflowExecutionService workflowService, WorkflowAdvanceCoordinator advanceCoordinator, ToolServiceClient toolClient,
                                @Value("${app.messaging.rabbit.enabled:false}") boolean rabbitEnabled) {
         this.workflowService = workflowService;
+        this.advanceCoordinator = advanceCoordinator;
         this.toolClient = toolClient;
         this.rabbitEnabled = rabbitEnabled;
     }
@@ -22,7 +24,8 @@ public class ToolExecutionPoller {
     @Scheduled(fixedDelayString = "${app.tool-service.poll-interval-ms}")
     public void poll() {
         for (var workflowRunId : workflowService.findRunningWorkflowIds()) {
-            workflowService.recoverWorkflow(workflowRunId);
+            try { advanceCoordinator.recoverWorkflow(workflowRunId); }
+            catch (com.yizhixianyu.agentvideo.cache.WorkflowLockBusyException ignored) { }
         }
         // Rabbit workers have independent execution stores. Polling the shared
         // tool-service endpoint would create false 404s for non-LIGHT workers;

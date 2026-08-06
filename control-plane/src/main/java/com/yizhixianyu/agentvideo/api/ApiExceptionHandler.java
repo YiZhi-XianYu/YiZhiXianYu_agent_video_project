@@ -5,6 +5,7 @@ import com.yizhixianyu.agentvideo.auth.AuthRateLimitException;
 import com.yizhixianyu.agentvideo.auth.AuthenticationRequiredException;
 import com.yizhixianyu.agentvideo.auth.CsrfProtectionException;
 import com.yizhixianyu.agentvideo.cache.DraftConflictException;
+import com.yizhixianyu.agentvideo.cache.WorkflowLockBusyException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -45,6 +46,11 @@ public class ApiExceptionHandler {
     @ExceptionHandler(DraftConflictException.class)
     public ResponseEntity<ApiError> draftConflict(DraftConflictException exception) {
         return error(HttpStatus.CONFLICT, "DRAFT_REVISION_CONFLICT", exception);
+    }
+
+    @ExceptionHandler(WorkflowLockBusyException.class)
+    public ResponseEntity<ApiError> workflowLockBusy(WorkflowLockBusyException exception) {
+        return error(HttpStatus.CONFLICT, "WORKFLOW_ADVANCE_IN_PROGRESS", exception);
     }
 
     @ExceptionHandler({IllegalArgumentException.class, MethodArgumentNotValidException.class})
