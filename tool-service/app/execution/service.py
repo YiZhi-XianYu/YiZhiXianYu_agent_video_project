@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
-import time
+import threading
 from pathlib import Path
-from threading import Lock
+from threading import Event, Lock, Thread
 from uuid import uuid4
 
 import httpx
@@ -32,6 +32,7 @@ QUEUE_DEPTH = Gauge("agentvideo_tool_queue_depth", "Executions waiting for a wor
 ACTIVE_EXECUTIONS = Gauge("agentvideo_tool_active_executions", "Currently running executions")
 ACTIVE_GROUP = Gauge("agentvideo_tool_active_resource_group", "Active executions by resource group", ["resource_group"])
 CALLBACK_TOTAL = Counter("agentvideo_tool_callbacks_total", "Callback attempts and failures", ["status"])
+CALLBACK_PENDING = Gauge("agentvideo_tool_callback_outbox_pending", "Persisted callback results waiting for delivery")
 
 
 class ExecutionService:
@@ -68,13 +69,14 @@ class ExecutionService:
         self._lock = Lock()
         self._pool: ThreadPoolExecutor | None = None
         self._started = False
+        self._callback_stop = Event()
+        self._callback_thread: Thread | None = None
 
     def metrics_snapshot(self) -> dict[str, int]:
         with self._lock:
             return {"queue_depth": len(self._pending), "active": self._active_total}
 
     def start(self) -> None:
-        callbacks: list[tuple[ToolExecutionRequest, ToolExecutionRecord]] = []
         with self._lock:
             if self._started:
                 return
@@ -83,6 +85,9 @@ class ExecutionService:
                 thread_name_prefix="tool-worker",
             )
             self._started = True
+            self._callback_stop.clear()
+            self._callback_thread = threading.Thread(target=self._callback_loop, name="callback-outbox", daemon=True)
+            self._callback_thread.start()
 
             for request, persisted in self._store.list_recoverable():
                 recovery_count = persisted.recovery_count
@@ -103,8 +108,7 @@ class ExecutionService:
                     })
                     self._requests[record.execution_id] = request
                     self._records[record.execution_id] = record
-                    self._store.update(record)
-                    callbacks.append((request, record))
+                    self._store.update_terminal_and_enqueue_callback(request, record)
                     continue
                 record = persisted.model_copy(update={
                     "status": ExecutionStatus.QUEUED,
@@ -119,8 +123,6 @@ class ExecutionService:
                 self._records[record.execution_id] = record
                 self._store.update(record)
                 self._schedule_locked(record.execution_id)
-        for request, record in callbacks:
-            self._callback(request, record)
 
     def submit(self, request: ToolExecutionRequest, *, schedule: bool = True) -> ToolExecutionRecord:
         self._registry.get(request.tool, request.version)
@@ -201,6 +203,10 @@ class ExecutionService:
             self._pool = None
         if pool is not None:
             pool.shutdown(wait=False, cancel_futures=True)
+        self._callback_stop.set()
+        if self._callback_thread is not None:
+            self._callback_thread.join(timeout=5)
+            self._callback_thread = None
 
     def _schedule_locked(self, execution_id: str) -> None:
         if execution_id in self._scheduled:
@@ -288,7 +294,8 @@ class ExecutionService:
                     lambda progress: self._report_progress(execution_id, progress),
                 )
                 outputs = artifact_storage.publish_outputs(outputs)
-                record = self._update(
+                record = self._update_terminal(
+                    request,
                     execution_id,
                     status=ExecutionStatus.SUCCEEDED,
                     progress=100,
@@ -301,7 +308,8 @@ class ExecutionService:
             except Exception as exc:  # Tool failures are normalized at the service boundary.
                 if 'tool' in locals():
                     self._release_models_if_needed(tool)
-                record = self._update(
+                record = self._update_terminal(
+                    request,
                     execution_id,
                     status=ExecutionStatus.FAILED,
                     progress=100,
@@ -315,7 +323,6 @@ class ExecutionService:
                 )
                 EXECUTIONS_TOTAL.labels("FAILED", group).inc()
             EXECUTION_DURATION.labels(group, request.tool).observe((datetime.now(timezone.utc) - started_at).total_seconds())
-            self._callback(request, record)
         finally:
             with self._lock:
                 self._scheduled.discard(execution_id)
@@ -369,25 +376,41 @@ class ExecutionService:
             self._records[execution_id] = updated
             return updated
 
-    def _callback(self, request: ToolExecutionRequest, record: ToolExecutionRecord) -> None:
-        if request.callback_url is None:
-            return
-        payload = record.model_dump(mode="json", by_alias=True)
-        attempts = max(1, settings.callback_retry_attempts)
-        for attempt in range(attempts):
+    def _update_terminal(self, request: ToolExecutionRequest, execution_id: str, **changes) -> ToolExecutionRecord:
+        with self._lock:
+            record = self._records.get(execution_id)
+            if record is None:
+                persisted = self._store.get(execution_id)
+                if persisted is None:
+                    raise KeyError(f"Tool execution not found: {execution_id}")
+                _, record = persisted
+            updated = record.model_copy(update=changes)
+            self._store.update_terminal_and_enqueue_callback(request, updated)
+            self._records[execution_id] = updated
+            return updated
+
+    def _callback_loop(self) -> None:
+        while not self._callback_stop.is_set():
+            try:
+                self._publish_callbacks_once()
+            except Exception:
+                logger.exception("Callback outbox publisher failed")
+            self._callback_stop.wait(max(0.2, settings.callback_publisher_interval_seconds))
+
+    def _publish_callbacks_once(self) -> None:
+        entries = self._store.list_due_callbacks()
+        CALLBACK_PENDING.set(self._store.count_pending_callbacks())
+        for entry in entries:
             try:
                 with httpx.Client(timeout=settings.callback_timeout_seconds) as client:
-                    client.post(str(request.callback_url), json=payload).raise_for_status()
+                    client.post(entry.callback_url, content=entry.payload_json,
+                                headers={"Content-Type": "application/json"}).raise_for_status()
+                self._store.mark_callback_delivered(entry.execution_id)
                 CALLBACK_TOTAL.labels("success").inc()
-                return
-            except httpx.HTTPError:
-                if attempt + 1 < attempts:
-                    delay = max(0.0, settings.callback_retry_backoff_seconds) * (2 ** attempt)
-                    time.sleep(delay)
-        # In RabbitMQ mode callbacks are the authoritative result path because
-        # each worker owns a separate local execution store.
-        CALLBACK_TOTAL.labels("failure").inc()
-        return
+            except httpx.HTTPError as exc:
+                delay = max(0.2, settings.callback_retry_backoff_seconds) * (2 ** min(entry.attempts, 8))
+                self._store.mark_callback_failed(entry.execution_id, str(exc), datetime.now(timezone.utc) + timedelta(seconds=delay))
+                CALLBACK_TOTAL.labels("failure").inc()
 
 
 execution_service = ExecutionService()

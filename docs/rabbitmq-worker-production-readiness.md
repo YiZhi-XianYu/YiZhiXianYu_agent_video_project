@@ -8,6 +8,8 @@
 - Outbox 增加 pending/failed 积压 Gauge、发布成功/失败 Counter 和发布耗时 Timer，并继续使用 Rabbit Publisher Confirm。
 - 新增 `scripts/rabbit-dlq.ps1`：`list`/`peek` 只读；`replay` 必须显式 `-Force`，默认最多处理 100 条，避免误清空或无限重放。
 - Worker 增加消费、ACK、拒绝入 DLQ、连接状态指标。
+- Worker 结果回传升级为 SQLite Result Outbox：执行终态与待回调记录原子落盘，后台 Publisher 按指数退避持续投递，Worker 重启后继续发送。
+- Control Plane Callback 按 `executionId`、`idempotencyKey` 和当前 Task attempt 收敛；旧 attempt 的迟到结果返回 HTTP 成功但不修改业务状态。
 
 ## 验收矩阵
 
@@ -49,3 +51,18 @@ scripts\rabbit-dlq.ps1 -Action replay -Queue avp.task.dead.v1 -Count 10 -Force
 - `docker compose -f docker-compose.prod.yml config --quiet` 需要正式部署环境提供 `SITE_ADDRESS` 等必需变量；不是代码错误。
 - 最新 Control Plane、Tool Service 和三个 Worker 镜像已完成构建并滚动重启；所有应用容器运行正常。
 - `CLAIM_PENDING` 修复已通过镜像内源码检查，四类队列均保持 1 个 consumer，Ready/Unacked/DLQ 均为 0。
+
+## Agent Runtime 演进边界
+
+RabbitMQ/Worker 是 Agent Runtime 的可靠执行内核。后续按以下顺序叠加：
+
+```text
+Result Outbox
+  → Agent Trace（sessionId/turnId/planId）
+  → Agent Session
+  → Blackboard 投影（MySQL 真相 + Redis 快照）
+  → Tool Governance（Manifest + Policy + Gate）
+  → Model Router（确定性能力路由）
+```
+
+LLM 只生成受约束的候选 Workflow Definition；Tool Policy、DAG Validator 和人工 Gate 控制准入，冻结后的 Workflow 不允许运行中无约束 Replan。

@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     callback_timeout_seconds: float = 10.0
     callback_retry_attempts: int = 3
     callback_retry_backoff_seconds: float = 0.5
+    callback_publisher_interval_seconds: float = 1.0
     execution_max_workers: int = 4
     execution_light_limit: int = 3
     execution_media_limit: int = 2

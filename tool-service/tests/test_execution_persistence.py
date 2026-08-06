@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from threading import Event, Lock
 from time import monotonic, sleep
+from datetime import datetime, timezone
 
 import pytest
 
@@ -153,6 +154,32 @@ def test_claimed_rabbit_execution_runs_only_after_dispatch(tmp_path) -> None:
 
     assert succeeded.status == ExecutionStatus.SUCCEEDED
     assert tool.calls == 1
+
+
+def test_terminal_result_is_persisted_in_callback_outbox(tmp_path) -> None:
+    store_path = tmp_path / "executions.sqlite3"
+    request = make_request("callback:outbox").model_copy(update={"callback_url": "http://127.0.0.1:9/callback"})
+    record = ToolExecutionRecord(
+        executionId="tex-callback-outbox",
+        idempotencyKey=request.idempotency_key,
+        tool=request.tool,
+        version=request.version,
+        status=ExecutionStatus.SUCCEEDED,
+        progress=100,
+    )
+    store = ExecutionStore(store_path)
+    store.create(request, record.model_copy(update={"status": ExecutionStatus.RUNNING}))
+    store.update_terminal_and_enqueue_callback(request, record)
+
+    due = store.list_due_callbacks()
+    assert len(due) == 1
+    assert due[0].execution_id == record.execution_id
+    assert '"status":"SUCCEEDED"' in due[0].payload_json
+
+    store.mark_callback_failed(record.execution_id, "connection refused", datetime.now(timezone.utc))
+    assert store.count_pending_callbacks() == 1
+    store.mark_callback_delivered(record.execution_id)
+    assert store.count_pending_callbacks() == 0
 
 
 @pytest.mark.parametrize("persisted_status", [ExecutionStatus.QUEUED, ExecutionStatus.RUNNING])

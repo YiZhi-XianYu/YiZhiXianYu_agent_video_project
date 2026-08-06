@@ -1044,8 +1044,18 @@ public class WorkflowExecutionService {
         if (execution.isTerminal()) {
             return;
         }
-        execution.updateStatus(response.status());
         var task = taskRepository.findLockedById(execution.getTaskRunId()).orElseThrow();
+        if (response.idempotencyKey() != null && !response.idempotencyKey().isBlank()
+            && !response.idempotencyKey().equals(execution.getIdempotencyKey())) {
+            // A late callback from an older Worker attempt is intentionally
+            // accepted at the HTTP boundary but cannot mutate current state.
+            return;
+        }
+        var expectedKey = task.getNodeKey() + ":" + task.getId() + ":" + task.getAttempt();
+        if (!expectedKey.equals(execution.getIdempotencyKey())) {
+            return;
+        }
+        execution.updateStatus(response.status());
 
         if ("RUNNING".equals(response.status())) {
             task.markRunning();
