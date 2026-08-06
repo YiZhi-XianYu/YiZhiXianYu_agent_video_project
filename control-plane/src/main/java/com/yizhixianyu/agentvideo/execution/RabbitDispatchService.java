@@ -2,6 +2,7 @@ package com.yizhixianyu.agentvideo.execution;
 
 import com.yizhixianyu.agentvideo.outbox.OutboxService;
 import com.yizhixianyu.agentvideo.trace.AgentTraceService;
+import com.yizhixianyu.agentvideo.workflow.ToolGovernanceCatalog;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -40,10 +41,14 @@ public class RabbitDispatchService {
         payload.put("request", request);
         var outbox = outboxService.enqueueTask(workflowRunId, taskRunId, payload);
         var trace = request.traceContext();
+        var governance = ToolGovernanceCatalog.policy(request.tool());
         traceService.record("TASK_ENQUEUED", trace == null ? null : trace.traceId(), trace == null ? null : trace.sessionId(),
             trace == null ? null : trace.turnId(), trace == null ? null : trace.planId(), workflowRunId, taskRunId,
             outbox.getMessageId(), null, "workflow-dispatcher", request.tool(), "PENDING",
-            Map.of("attempt", context.attempt(), "resourceGroup", resourceGroup(request.tool())));
+            Map.of("attempt", context.attempt(), "resourceGroup", resourceGroup(request.tool()),
+                "automationPolicy", governance.automationPolicy(),
+                "maxAttempts", governance.maxAttempts(),
+                "allowFallback", governance.allowFallback()));
         return context;
     }
 

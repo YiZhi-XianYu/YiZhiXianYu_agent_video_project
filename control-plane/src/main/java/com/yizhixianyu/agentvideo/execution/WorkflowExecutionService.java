@@ -17,6 +17,7 @@ import com.yizhixianyu.agentvideo.plan.TimelineComposer;
 import com.yizhixianyu.agentvideo.workflow.MultiAssetAnalysisTemplate;
 import com.yizhixianyu.agentvideo.workflow.WorkflowDefinition;
 import com.yizhixianyu.agentvideo.workflow.WorkflowDefinitionValidator;
+import com.yizhixianyu.agentvideo.workflow.ToolGovernanceCatalog;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.ObjectProvider;
@@ -875,10 +876,17 @@ public class WorkflowExecutionService {
             new ToolServiceClient.TraceContext(UUID.randomUUID().toString(), workflow.getId(), task.getId())
         );
         if (agentTrace != null) {
+            var governance = ToolGovernanceCatalog.policy(request.tool());
             agentTrace.record("TASK_DISPATCH_PREPARED", request.traceContext().traceId(), request.traceContext().sessionId(),
                 request.traceContext().turnId(), request.traceContext().planId(), workflowRunId, taskRunId,
                 null, null, "workflow-dispatcher", request.tool(), "DISPATCHING",
-                Map.of("attempt", task.getAttempt(), "idempotencyKey", idempotencyKey));
+                Map.of("attempt", task.getAttempt(), "idempotencyKey", idempotencyKey,
+                    "automationPolicy", governance.automationPolicy(),
+                    "requiresUserConfirmation", governance.requiresUserConfirmation(),
+                    "sideEffectLevel", governance.sideEffectLevel(),
+                    "resourceGroup", governance.resourceGroup(),
+                    "maxAttempts", governance.maxAttempts(),
+                    "allowFallback", governance.allowFallback()));
         }
         return new DispatchContext(idempotencyKey, request, task.getAttempt());
     }
@@ -1071,7 +1079,7 @@ public class WorkflowExecutionService {
         if (task == null || task.getStatus() != TaskStatus.DISPATCHING) {
             return;
         }
-        if (task.canRetry(maxAttempts)) {
+        if (task.canRetry(effectiveMaxAttempts(task))) {
             task.scheduleRetry(message, nextRetryAt(task), true);
         } else {
             task.markFailed(message);
@@ -1138,7 +1146,7 @@ public class WorkflowExecutionService {
         if ("FAILED".equals(response.status()) || "CANCELLED".equals(response.status())) {
             var message = response.error() == null ? "Tool execution failed" : response.error().message();
             var retryable = response.error() != null && response.error().retryable();
-            if (retryable && task.canRetry(maxAttempts)) {
+            if (retryable && task.canRetry(effectiveMaxAttempts(task))) {
                 task.scheduleRetry(message, nextRetryAt(task), false);
             } else {
                 task.markFailed(message);
@@ -1273,14 +1281,48 @@ public class WorkflowExecutionService {
         ).contains(task.getToolName());
     }
 
+    private WorkflowDefinition.Gate findGovernanceGateForTask(TaskRunEntity task, WorkflowRunEntity workflow) {
+        var policy = ToolGovernanceCatalog.policy(task.getToolName());
+        if (!policy.requiresUserConfirmation() || workflow.hasCompletedGate(governanceGateKey(task))) {
+            return null;
+        }
+        // BGM already has a pre-render selection Gate. Render itself needs a
+        // distinct pre-execution confirmation because its existing review Gate
+        // occurs only after the rendered Artifact has been produced.
+        if (!"video.render".equals(task.getToolName())) {
+            return null;
+        }
+        return new WorkflowDefinition.Gate(
+            governanceGateKey(task), task.getNodeKey(), "工具执行确认", "该工具具有高副作用，确认后才会开始执行。"
+        );
+    }
+
+    private String governanceGateKey(TaskRunEntity task) {
+        return "gate_governance_" + task.getNodeKey();
+    }
+
+    private int effectiveMaxAttempts(TaskRunEntity task) {
+        return Math.max(1, Math.min(maxAttempts, ToolGovernanceCatalog.policy(task.getToolName()).maxAttempts()));
+    }
+
     @Transactional
     public void continueWorkflow(String workflowRunId) {
         var workflow = workflowRepository.findLockedById(workflowRunId).orElseThrow();
         if (workflow.getStatus() != RunStatus.PAUSED) {
             throw new IllegalStateException("Workflow is not paused: " + workflowRunId);
         }
+        var completedGateKey = workflow.getCurrentGateKey();
         workflow.completeCurrentGate();
         workflow.resume();
+        if (agentTrace != null && completedGateKey != null && completedGateKey.startsWith("gate_governance_")) {
+            var nodeKey = completedGateKey.substring("gate_governance_".length());
+            var task = taskRepository.findByWorkflowRunIdOrderByCreatedAtAsc(workflowRunId).stream()
+                .filter(item -> nodeKey.equals(item.getNodeKey())).findFirst().orElse(null);
+            agentTrace.record("TOOL_GOVERNANCE_APPROVED", null, null, null, null,
+                workflowRunId, task == null ? null : task.getId(), null, null, "user-gate",
+                task == null ? null : task.getToolName(), "APPROVED",
+                Map.of("gateKey", completedGateKey, "confirmationSource", "USER"));
+        }
         evaluateWorkflow(workflowRunId);
     }
 
@@ -1333,6 +1375,22 @@ public class WorkflowExecutionService {
                         workflow.pause(gate.gateKey());
                         // The downstream task stays PENDING until the user continues the Gate.
                         // Return now so this transaction commits instead of evaluating the same Gate forever.
+                        return;
+                    }
+                    var governanceGate = findGovernanceGateForTask(task, workflow);
+                    if (governanceGate != null && !workflow.isAutoMode()) {
+                        workflow.pause(governanceGate.gateKey());
+                        if (agentTrace != null) {
+                            var policy = ToolGovernanceCatalog.policy(task.getToolName());
+                            agentTrace.record("TOOL_GOVERNANCE_BLOCKED", null, null, null, null,
+                                workflowRunId, task.getId(), null, null, "workflow-governance",
+                                task.getToolName(), "PAUSED", Map.of(
+                                    "gateKey", governanceGate.gateKey(),
+                                    "automationPolicy", policy.automationPolicy(),
+                                    "requiresUserConfirmation", policy.requiresUserConfirmation(),
+                                    "reason", "Tool requires confirmation before dispatch"
+                                ));
+                        }
                         return;
                     }
                     task.markReady();
@@ -1403,6 +1461,11 @@ public class WorkflowExecutionService {
                     gates.add(new GateDef(g.gateKey(), g.label(), g.description()));
                 }
             }
+        }
+        if (workflow.getCurrentGateKey() != null && workflow.getCurrentGateKey().startsWith("gate_governance_")) {
+            gates.add(new GateDef(
+                workflow.getCurrentGateKey(), "工具执行确认", "该工具具有高副作用，确认后才会开始执行。"
+            ));
         }
         var dependencies = dependencyRepository.findByTaskRunIdIn(taskIds).stream()
 
@@ -1486,7 +1549,7 @@ public class WorkflowExecutionService {
         if (task.getStatus() != TaskStatus.RUNNING && task.getStatus() != TaskStatus.DISPATCHING) {
             return;
         }
-        if (task.canRetry(maxAttempts)) {
+        if (task.canRetry(effectiveMaxAttempts(task))) {
             task.scheduleRetry("Tool execution became unreachable: " + message, nextRetryAt(task), false);
         } else {
             task.markFailed("Tool execution became unreachable: " + message);

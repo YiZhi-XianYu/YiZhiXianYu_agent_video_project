@@ -308,7 +308,10 @@ class WorkflowExecutionServiceTest {
 
         assertThat(runId).isEqualTo("workflow-1");
         assertThat(workflow.hasCompletedGate("gate_bgm_review")).isTrue();
-        assertThat(workflow.getStatus()).isEqualTo(RunStatus.RUNNING);
+        assertThat(workflow.getStatus()).isEqualTo(RunStatus.PAUSED);
+        assertThat(workflow.getCurrentGateKey()).isEqualTo("gate_governance_video_render");
+        assertThat(render.getStatus()).isEqualTo(TaskStatus.PENDING);
+        service.continueWorkflow("workflow-1");
         assertThat(render.getStatus()).isEqualTo(TaskStatus.READY);
         verify(artifactRepository).save(argThat(artifact ->
             "BGM_AUDIO".equals(artifact.getType())
@@ -339,7 +342,8 @@ class WorkflowExecutionServiceTest {
 
         assertThat(runId).isEqualTo("workflow-1");
         assertThat(workflow.hasCompletedGate("gate_bgm_review")).isTrue();
-        assertThat(render.getStatus()).isEqualTo(TaskStatus.READY);
+        assertThat(workflow.getCurrentGateKey()).isEqualTo("gate_governance_video_render");
+        assertThat(render.getStatus()).isEqualTo(TaskStatus.PENDING);
         verify(artifactRepository).save(argThat(artifact ->
             "BGM_SELECTION".equals(artifact.getType())
                 && artifact.getMetadataJson().contains("NONE")
@@ -367,7 +371,8 @@ class WorkflowExecutionServiceTest {
 
         assertThat(runId).isEqualTo("workflow-1");
         assertThat(workflow.hasCompletedGate("gate_bgm_review")).isTrue();
-        assertThat(render.getStatus()).isEqualTo(TaskStatus.READY);
+        assertThat(workflow.getCurrentGateKey()).isEqualTo("gate_governance_video_render");
+        assertThat(render.getStatus()).isEqualTo(TaskStatus.PENDING);
         verify(artifactRepository).save(argThat(artifact ->
             "BGM_AUDIO".equals(artifact.getType())
                 && "bgm".equals(artifact.getProducerTaskRunId())
@@ -402,8 +407,9 @@ class WorkflowExecutionServiceTest {
         var runId = service.uploadBgm("workflow-1", file, "ONCE", 2000);
 
         assertThat(runId).isEqualTo("workflow-1");
-        assertThat(workflow.getStatus()).isEqualTo(RunStatus.RUNNING);
-        assertThat(render.getStatus()).isEqualTo(TaskStatus.READY);
+        assertThat(workflow.getStatus()).isEqualTo(RunStatus.PAUSED);
+        assertThat(workflow.getCurrentGateKey()).isEqualTo("gate_governance_video_render");
+        assertThat(render.getStatus()).isEqualTo(TaskStatus.PENDING);
     }
 
     @Test
