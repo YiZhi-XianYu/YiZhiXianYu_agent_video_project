@@ -50,6 +50,10 @@ def normalize_manifest(raw: dict[str, Any]) -> dict[str, Any]:
     defaults = _defaults(name, group)
     for key, value in defaults.items():
         result.setdefault(key, value)
+    # Tool doubles and older registry entries may omit the execution deadline;
+    # keep the governance normalizer backward-compatible while production
+    # manifests can still provide a tighter per-tool timeout.
+    result.setdefault("timeoutSeconds", 900)
     result.setdefault("inputSchema", {"type": "object"})
     result.setdefault("outputSchema", {"type": "array"})
     result.setdefault("supportsCancellation", False)
@@ -76,4 +80,3 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         raise ValueError(f"maxAttempts must be in [1, 10] for {manifest.get('name')}")
     if bool(manifest.get("requiresUserConfirmation")) and manifest.get("automationPolicy") == "AUTO":
         raise ValueError(f"AUTO tool cannot require user confirmation: {manifest.get('name')}")
-

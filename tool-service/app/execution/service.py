@@ -261,13 +261,27 @@ class ExecutionService:
             self._requests[execution_id] = request
             self._records[execution_id] = record
         tool = self._registry.get(request.tool, request.version)
-        manifest = tool.manifest() if hasattr(tool, "manifest") else None
+        manifest_fn = getattr(tool, "manifest", None)
+        manifest = manifest_fn() if callable(manifest_fn) else None
         return resource_group(manifest)
 
     def _governance(self, name: str, version: str) -> dict:
         tool = self._registry.get(name, version)
         governance = getattr(self._registry, "governance", None)
-        return governance(name, version) if callable(governance) else normalize_manifest(tool.manifest())
+        if callable(governance):
+            return governance(name, version)
+        manifest_fn = getattr(tool, "manifest", None)
+        if not callable(manifest_fn):
+            # Lightweight test/double tools predate Tool Governance and rely
+            # on the service defaults. Keep them executable while production
+            # registry entries still receive full manifest validation.
+            return normalize_manifest({
+                "name": name,
+                "version": version,
+                "resourceGroup": LIGHT,
+                "timeoutSeconds": 900,
+            })
+        return normalize_manifest(manifest_fn())
 
     def _run(self, execution_id: str) -> None:
         started_at = datetime.now(timezone.utc)

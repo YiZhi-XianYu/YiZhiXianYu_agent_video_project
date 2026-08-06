@@ -21,6 +21,7 @@ def metrics() -> Response:
 class WorkflowIntentRequest(BaseModel):
     goal: str = ""
     targetDuration: str | None = None
+    targetDurationMs: int | None = Field(default=None, ge=5000, le=300000)
     assetCount: int = Field(default=1, ge=1, le=20)
     availableCapabilities: list[str] = Field(default_factory=list)
 
@@ -43,11 +44,30 @@ def _parse_duration_ms(text: str) -> int:
         return 30000
     return 30000
 
+
+def _resolve_duration_ms(request: WorkflowIntentRequest) -> int:
+    """Resolve duration using the explicit contract before natural language.
+
+    Agent callers commonly provide a structured ``targetDurationMs`` or
+    ``targetDuration`` separately from the natural-language goal.  Keeping the
+    precedence deterministic prevents the planner from silently changing a
+    user's requested duration back to the 30-second default.
+    """
+    if request.targetDurationMs is not None:
+        return request.targetDurationMs
+    if request.targetDuration:
+        parsed = _parse_duration_ms(request.targetDuration)
+        # An unparseable value returns the default; let goal parsing have a
+        # chance before falling back to the system default.
+        if parsed != 30000 or re.search(r"30\s*(?:秒|秒钟|seconds?|secs?|分钟|分|minutes?|mins?)", request.targetDuration, re.I):
+            return parsed
+    return _parse_duration_ms(request.goal)
+
 @router.post("/workflow-planning/intent", response_model=WorkflowIntentResponse)
 def workflow_intent(request: WorkflowIntentRequest) -> WorkflowIntentResponse:
     allowed = {"sourceTranscription", "subtitles", "bgm", "vlmAnalysis"}
     defaults = {"vlmAnalysis": "REQUIRED", "sourceTranscription": "OPTIONAL", "subtitles": "OPTIONAL", "bgm": "OPTIONAL"}
-    duration_ms = _parse_duration_ms(request.goal)
+    duration_ms = _resolve_duration_ms(request)
     model_route = model_router.route("STRUCTURED_INTENT", request_id=uuid.uuid4().hex[:12]).to_dict()
     if not model_route["available"]:
         return WorkflowIntentResponse(llmUsed=False, capabilities=defaults, pacing="BALANCED", explanation="未配置 LLM，已使用系统默认流程图", targetDurationMs=duration_ms, modelRoute=model_route)

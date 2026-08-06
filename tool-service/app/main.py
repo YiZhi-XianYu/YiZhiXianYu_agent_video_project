@@ -6,13 +6,17 @@ warnings.filterwarnings("ignore", message=".*'alias' attribute.*was provided to 
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api.routes import router
 from app.core.config import settings
 from app.execution.service import execution_service
 from app.messaging.rabbit_worker import rabbit_worker
+
+
+class Utf8JSONResponse(JSONResponse):
+    media_type = "application/json; charset=utf-8"
 
 
 @asynccontextmanager
@@ -29,6 +33,7 @@ app = FastAPI(
     title="Agent Video Pipeline Tool Service",
     version="0.1.0",
     lifespan=lifespan,
+    default_response_class=Utf8JSONResponse,
 )
 app.include_router(router)
 
