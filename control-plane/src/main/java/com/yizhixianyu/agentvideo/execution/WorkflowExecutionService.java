@@ -19,6 +19,7 @@ import com.yizhixianyu.agentvideo.workflow.WorkflowDefinition;
 import com.yizhixianyu.agentvideo.workflow.WorkflowDefinitionValidator;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -72,6 +73,7 @@ public class WorkflowExecutionService {
     private final ArtifactStorage artifactStorage;
     private WorkflowMetrics workflowMetrics;
     private com.yizhixianyu.agentvideo.cache.RedisDraftService redisCache;
+    private WorkflowConcurrencyService workflowConcurrency;
     private final Map<String, Timer.Sample> taskMetricSamples = new java.util.concurrent.ConcurrentHashMap<>();
 
     @Autowired(required = false)
@@ -82,6 +84,11 @@ public class WorkflowExecutionService {
     @Autowired(required = false)
     public void setRedisCache(org.springframework.beans.factory.ObjectProvider<com.yizhixianyu.agentvideo.cache.RedisDraftService> provider) {
         this.redisCache = provider.getIfAvailable();
+    }
+
+    @Autowired(required = false)
+    public void setWorkflowConcurrency(ObjectProvider<WorkflowConcurrencyService> provider) {
+        this.workflowConcurrency = provider.getIfAvailable();
     }
 
 
@@ -1286,6 +1293,11 @@ public class WorkflowExecutionService {
             if (workflowMetrics != null && previousWorkflowStatus != workflow.getStatus()
                 && (workflow.getStatus() == RunStatus.SUCCEEDED || workflow.getStatus() == RunStatus.FAILED)) {
                 workflowMetrics.workflowCompleted(workflow.getStatus() == RunStatus.SUCCEEDED);
+            }
+            if (previousWorkflowStatus != workflow.getStatus()
+                && (workflow.getStatus() == RunStatus.SUCCEEDED || workflow.getStatus() == RunStatus.FAILED)
+                && workflowConcurrency != null) {
+                workflowConcurrency.release(workflow.getProjectId(), workflow.getId());
             }
         } else if (workflow.getStatus() == RunStatus.RUNNING) {
             workflow.start();

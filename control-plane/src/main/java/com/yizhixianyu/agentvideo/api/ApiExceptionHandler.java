@@ -6,6 +6,7 @@ import com.yizhixianyu.agentvideo.auth.AuthenticationRequiredException;
 import com.yizhixianyu.agentvideo.auth.CsrfProtectionException;
 import com.yizhixianyu.agentvideo.cache.DraftConflictException;
 import com.yizhixianyu.agentvideo.cache.WorkflowLockBusyException;
+import com.yizhixianyu.agentvideo.execution.WorkflowConcurrencyLimitException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -51,6 +52,11 @@ public class ApiExceptionHandler {
     @ExceptionHandler(WorkflowLockBusyException.class)
     public ResponseEntity<ApiError> workflowLockBusy(WorkflowLockBusyException exception) {
         return error(HttpStatus.CONFLICT, "WORKFLOW_ADVANCE_IN_PROGRESS", exception);
+    }
+
+    @ExceptionHandler(WorkflowConcurrencyLimitException.class)
+    public ResponseEntity<ApiError> workflowConcurrencyLimit(WorkflowConcurrencyLimitException exception) {
+        return error(HttpStatus.TOO_MANY_REQUESTS, "WORKFLOW_CONCURRENCY_LIMITED", exception);
     }
 
     @ExceptionHandler({IllegalArgumentException.class, MethodArgumentNotValidException.class})

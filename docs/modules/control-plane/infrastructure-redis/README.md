@@ -11,6 +11,7 @@
 - Workflow 推进使用短 TTL token lease，释放时通过 Lua 校验 token，避免误删其他请求持有的锁。
 - 继续 Gate、BGM/Story/Timeline 人工确认和恢复扫描均通过协调层获取锁；事务提交完成后才释放锁。
 - 认证限流使用 Redis Lua `INCR + EXPIRE` 固定窗口计数，IP/邮箱身份先做 SHA-256，Redis 异常时回退到原有进程内限流。
+- Workflow 创建使用用户/项目双维度 ZSET 租约，Lua 原子清理过期租约、检查额度并写入新 Workflow；终态释放租约，Redis 异常时按 MySQL 运行态兜底。
 
 ## 当前已实现
 

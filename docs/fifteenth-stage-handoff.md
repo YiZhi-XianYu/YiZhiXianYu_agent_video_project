@@ -16,6 +16,7 @@
 - Redis best-effort 服务，Redis 不可用时回退到进程内内存。
 - DAG/Gate 草稿已增加 Redis Hash + Lua CAS 版本控制、TTL 返回和 409 冲突语义；前缀清理改为 SCAN，避免请求路径使用 `KEYS`。
 - Workflow 推进入口已增加短 TTL token 锁和协调层，覆盖 Continue、BGM/Story/Timeline Gate 与恢复扫描；Redis 异常回退到数据库行锁，锁竞争返回 409。
+- Workflow 创建已增加用户/项目双维度并发额度，Redis ZSET 租约在终态释放，超限返回 429；Redis 不可用时按 MySQL 运行态回退。
 - DAG 草稿 API：
   - `PUT/GET/DELETE /api/v1/projects/{projectId}/dag-drafts/{draftId}`
 - Gate 草稿 API：

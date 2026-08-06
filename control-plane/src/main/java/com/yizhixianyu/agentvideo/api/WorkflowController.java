@@ -3,6 +3,7 @@ package com.yizhixianyu.agentvideo.api;
 import com.yizhixianyu.agentvideo.auth.AuthService;
 import com.yizhixianyu.agentvideo.execution.WorkflowExecutionService;
 import com.yizhixianyu.agentvideo.execution.WorkflowAdvanceCoordinator;
+import com.yizhixianyu.agentvideo.execution.WorkflowAdmissionCoordinator;
 import com.yizhixianyu.agentvideo.execution.ProxyQuality;
 import com.yizhixianyu.agentvideo.project.ProjectService;
 import com.yizhixianyu.agentvideo.workflow.DynamicWorkflowPlanner;
@@ -32,19 +33,22 @@ public class WorkflowController {
     private final AuthService authService;
     private final DynamicWorkflowPlanner dynamicPlanner;
     private final WorkflowAdvanceCoordinator advanceCoordinator;
+    private final WorkflowAdmissionCoordinator admissionCoordinator;
 
     public WorkflowController(
         WorkflowExecutionService workflowService,
         ProjectService projectService,
         AuthService authService,
         DynamicWorkflowPlanner dynamicPlanner,
-        WorkflowAdvanceCoordinator advanceCoordinator
+        WorkflowAdvanceCoordinator advanceCoordinator,
+        WorkflowAdmissionCoordinator admissionCoordinator
     ) {
         this.workflowService = workflowService;
         this.projectService = projectService;
         this.authService = authService;
         this.dynamicPlanner = dynamicPlanner;
         this.advanceCoordinator = advanceCoordinator;
+        this.admissionCoordinator = admissionCoordinator;
     }
 
     @PostMapping("/projects/{projectId}/video-proxy-runs")
@@ -55,7 +59,7 @@ public class WorkflowController {
         HttpServletRequest servletRequest
     ) {
         requireProject(projectId, servletRequest);
-        var run = workflowService.createVideoProxyRun(projectId, request.assetId(), request.quality());
+        var run = admissionCoordinator.createVideoProxyRun(projectId, request.assetId(), request.quality());
         return new RunAccepted(run.getId(), run.getStatus().name(), "/api/v1/workflow-runs/" + run.getId());
     }
 
@@ -68,9 +72,7 @@ public class WorkflowController {
         HttpServletRequest servletRequest
     ) {
         requireProject(projectId, servletRequest);
-        var run = workflowService.createMultiAssetAnalysisRun(
-            projectId, request.assetIds(), request.quality(), request.durationPrompt(), request.autoMode()
-        );
+        var run = admissionCoordinator.createMultiAssetAnalysisRun(projectId, request.assetIds(), request.quality(), request.durationPrompt(), request.autoMode());
         return new RunAccepted(run.getId(), run.getStatus().name(), "/api/v1/workflow-runs/" + run.getId());
     }
 
@@ -102,9 +104,7 @@ public class WorkflowController {
             request.plannerCapabilities(), request.useDefault(), request.goal(), request.assetIds()
         );
         var definition = dynamicPlanner.applyCanvasEdits(preview.definition(), request.removedNodeIds(), request.removedEdgeIds(), request.addedEdges());
-        var run = workflowService.createMultiAssetAnalysisRun(
-            projectId, request.assetIds(), request.quality(), request.durationPrompt(), request.autoMode(), definition
-        );
+        var run = admissionCoordinator.createMultiAssetAnalysisRun(projectId, request.assetIds(), request.quality(), request.durationPrompt(), request.autoMode(), definition);
         return new RunAccepted(run.getId(), run.getStatus().name(), "/api/v1/workflow-runs/" + run.getId());
     }
 
