@@ -55,7 +55,7 @@ public class LlmAuditController {
         var cacheKey = "avp:v1:llm:audit:list:" + user.id() + ":" + (projectId == null ? "all" : projectId)
             + ":" + page + ":" + size;
         if (redis != null) {
-            String cached = null; try { cached = redis.get(cacheKey); } catch (RuntimeException ignored) { }
+            String cached = null; try { var stored = redis.get(cacheKey); cached = stored == null ? null : stored.json(); } catch (RuntimeException ignored) { }
             if (cached != null) {
                 try { return mapper.readValue(cached, new TypeReference<AuditPage>() {}); } catch (Exception ignored) { }
             }

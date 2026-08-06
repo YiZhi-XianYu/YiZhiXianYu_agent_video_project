@@ -4,6 +4,7 @@ import com.yizhixianyu.agentvideo.auth.AccessDeniedException;
 import com.yizhixianyu.agentvideo.auth.AuthRateLimitException;
 import com.yizhixianyu.agentvideo.auth.AuthenticationRequiredException;
 import com.yizhixianyu.agentvideo.auth.CsrfProtectionException;
+import com.yizhixianyu.agentvideo.cache.DraftConflictException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -39,6 +40,11 @@ public class ApiExceptionHandler {
             .header(HttpHeaders.RETRY_AFTER, Long.toString(exception.getRetryAfterSeconds()))
             .contentType(MediaType.APPLICATION_JSON)
             .body(new ApiError("AUTH_RATE_LIMITED", exception.getMessage(), Instant.now()));
+    }
+
+    @ExceptionHandler(DraftConflictException.class)
+    public ResponseEntity<ApiError> draftConflict(DraftConflictException exception) {
+        return error(HttpStatus.CONFLICT, "DRAFT_REVISION_CONFLICT", exception);
     }
 
     @ExceptionHandler({IllegalArgumentException.class, MethodArgumentNotValidException.class})

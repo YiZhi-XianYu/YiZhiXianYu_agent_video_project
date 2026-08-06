@@ -14,6 +14,7 @@
 - 本地和生产 Compose 的 RabbitMQ、Redis 基础容器。
 - `workers` profile：可独立启动 `tool-worker-media`、`tool-worker-model`、`tool-worker-render`，同一镜像按资源组消费不同队列。
 - Redis best-effort 服务，Redis 不可用时回退到进程内内存。
+- DAG/Gate 草稿已增加 Redis Hash + Lua CAS 版本控制、TTL 返回和 409 冲突语义；前缀清理改为 SCAN，避免请求路径使用 `KEYS`。
 - DAG 草稿 API：
   - `PUT/GET/DELETE /api/v1/projects/{projectId}/dag-drafts/{draftId}`
 - Gate 草稿 API：

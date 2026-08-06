@@ -49,6 +49,8 @@ app:
   redis:
     enabled: ${REDIS_ENABLED:false}
     url: ${REDIS_URL:redis://127.0.0.1:6379}
+    dag-draft-ttl-seconds: ${REDIS_DAG_DRAFT_TTL_SECONDS:86400}
+    gate-draft-ttl-seconds: ${REDIS_GATE_DRAFT_TTL_SECONDS:14400}
   messaging:
     rabbit:
       enabled: ${RABBITMQ_ENABLED:false}

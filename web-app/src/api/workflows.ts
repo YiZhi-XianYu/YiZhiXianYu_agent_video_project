@@ -69,16 +69,16 @@ export async function continueWorkflow(runId: string): Promise<{ workflowRunId: 
    return post<{ workflowRunId: string; status: string; statusUrl: string }>(`/api/v1/workflow-runs/${runId}/continue`)
  }
 
-export async function saveDagDraft(projectId: string, draftId: string, body: unknown): Promise<{ saved: boolean; key: string }> {
-  return put<{ saved: boolean; key: string }>(`/api/v1/projects/${projectId}/dag-drafts/${draftId}`, body)
+export async function saveDagDraft(projectId: string, draftId: string, body: unknown): Promise<{ saved: boolean; key: string; revision: number; ttlSeconds: number }> {
+  return put<{ saved: boolean; key: string; revision: number; ttlSeconds: number }>(`/api/v1/projects/${projectId}/dag-drafts/${draftId}`, body)
 }
 
 export async function getDagDraft<T = unknown>(projectId: string, draftId: string): Promise<T> {
   return get<T>(`/api/v1/projects/${projectId}/dag-drafts/${draftId}`)
 }
 
-export async function saveGateDraft(workflowRunId: string, gateKey: string, body: unknown): Promise<{ saved: boolean; key: string }> {
-  return put<{ saved: boolean; key: string }>(`/api/v1/workflow-runs/${workflowRunId}/gate-drafts/${encodeURIComponent(gateKey)}`, body)
+export async function saveGateDraft(workflowRunId: string, gateKey: string, body: unknown): Promise<{ saved: boolean; key: string; revision: number; ttlSeconds: number }> {
+  return put<{ saved: boolean; key: string; revision: number; ttlSeconds: number }>(`/api/v1/workflow-runs/${workflowRunId}/gate-drafts/${encodeURIComponent(gateKey)}`, body)
 }
 
 export async function getGateDraft<T = unknown>(workflowRunId: string, gateKey: string): Promise<T> {
