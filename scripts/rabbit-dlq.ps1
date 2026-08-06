@@ -6,12 +6,15 @@ param(
     [string]$RabbitContainer = 'avp-rabbitmq',
     [string]$ManagementUrl = 'http://127.0.0.1:15672',
     [string]$Username = $(if ($env:RABBITMQ_DEFAULT_USER) { $env:RABBITMQ_DEFAULT_USER } else { 'agentvideo' }),
-    [string]$Password = $(if ($env:RABBITMQ_DEFAULT_PASS) { $env:RABBITMQ_DEFAULT_PASS } else { 'Xrz-060625' }),
+    [string]$Password = $env:RABBITMQ_DEFAULT_PASS,
     [string]$TaskExchange = 'avp.task.v1',
     [switch]$Force
 )
 
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($Password)) {
+    throw 'Set RABBITMQ_DEFAULT_PASS or pass -Password explicitly.'
+}
 $encodedQueue = [uri]::EscapeDataString($Queue)
 $credential = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$Username`:$Password"))
 $headers = @{ Authorization = "Basic $credential"; 'Content-Type' = 'application/json' }

@@ -104,6 +104,7 @@ class RabbitTaskWorker:
                     else:
                         # Old attempt/token: acknowledge and discard without
                         # executing a stale task.
+                        execution_service.reject_claim(record.execution_id)
                         logger.warning("Discarding stale Rabbit task execution=%s", record.execution_id)
             else:
                 execution_service.dispatch(record.execution_id)

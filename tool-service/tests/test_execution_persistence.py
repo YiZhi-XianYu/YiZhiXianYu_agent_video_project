@@ -116,6 +116,45 @@ def test_idempotency_key_returns_same_execution_after_restart(tmp_path) -> None:
     assert tool.calls == 1
 
 
+def test_unclaimed_rabbit_execution_does_not_run_after_restart(tmp_path) -> None:
+    store_path = tmp_path / "executions.sqlite3"
+    tool = FakeTool()
+    first = ExecutionService(store_path, tool_registry=FakeRegistry(tool), max_workers=1)
+    first.start()
+    pending = first.submit(make_request("claim:pending"), schedule=False)
+    first.shutdown()
+
+    assert pending.status == ExecutionStatus.CLAIM_PENDING
+
+    second = ExecutionService(store_path, tool_registry=FakeRegistry(tool), max_workers=1)
+    second.start()
+    sleep(0.05)
+    restored = second.get(pending.execution_id)
+    second.shutdown()
+
+    assert restored is not None
+    assert restored.status == ExecutionStatus.CLAIM_PENDING
+    assert tool.calls == 0
+
+
+def test_claimed_rabbit_execution_runs_only_after_dispatch(tmp_path) -> None:
+    store_path = tmp_path / "executions.sqlite3"
+    tool = FakeTool()
+    service = ExecutionService(store_path, tool_registry=FakeRegistry(tool), max_workers=1)
+    service.start()
+    pending = service.submit(make_request("claim:accepted"), schedule=False)
+
+    sleep(0.05)
+    assert tool.calls == 0
+
+    service.dispatch(pending.execution_id)
+    succeeded = wait_for_status(service, pending.execution_id, ExecutionStatus.SUCCEEDED)
+    service.shutdown()
+
+    assert succeeded.status == ExecutionStatus.SUCCEEDED
+    assert tool.calls == 1
+
+
 @pytest.mark.parametrize("persisted_status", [ExecutionStatus.QUEUED, ExecutionStatus.RUNNING])
 def test_incomplete_execution_resumes_with_same_id_after_restart(
     tmp_path,

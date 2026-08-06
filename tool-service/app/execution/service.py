@@ -140,7 +140,7 @@ class ExecutionService:
                 idempotencyKey=request.idempotency_key,
                 tool=request.tool,
                 version=request.version,
-                status=ExecutionStatus.QUEUED,
+                status=ExecutionStatus.QUEUED if schedule else ExecutionStatus.CLAIM_PENDING,
             )
             self._store.create(request, record)
             self._records[execution_id] = record
@@ -164,9 +164,22 @@ class ExecutionService:
                 request, record = persisted
                 self._requests[execution_id] = request
                 self._records[execution_id] = record
+            if record.status == ExecutionStatus.CLAIM_PENDING:
+                record = record.model_copy(update={"status": ExecutionStatus.QUEUED})
+                self._store.update(record)
+                self._records[execution_id] = record
             if self._started and record.status in (ExecutionStatus.QUEUED, ExecutionStatus.RUNNING):
                 self._schedule_locked(execution_id)
             return record
+
+    def reject_claim(self, execution_id: str) -> ToolExecutionRecord:
+        """Make a stale, unclaimed Rabbit delivery terminal without executing it."""
+        return self._update(
+            execution_id,
+            status=ExecutionStatus.CANCELLED,
+            progress=100,
+            completed_at=datetime.now(timezone.utc),
+        )
 
     def get(self, execution_id: str) -> ToolExecutionRecord | None:
         with self._lock:

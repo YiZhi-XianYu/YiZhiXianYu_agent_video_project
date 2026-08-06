@@ -12,6 +12,7 @@ def utc_now() -> datetime:
 
 
 class ExecutionStatus(StrEnum):
+    CLAIM_PENDING = "CLAIM_PENDING"
     QUEUED = "QUEUED"
     RUNNING = "RUNNING"
     SUCCEEDED = "SUCCEEDED"

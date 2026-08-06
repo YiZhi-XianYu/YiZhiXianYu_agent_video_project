@@ -47,4 +47,5 @@ scripts\rabbit-dlq.ps1 -Action replay -Queue avp.task.dead.v1 -Count 10 -Force
 - Python `compileall` 已通过；当前环境未安装 `pytest`，Python 单测未执行。
 - 本地 RabbitMQ 队列、DLQ 和多资源组 consumer 已通过 `rabbitmqctl` 只读检查。
 - `docker compose -f docker-compose.prod.yml config --quiet` 需要正式部署环境提供 `SITE_ADDRESS` 等必需变量；不是代码错误。
-- Docker 镜像构建在当前会话 120 秒超时，未覆盖已有运行容器；后续可在空闲窗口单独完成构建和滚动重启演练。
+- 最新 Control Plane、Tool Service 和三个 Worker 镜像已完成构建并滚动重启；所有应用容器运行正常。
+- `CLAIM_PENDING` 修复已通过镜像内源码检查，四类队列均保持 1 个 consumer，Ready/Unacked/DLQ 均为 0。
