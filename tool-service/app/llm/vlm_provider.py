@@ -16,6 +16,7 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+from app.llm.router import record_route_call
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +146,7 @@ class OpenAICompatibleVisionProvider(VlmProvider):
             resp.raise_for_status()
         except httpx.HTTPError as exc:
             elapsed_ms = int((time.monotonic() - start) * 1000)
+            record_route_call("SHOT_SEMANTICS", "openai-compatible-vision", latency_ms=elapsed_ms, success=False, fallback_reason="VLM_CALL_FAILED")
             logger.error("VLM HTTP error [%s] after %dms: %s", request_id, elapsed_ms, exc)
             raise VlmError(f"VLM API call failed: {exc}") from exc
 
@@ -173,6 +175,12 @@ class OpenAICompatibleVisionProvider(VlmProvider):
             elapsed_ms,
             body.get("usage", {}).get("prompt_tokens", "?"),
             body.get("usage", {}).get("completion_tokens", "?"),
+        )
+        record_route_call(
+            "SHOT_SEMANTICS", "openai-compatible-vision", latency_ms=elapsed_ms,
+            prompt_tokens=int(body.get("usage", {}).get("prompt_tokens", 0) or 0),
+            completion_tokens=int(body.get("usage", {}).get("completion_tokens", 0) or 0),
+            success=True,
         )
         return result
 

@@ -24,7 +24,7 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
-from app.llm.router import model_router
+from app.llm.router import model_router, record_route_call
 
 logger = logging.getLogger(__name__)
 
@@ -540,3 +540,42 @@ def get_provider_for_capability(capability: str) -> tuple[LlmProvider, dict[str,
     if decision.provider == "noop" and provider.name != "noop":
         return NoopProvider(), decision.to_dict()
     return provider, decision.to_dict()
+
+
+def generate_json_with_fallback(
+    capability: str, system_prompt: str, user_prompt: str, json_schema: dict[str, Any], *,
+    temperature: float = 0.3, max_tokens: int = 4096, request_id: str = "",
+) -> tuple[dict[str, Any], dict[str, Any], LlmProvider]:
+    decision = model_router.route(capability, request_id=request_id)
+    route = decision.to_dict()
+    last_error: Exception | None = None
+    for provider_name in route["fallbackChain"]:
+        if provider_name in {"noop", "clip-local", "whisper-local"}:
+            continue
+        provider = get_provider() if provider_name == decision.provider else _build_provider(provider_name)
+        if provider.name == "noop":
+            continue
+        started = time.monotonic()
+        try:
+            result = provider.generate_json(system_prompt, user_prompt, json_schema,
+                temperature=temperature, max_tokens=max_tokens, request_id=request_id)
+            record_route_call(capability, provider_name, latency_ms=int((time.monotonic() - started) * 1000), success=True)
+            route["provider"] = provider_name
+            route["model"] = getattr(provider, "model", provider_name)
+            route["selectedBy"] = "FALLBACK" if provider_name != decision.provider else decision.selected_by
+            route["fallbackReason"] = None if provider_name == decision.provider else "PRIMARY_CALL_FAILED"
+            return result, route, provider
+        except Exception as exc:
+            last_error = exc
+            record_route_call(capability, provider_name, latency_ms=int((time.monotonic() - started) * 1000), success=False, fallback_reason="MODEL_CALL_FAILED")
+    raise LlmError(f"All Model Router providers failed for {capability}: {last_error}") from last_error
+
+
+def _build_provider(name: str) -> LlmProvider:
+    if name == "openai" and (settings.llm_openai_api_key or settings.llm_api_key):
+        return OpenAIProvider(settings.llm_openai_api_key or settings.llm_api_key, model=settings.llm_openai_model)
+    if name == "claude" and (settings.llm_anthropic_api_key or settings.llm_api_key):
+        return ClaudeProvider(settings.llm_anthropic_api_key or settings.llm_api_key, model=settings.llm_anthropic_model)
+    if name == "deepseek" and settings.llm_api_key:
+        return DeepSeekProvider(settings.llm_api_key, base_url=settings.llm_base_url, model=settings.llm_model)
+    return NoopProvider()

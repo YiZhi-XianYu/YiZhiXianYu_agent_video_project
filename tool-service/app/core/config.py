@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     vlm_api_key: str = ""
     vlm_base_url: str = ""
     vlm_model: str = ""
+    model_router_failure_threshold: int = 2
+    model_router_cooldown_seconds: float = 30.0
 
     # BGM library
     bgm_library_root: Path = Path("runtime/bgm")

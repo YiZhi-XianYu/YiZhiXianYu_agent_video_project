@@ -4,11 +4,11 @@ from typing import Any
 import re
 import uuid
 
-from app.llm.provider import LlmError, get_provider_for_capability
+from app.llm.provider import LlmError, generate_json_with_fallback
 from app.core.models import AcceptedExecution, ToolExecutionRecord, ToolExecutionRequest
 from app.execution.service import execution_service
 from app.registry.registry import registry
-from app.llm.router import model_router
+from app.llm.router import model_router, provider_health
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from fastapi.responses import Response
 
@@ -48,8 +48,8 @@ def workflow_intent(request: WorkflowIntentRequest) -> WorkflowIntentResponse:
     allowed = {"sourceTranscription", "subtitles", "bgm", "vlmAnalysis"}
     defaults = {"vlmAnalysis": "REQUIRED", "sourceTranscription": "OPTIONAL", "subtitles": "OPTIONAL", "bgm": "OPTIONAL"}
     duration_ms = _parse_duration_ms(request.goal)
-    provider, model_route = get_provider_for_capability("STRUCTURED_INTENT")
-    if provider.name == "noop":
+    model_route = model_router.route("STRUCTURED_INTENT", request_id=uuid.uuid4().hex[:12]).to_dict()
+    if not model_route["available"]:
         return WorkflowIntentResponse(llmUsed=False, capabilities=defaults, pacing="BALANCED", explanation="未配置 LLM，已使用系统默认流程图", targetDurationMs=duration_ms, modelRoute=model_route)
     system = (
         "你是视频工作流规划助手。根据用户自然语言需求，只能返回受控能力意图和时长。"
@@ -65,7 +65,7 @@ def workflow_intent(request: WorkflowIntentRequest) -> WorkflowIntentResponse:
         "targetDurationMs": {"type": "integer", "minimum": 5000, "maximum": 300000}},
         "required": ["capabilities", "pacing", "explanation", "targetDurationMs"]}
     try:
-        result = provider.generate_json(system, str(user), schema, temperature=0.2, max_tokens=512, request_id=uuid.uuid4().hex[:12])
+        result, model_route, _provider = generate_json_with_fallback("STRUCTURED_INTENT", system, str(user), schema, temperature=0.2, max_tokens=512, request_id=uuid.uuid4().hex[:12])
         caps = dict(defaults)
         for key, value in (result.get("capabilities") or {}).items():
             if key in allowed and value in {"REQUIRED", "OPTIONAL", "DISABLED"}:
@@ -96,6 +96,10 @@ def list_model_routes() -> list[dict]:
     return [model_router.route(capability).to_dict() for capability in (
         "STRUCTURED_INTENT", "STORY_PLAN", "SHOT_SEMANTICS", "LONG_AUDIO_TRANSCRIPTION"
     )]
+
+@router.get("/model-provider-health")
+def model_provider_health() -> dict:
+    return provider_health.snapshot()
 
 @router.post("/tool-executions", response_model=AcceptedExecution, response_model_by_alias=True, status_code=status.HTTP_202_ACCEPTED)
 def create_execution(request: ToolExecutionRequest) -> AcceptedExecution:

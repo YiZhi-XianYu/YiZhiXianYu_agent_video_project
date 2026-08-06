@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from app.llm.audit import LlmAuditRecord
-from app.llm.provider import LlmError, get_provider_for_capability
+from app.llm.provider import LlmError, generate_json_with_fallback, get_provider
+from app.llm.router import model_router
 from app.llm.prompt import DurationParsingPrompt, StoryProposalPrompt
 from app.core.models import ArtifactDescriptor, ToolExecutionRequest
 from app.tools.artifact_json import matching_inputs, read_json_artifact, write_json_artifact
@@ -101,7 +102,7 @@ class StoryPlanTool:
 
         semantic_by_shot = _build_semantic_map(request.inputs)
 
-        provider, route = get_provider_for_capability("STORY_PLAN")
+        route = model_router.route("STORY_PLAN", request_id=uuid.uuid4().hex[:12]).to_dict()
         audit = LlmAuditRecord(
             provider="none",
             model="none",
@@ -116,11 +117,10 @@ class StoryPlanTool:
         )
         if (
             min(len(candidates), max_shots) >= len(STORY_BEATS)
-            and provider is not None
-            and provider.name != "noop"
+            and route.get("available", False)
         ):
             llm_result = _try_llm_story_plan(
-                provider, ranking, candidates, target_duration, max_shots, audit, semantic_by_shot
+                ranking, candidates, target_duration, max_shots, audit, semantic_by_shot
             )
             if llm_result is not None:
                 llm_result["llmAudit"] = audit.to_dict()
@@ -428,7 +428,6 @@ class LlmStoryProposalValidator:
 
 
 def _try_llm_story_plan(
-    provider: Any,
     ranking: dict[str, Any],
     candidates: list[dict[str, Any]],
     target_duration: int,
@@ -439,6 +438,7 @@ def _try_llm_story_plan(
     """Attempt LLM story proposal. Returns None if LLM fails or validation fails."""
     audit.start()
     start = time.monotonic()
+    provider = None
 
     try:
         asset_count = len({shot.get("sourceAssetId") for shot in candidates})
@@ -454,13 +454,17 @@ def _try_llm_story_plan(
         # their own response_format (json_object).
         proposal_schema = _load_proposal_schema()
 
-        raw = provider.generate_json(
-            system, user, proposal_schema,
+        raw, route, provider = generate_json_with_fallback(
+            "STORY_PLAN", system, user, proposal_schema,
             temperature=0.3, request_id=audit.request_id,
         )
+        audit.route_id = str(route.get("routeId", audit.route_id))
+        audit.provider = str(route.get("provider", provider.name))
+        audit.model = str(route.get("model", getattr(provider, "model", provider.name)))
+        audit.fallback_reason = str(route.get("fallbackReason") or audit.fallback_reason)
     except (LlmError, Exception) as exc:
         logger.warning("LLM call failed [%s]: %s", audit.request_id, exc)
-        audit.mark_llm_error(provider.name, getattr(provider, "model", provider.name))
+        audit.mark_llm_error(getattr(provider, "name", "router"), getattr(provider, "model", "unknown"))
         audit.duration_ms = int((time.monotonic() - start) * 1000)
         return None
 
