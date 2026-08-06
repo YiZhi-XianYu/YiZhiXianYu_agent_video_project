@@ -840,7 +840,7 @@ public class WorkflowExecutionService {
             publicBaseUrl + "/internal/tool-callbacks",
             new ToolServiceClient.TraceContext(UUID.randomUUID().toString(), workflow.getId(), task.getId())
         );
-        return new DispatchContext(idempotencyKey, request);
+        return new DispatchContext(idempotencyKey, request, task.getAttempt());
     }
 
     private Map<String, ToolServiceClient.ArtifactInput> resolveInputs(TaskRunEntity task, AssetEntity asset) {
@@ -988,7 +988,7 @@ public class WorkflowExecutionService {
     }
 
     @Transactional
-    public void markAccepted(
+    public boolean markAccepted(
         String workflowRunId,
         String taskRunId,
         String idempotencyKey,
@@ -1000,16 +1000,23 @@ public class WorkflowExecutionService {
         workflowRepository.findLockedById(workflowRunId).orElseThrow();
         var task = taskRepository.findLockedById(taskRunId).orElseThrow();
         if (task.getStatus() != TaskStatus.DISPATCHING && task.getStatus() != TaskStatus.RUNNING) {
-            return;
+            return false;
+        }
+        var expectedKey = task.getNodeKey() + ":" + task.getId() + ":" + task.getAttempt();
+        if (!expectedKey.equals(idempotencyKey)) {
+            // A late delivery from an older attempt must be acknowledged by
+            // the broker but must never create or replace a business execution.
+            return false;
         }
         task.markRunning();
         toolExecutionRepository.findByTaskRunIdAndIdempotencyKey(taskRunId, idempotencyKey)
             .ifPresentOrElse(
                 execution -> execution.replaceAcceptance(accepted.executionId(), accepted.status()),
-                () -> toolExecutionRepository.save(new ToolExecutionEntity(
-                    taskRunId, idempotencyKey, accepted.executionId(), accepted.status()
-                ))
-            );
+            () -> toolExecutionRepository.save(new ToolExecutionEntity(
+                taskRunId, idempotencyKey, accepted.executionId(), accepted.status()
+            ))
+        );
+        return true;
     }
 
     @Transactional
@@ -1522,7 +1529,7 @@ public class WorkflowExecutionService {
         return current.getMessage() == null ? current.getClass().getSimpleName() : current.getMessage();
     }
 
-    public record DispatchContext(String idempotencyKey, ToolServiceClient.CreateToolExecutionRequest request) {}
+    public record DispatchContext(String idempotencyKey, ToolServiceClient.CreateToolExecutionRequest request, int attempt) {}
     public record WorkflowDispatchRequested(String workflowRunId, String taskRunId) {}
 
     public record WorkflowSnapshot(

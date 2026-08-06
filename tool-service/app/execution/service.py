@@ -122,7 +122,7 @@ class ExecutionService:
         for request, record in callbacks:
             self._callback(request, record)
 
-    def submit(self, request: ToolExecutionRequest) -> ToolExecutionRecord:
+    def submit(self, request: ToolExecutionRequest, *, schedule: bool = True) -> ToolExecutionRecord:
         self._registry.get(request.tool, request.version)
         with self._lock:
             existing = self._store.get_by_idempotency_key(request.idempotency_key)
@@ -130,7 +130,7 @@ class ExecutionService:
                 persisted_request, record = existing
                 self._requests[record.execution_id] = persisted_request
                 self._records[record.execution_id] = record
-                if self._started and record.status in (ExecutionStatus.QUEUED, ExecutionStatus.RUNNING):
+                if schedule and self._started and record.status in (ExecutionStatus.QUEUED, ExecutionStatus.RUNNING):
                     self._schedule_locked(record.execution_id)
                 return record
 
@@ -145,7 +145,26 @@ class ExecutionService:
             self._store.create(request, record)
             self._records[execution_id] = record
             self._requests[execution_id] = request
-            if self._started:
+            if schedule and self._started:
+                self._schedule_locked(execution_id)
+            return record
+
+    def dispatch(self, execution_id: str) -> ToolExecutionRecord:
+        """Schedule a persisted execution after its external claim succeeds.
+
+        Rabbit workers use this two-phase hand-off so a very short execution
+        cannot callback before Control Plane has recorded the acceptance.
+        """
+        with self._lock:
+            record = self._records.get(execution_id)
+            if record is None:
+                persisted = self._store.get(execution_id)
+                if persisted is None:
+                    raise KeyError(f"Tool execution not found: {execution_id}")
+                request, record = persisted
+                self._requests[execution_id] = request
+                self._records[execution_id] = record
+            if self._started and record.status in (ExecutionStatus.QUEUED, ExecutionStatus.RUNNING):
                 self._schedule_locked(execution_id)
             return record
 

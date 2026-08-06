@@ -30,6 +30,8 @@ public class RabbitDispatchService {
         payload.put("schemaVersion", "1.0");
         payload.put("workflowRunId", workflowRunId);
         payload.put("taskRunId", taskRunId);
+        payload.put("attempt", context.attempt());
+        payload.put("traceId", request.traceContext() == null ? null : request.traceContext().traceId());
         payload.put("resourceGroup", resourceGroup(request.tool()));
         payload.put("request", request);
         outboxService.enqueueTask(workflowRunId, taskRunId, payload);

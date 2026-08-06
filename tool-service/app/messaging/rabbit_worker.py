@@ -6,12 +6,18 @@ import threading
 
 import pika
 import httpx
+from prometheus_client import Counter, Gauge
 
 from app.core.config import settings
 from app.core.models import ToolExecutionRequest
 from app.execution.service import execution_service
 
 logger = logging.getLogger(__name__)
+
+RABBIT_CONSUMED_TOTAL = Counter("agentvideo_rabbit_messages_consumed_total", "Rabbit task deliveries", ["resource_group"])
+RABBIT_ACK_TOTAL = Counter("agentvideo_rabbit_messages_ack_total", "Rabbit task acknowledgements", ["resource_group"])
+RABBIT_REJECTED_TOTAL = Counter("agentvideo_rabbit_messages_rejected_total", "Rabbit task messages sent to DLQ", ["resource_group"])
+RABBIT_CONNECTED = Gauge("agentvideo_rabbit_worker_connected", "Rabbit worker connection state", ["resource_group"])
 
 
 class RabbitTaskWorker:
@@ -46,6 +52,7 @@ class RabbitTaskWorker:
                 )
                 connection = pika.BlockingConnection(parameters)
                 self._connection = connection
+                RABBIT_CONNECTED.labels(settings.worker_resource_group).set(1)
                 channel = connection.channel()
                 channel.basic_qos(prefetch_count=max(1, settings.rabbitmq_prefetch))
                 channel.queue_declare(
@@ -61,17 +68,27 @@ class RabbitTaskWorker:
                 logger.exception("Rabbit worker connection failed; retrying")
                 self._stop.wait(5)
             finally:
+                RABBIT_CONNECTED.labels(settings.worker_resource_group).set(0)
                 self._connection = None
 
     def _consume(self, channel, method, properties, body: bytes) -> None:
         try:
+            group = settings.worker_resource_group
+            RABBIT_CONSUMED_TOTAL.labels(group).inc()
             message = json.loads(body.decode("utf-8"))
             if message.get("schemaVersion") != "1.0":
                 raise ValueError("Unsupported task message schema")
+            if not message.get("messageId"):
+                raise ValueError("Task messageId is required")
+            if not message.get("taskRunId") or not message.get("workflowRunId"):
+                raise ValueError("workflowRunId and taskRunId are required")
             request = ToolExecutionRequest.model_validate(message["request"])
-            record = execution_service.submit(request)
-            workflow_id = message.get("workflowRunId")
-            task_id = message.get("taskRunId")
+            # Persist first, claim in Control Plane, then schedule.  Without
+            # this hand-off a short task can finish and callback before the
+            # MySQL ToolExecution row exists, losing the terminal result.
+            record = execution_service.submit(request, schedule=False)
+            workflow_id = message["workflowRunId"]
+            task_id = message["taskRunId"]
             if workflow_id and task_id:
                 with httpx.Client(timeout=10) as client:
                     response = client.post(
@@ -81,11 +98,22 @@ class RabbitTaskWorker:
                         headers={"X-Internal-Worker-Token": settings.rabbitmq_worker_token} if settings.rabbitmq_worker_token else {},
                     )
                     response.raise_for_status()
+                    claim = response.json() if response.content else {"accepted": True}
+                    if claim.get("accepted", True):
+                        execution_service.dispatch(record.execution_id)
+                    else:
+                        # Old attempt/token: acknowledge and discard without
+                        # executing a stale task.
+                        logger.warning("Discarding stale Rabbit task execution=%s", record.execution_id)
+            else:
+                execution_service.dispatch(record.execution_id)
             channel.basic_ack(delivery_tag=method.delivery_tag)
+            RABBIT_ACK_TOTAL.labels(group).inc()
         except Exception:
             logger.exception("Rabbit task message rejected")
             # Poison messages go to the broker DLQ; they must not spin forever.
             channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+            RABBIT_REJECTED_TOTAL.labels(settings.worker_resource_group).inc()
 
 
 rabbit_worker = RabbitTaskWorker()

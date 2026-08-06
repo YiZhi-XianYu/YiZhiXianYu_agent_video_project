@@ -19,15 +19,17 @@ public class ToolClaimController {
     }
 
     @PostMapping("/{workflowRunId}/{taskRunId}")
-    public void claim(@PathVariable String workflowRunId, @PathVariable String taskRunId,
+    public ClaimResponse claim(@PathVariable String workflowRunId, @PathVariable String taskRunId,
                       @RequestBody ClaimRequest request,
                       @RequestHeader(value = "X-Internal-Worker-Token", required = false) String headerToken) {
         var suppliedToken = headerToken == null || headerToken.isBlank() ? request.workerToken() : headerToken;
         if (!workerToken.isBlank() && !workerToken.equals(suppliedToken)) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid worker token");
         }
-        workflowService.markAccepted(workflowRunId, taskRunId, request.idempotencyKey(),
+        var accepted = workflowService.markAccepted(workflowRunId, taskRunId, request.idempotencyKey(),
             new ToolServiceClient.AcceptedExecution(request.executionId(), request.status(), null));
+        return new ClaimResponse(accepted);
     }
     public record ClaimRequest(String idempotencyKey, String executionId, String status, String workerToken) {}
+    public record ClaimResponse(boolean accepted) {}
 }
