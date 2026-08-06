@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from app.llm.audit import LlmAuditRecord
-from app.llm.provider import LlmError, get_provider
+from app.llm.provider import LlmError, get_provider_for_capability
 from app.llm.prompt import DurationParsingPrompt, StoryProposalPrompt
 from app.core.models import ArtifactDescriptor, ToolExecutionRequest
 from app.tools.artifact_json import matching_inputs, read_json_artifact, write_json_artifact
@@ -101,15 +101,19 @@ class StoryPlanTool:
 
         semantic_by_shot = _build_semantic_map(request.inputs)
 
+        provider, route = get_provider_for_capability("STORY_PLAN")
         audit = LlmAuditRecord(
             provider="none",
             model="none",
             temperature=0.3,
             request_id=uuid.uuid4().hex[:12],
             input_candidate_count=len(candidates),
+            route_id=str(route.get("routeId", "")),
+            capability=str(route.get("capability", "STORY_PLAN")),
+            selection_reason=str(route.get("selectionReason", "")),
+            fallback_reason=str(route.get("fallbackReason") or ""),
+            fallback_chain=list(route.get("fallbackChain") or []),
         )
-
-        provider = get_provider()
         if (
             min(len(candidates), max_shots) >= len(STORY_BEATS)
             and provider is not None

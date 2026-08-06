@@ -6,6 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from app.core.models import ArtifactDescriptor, ToolExecutionRequest
+from app.llm.router import model_router
 from app.tools.artifact_json import matching_inputs, write_json_artifact
 from app.tools.audio_transcribe import _has_audio, _resolve_proxy_paths_for_asr, _transcribe
 
@@ -68,7 +69,8 @@ class SourceTranscribeTool:
 
         if not sources:
             return []
-        payload = {"schemaVersion": "1.0", "sources": sources}
+        payload = {"schemaVersion": "1.0", "sources": sources,
+                   "modelRoute": model_router.route("LONG_AUDIO_TRANSCRIPTION").to_dict()}
         return [write_json_artifact("SOURCE_TRANSCRIPT", "source-transcript.json", payload, {
             "sourceCount": len(sources),
             "segmentCount": sum(len(item["segments"]) for item in sources),

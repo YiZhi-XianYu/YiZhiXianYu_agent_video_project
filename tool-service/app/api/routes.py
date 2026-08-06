@@ -4,10 +4,11 @@ from typing import Any
 import re
 import uuid
 
-from app.llm.provider import LlmError, get_provider
+from app.llm.provider import LlmError, get_provider_for_capability
 from app.core.models import AcceptedExecution, ToolExecutionRecord, ToolExecutionRequest
 from app.execution.service import execution_service
 from app.registry.registry import registry
+from app.llm.router import model_router
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from fastapi.responses import Response
 
@@ -29,6 +30,7 @@ class WorkflowIntentResponse(BaseModel):
     pacing: str
     explanation: str
     targetDurationMs: int
+    modelRoute: dict[str, Any]
 
 def _parse_duration_ms(text: str) -> int:
     minute = re.search(r"(\d+(?:\.\d+)?)\s*(?:分钟|分|minutes?|mins?)", text or "", re.I)
@@ -46,9 +48,9 @@ def workflow_intent(request: WorkflowIntentRequest) -> WorkflowIntentResponse:
     allowed = {"sourceTranscription", "subtitles", "bgm", "vlmAnalysis"}
     defaults = {"vlmAnalysis": "REQUIRED", "sourceTranscription": "OPTIONAL", "subtitles": "OPTIONAL", "bgm": "OPTIONAL"}
     duration_ms = _parse_duration_ms(request.goal)
-    provider = get_provider()
+    provider, model_route = get_provider_for_capability("STRUCTURED_INTENT")
     if provider.name == "noop":
-        return WorkflowIntentResponse(llmUsed=False, capabilities=defaults, pacing="BALANCED", explanation="未配置 LLM，已使用系统默认流程图", targetDurationMs=duration_ms)
+        return WorkflowIntentResponse(llmUsed=False, capabilities=defaults, pacing="BALANCED", explanation="未配置 LLM，已使用系统默认流程图", targetDurationMs=duration_ms, modelRoute=model_route)
     system = (
         "你是视频工作流规划助手。根据用户自然语言需求，只能返回受控能力意图和时长。"
         "不得生成工具名、版本、命令、路径或任意连线。vlmAnalysis 必须为 REQUIRED。"
@@ -75,9 +77,11 @@ def workflow_intent(request: WorkflowIntentRequest) -> WorkflowIntentResponse:
         model_duration = result.get("targetDurationMs")
         if not isinstance(model_duration, int) or not 5000 <= model_duration <= 300000:
             model_duration = duration_ms
-        return WorkflowIntentResponse(llmUsed=True, capabilities=caps, pacing=pacing, explanation=str(result.get("explanation") or "已根据自然语言需求生成候选流程图"), targetDurationMs=model_duration)
+        return WorkflowIntentResponse(llmUsed=True, capabilities=caps, pacing=pacing, explanation=str(result.get("explanation") or "已根据自然语言需求生成候选流程图"), targetDurationMs=model_duration, modelRoute=model_route)
     except (LlmError, Exception):
-        return WorkflowIntentResponse(llmUsed=False, capabilities=defaults, pacing="BALANCED", explanation="LLM 暂不可用，已回退到系统默认流程图", targetDurationMs=duration_ms)
+        failed_route = dict(model_route)
+        failed_route["fallbackReason"] = "MODEL_CALL_FAILED"
+        return WorkflowIntentResponse(llmUsed=False, capabilities=defaults, pacing="BALANCED", explanation="LLM 暂不可用，已回退到系统默认流程图", targetDurationMs=duration_ms, modelRoute=failed_route)
 
 @router.get("/health")
 def health() -> dict[str, str]:
@@ -86,6 +90,12 @@ def health() -> dict[str, str]:
 @router.get("/tools")
 def list_tools() -> list[dict]:
     return registry.manifests()
+
+@router.get("/model-routes")
+def list_model_routes() -> list[dict]:
+    return [model_router.route(capability).to_dict() for capability in (
+        "STRUCTURED_INTENT", "STORY_PLAN", "SHOT_SEMANTICS", "LONG_AUDIO_TRANSCRIPTION"
+    )]
 
 @router.post("/tool-executions", response_model=AcceptedExecution, response_model_by_alias=True, status_code=status.HTTP_202_ACCEPTED)
 def create_execution(request: ToolExecutionRequest) -> AcceptedExecution:

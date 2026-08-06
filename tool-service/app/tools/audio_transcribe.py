@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from app.core.config import settings
 from app.core.models import ArtifactDescriptor, ToolExecutionRequest
+from app.llm.router import model_router
 from app.tools.artifact_json import matching_inputs, read_json_artifact
 
 logger = logging.getLogger(__name__)
@@ -281,7 +282,8 @@ def _write_srt_artifact(srt_text: str, segment_count: int) -> ArtifactDescriptor
         mediaType="text/plain",
         size=len(content),
         contentHash=hashlib.sha256(content).hexdigest(),
-        metadata={"format": "SRT", "segmentCount": segment_count},
+        metadata={"format": "SRT", "segmentCount": segment_count,
+                  "modelRoute": model_router.route("LONG_AUDIO_TRANSCRIPTION").to_dict()},
     )
 
 

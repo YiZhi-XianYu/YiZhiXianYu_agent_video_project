@@ -24,6 +24,7 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+from app.llm.router import model_router
 
 logger = logging.getLogger(__name__)
 
@@ -495,7 +496,7 @@ def get_provider() -> LlmProvider:
     if _provider is not None:
         return _provider
 
-    if not settings.llm_api_key:
+    if not (settings.llm_api_key or settings.llm_openai_api_key or settings.llm_anthropic_api_key):
         _provider = NoopProvider()
         return _provider
 
@@ -531,3 +532,11 @@ def get_provider() -> LlmProvider:
         _provider = NoopProvider()
 
     return _provider
+
+
+def get_provider_for_capability(capability: str) -> tuple[LlmProvider, dict[str, Any]]:
+    decision = model_router.route(capability)
+    provider = get_provider()
+    if decision.provider == "noop" and provider.name != "noop":
+        return NoopProvider(), decision.to_dict()
+    return provider, decision.to_dict()

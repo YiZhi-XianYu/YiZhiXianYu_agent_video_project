@@ -13,6 +13,7 @@ from typing import Any
 from app.core.config import settings
 from app.core.models import ArtifactDescriptor, ToolExecutionRequest
 from app.llm.vlm_provider import VlmError, encode_image_b64, get_vlm_provider
+from app.llm.router import model_router
 from app.tools.artifact_json import matching_inputs, read_json_artifact, write_json_artifact
 from app.tools.vision_scene_classify import SCENE_LABEL_MAP, SCENE_LABEL_ZH
 from app.tools.vision_object_detect import OBJECT_LABEL_MAP, OBJECT_LABEL_ZH
@@ -108,15 +109,18 @@ class VisionVlmAnalyzeTool:
             report_progress(10)
 
         vlm = get_vlm_provider()
+        route = model_router.route("SHOT_SEMANTICS")
         if vlm.name == "noop":
             logger.info("VLM not configured, falling back to CLIP tools")
-            return self._clip_fallback(shots, keyframe_map, shot_payload, shot_inputs[0], report_progress)
+            return self._clip_fallback(shots, keyframe_map, shot_payload, shot_inputs[0], report_progress, route.to_dict())
 
         try:
-            return self._vlm_analyze(shots, keyframe_map, shot_payload, shot_inputs[0], vlm, report_progress)
+            return self._vlm_analyze(shots, keyframe_map, shot_payload, shot_inputs[0], vlm, report_progress, route.to_dict())
         except Exception as exc:
             logger.warning("VLM analysis failed, falling back to CLIP: %s", exc)
-            return self._clip_fallback(shots, keyframe_map, shot_payload, shot_inputs[0], report_progress)
+            route_info = route.to_dict()
+            route_info["fallbackReason"] = "VLM_CALL_FAILED"
+            return self._clip_fallback(shots, keyframe_map, shot_payload, shot_inputs[0], report_progress, route_info)
 
     def _vlm_analyze(
         self,
@@ -126,6 +130,7 @@ class VisionVlmAnalyzeTool:
         shot_input: Any,
         vlm: Any,
         report_progress: Callable[[int], None] | None,
+        route_info: dict[str, Any],
     ) -> list[ArtifactDescriptor]:
         shot_ids = [s["shotId"] for s in shots]
         all_results: list[dict[str, Any]] = []
@@ -154,7 +159,7 @@ class VisionVlmAnalyzeTool:
                 progress = 10 + int((batch_start + len(batch_ids)) / len(shot_ids) * 80)
                 report_progress(progress)
 
-        return self._compile_artifacts(shots, all_results, shot_payload, shot_input, report_progress)
+        return self._compile_artifacts(shots, all_results, shot_payload, shot_input, report_progress, route_info)
 
     def _compile_artifacts(
         self,
@@ -163,6 +168,7 @@ class VisionVlmAnalyzeTool:
         shot_payload: dict[str, Any],
         shot_input: Any,
         report_progress: Callable[[int], None] | None,
+        route_info: dict[str, Any],
     ) -> list[ArtifactDescriptor]:
         result_by_id = {r.get("shotId", ""): r for r in vlm_results}
         source_asset_id = shot_payload["sourceAssetId"]
@@ -270,6 +276,7 @@ class VisionVlmAnalyzeTool:
         scene_payload = {
             "schemaVersion": "1.0",
             "modelName": f"vlm/{get_vlm_provider().name}",
+            "modelRoute": route_info,
             "sourceAssetId": source_asset_id,
             "sourceShotListArtifactId": shot_input.artifact_id,
             "shotCount": len(scene_tags),
@@ -280,6 +287,7 @@ class VisionVlmAnalyzeTool:
         object_payload = {
             "schemaVersion": "1.0",
             "modelName": f"vlm/{get_vlm_provider().name}",
+            "modelRoute": route_info,
             "sourceAssetId": source_asset_id,
             "sourceShotListArtifactId": shot_input.artifact_id,
             "shotCount": len(object_tags),
@@ -290,6 +298,7 @@ class VisionVlmAnalyzeTool:
         person_payload = {
             "schemaVersion": "1.0",
             "modelName": f"vlm/{get_vlm_provider().name}",
+            "modelRoute": route_info,
             "sourceAssetId": source_asset_id,
             "sourceShotListArtifactId": shot_input.artifact_id,
             "shotCount": len(person_tags),
@@ -309,6 +318,7 @@ class VisionVlmAnalyzeTool:
         shot_payload: dict[str, Any],
         shot_input: Any,
         report_progress: Callable[[int], None] | None,
+        route_info: dict[str, Any] | None = None,
     ) -> list[ArtifactDescriptor]:
         """Fall back to CLIP-based tools when VLM is unavailable."""
         from app.core.vision_models import classify_batch
@@ -385,6 +395,7 @@ class VisionVlmAnalyzeTool:
         scene_payload = {
             "schemaVersion": "1.0",
             "modelName": "openai/clip-vit-base-patch32 (fallback)",
+            "modelRoute": route_info or model_router.route("SHOT_SEMANTICS").to_dict(),
             "sourceAssetId": source_asset_id,
             "sourceShotListArtifactId": shot_input.artifact_id,
             "shotCount": len(scene_tags),
@@ -395,6 +406,7 @@ class VisionVlmAnalyzeTool:
         object_payload = {
             "schemaVersion": "1.0",
             "modelName": "openai/clip-vit-base-patch32 (fallback)",
+            "modelRoute": route_info or model_router.route("SHOT_SEMANTICS").to_dict(),
             "sourceAssetId": source_asset_id,
             "sourceShotListArtifactId": shot_input.artifact_id,
             "shotCount": len(object_tags),
@@ -405,6 +417,7 @@ class VisionVlmAnalyzeTool:
         person_payload = {
             "schemaVersion": "1.0",
             "modelName": "openai/clip-vit-base-patch32 (fallback)",
+            "modelRoute": route_info or model_router.route("SHOT_SEMANTICS").to_dict(),
             "sourceAssetId": source_asset_id,
             "sourceShotListArtifactId": shot_input.artifact_id,
             "shotCount": len(person_tags),

@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     llm_openai_model: str = "gpt-4o"
     llm_anthropic_api_key: str = ""
     llm_anthropic_model: str = "claude-sonnet-4-6"
+    vlm_provider: str = ""
+    vlm_api_key: str = ""
+    vlm_base_url: str = ""
+    vlm_model: str = ""
 
     # BGM library
     bgm_library_root: Path = Path("runtime/bgm")

@@ -154,6 +154,7 @@ public class ToolServiceClient {
         Map<String, String> capabilities,
         String pacing,
         String explanation,
-        int targetDurationMs
+        int targetDurationMs,
+        Map<String, Object> modelRoute
     ) {}
 }

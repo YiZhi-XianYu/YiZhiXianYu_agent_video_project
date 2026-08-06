@@ -25,6 +25,11 @@ class LlmAuditRecord:
     final_source: str = "DETERMINISTIC_FALLBACK"
     duration_ms: int = 0
     timestamp: str = ""
+    route_id: str = ""
+    capability: str = ""
+    selection_reason: str = ""
+    fallback_reason: str = ""
+    fallback_chain: list[str] = field(default_factory=list)
 
     def start(self) -> str:
         """Record the start time and return a request_id."""
@@ -59,6 +64,11 @@ class LlmAuditRecord:
             "finalSource": self.final_source,
             "durationMs": self.duration_ms,
             "timestamp": self.timestamp,
+            "routeId": self.route_id,
+            "capability": self.capability,
+            "selectionReason": self.selection_reason,
+            "fallbackReason": self.fallback_reason,
+            "fallbackChain": self.fallback_chain,
         }
         if self.raw_response is not None:
             result["rawResponse"] = self.raw_response
