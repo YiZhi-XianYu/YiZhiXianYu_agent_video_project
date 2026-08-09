@@ -13,7 +13,7 @@ import { useReviewStore } from '@/stores/review'
 import { useUiStore } from '@/stores/ui'
 import { usePolling } from '@/shared/composables/usePolling'
 import { ApiError } from '@/api/client'
-import { getGateDraft, saveGateDraft } from '@/api/workflows'
+import { getGateDraft, saveGateDraft, submitGateFeedback } from '@/api/workflows'
 import { WORKFLOW_POLL_INTERVAL_MS, RUN_STATUS_LABEL } from '@/shared/constants'
 import ProgressBar from '@/components/ProgressBar.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
@@ -42,6 +42,11 @@ let hydratingGateDraft = false
 
 /** Gate 1 视图模式：true = 画廊视图, false = 列表视图 */
 const showGalleryView = ref(true)
+const gateFeedbackScore = ref(0)
+const gateFeedbackReasons = ref<string[]>([])
+const gateFeedbackComment = ref('')
+const gateFeedbackStatus = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
+const feedbackReasonOptions = ['镜头不合适', '节奏不对', '素材重复', '风格不符']
 
 const renderedVideo = computed(() => workflowStore.tasks
   .flatMap((task) => task.artifacts)
@@ -119,6 +124,10 @@ watch(() => workflowStore.isTerminal, (terminal) => {
 // Gate 变化时同步到 review store
 watch(() => workflowStore.run?.currentGateKey, () => {
   syncGate()
+  gateFeedbackScore.value = 0
+  gateFeedbackReasons.value = []
+  gateFeedbackComment.value = ''
+  gateFeedbackStatus.value = 'idle'
 })
 
 watch(() => ({
@@ -402,6 +411,25 @@ async function handleBgmApplied(): Promise<void> {
   startPolling()
 }
 
+async function sendGateFeedback(): Promise<void> {
+  const gate = workflowStore.currentGate
+  if (!gate || !gateFeedbackScore.value || gateFeedbackStatus.value === 'saving') return
+  gateFeedbackStatus.value = 'saving'
+  try {
+    await submitGateFeedback(props.runId, {
+      gateKey: gate.gateKey,
+      score: gateFeedbackScore.value,
+      reasonCodes: gateFeedbackReasons.value,
+      comment: gateFeedbackComment.value.trim() || undefined,
+      action: undefined,
+      artifactIds: workflowStore.tasks.flatMap(task => task.artifacts).map(artifact => artifact.externalArtifactId),
+    })
+    gateFeedbackStatus.value = 'saved'
+  } catch {
+    gateFeedbackStatus.value = 'error'
+  }
+}
+
 function goBack(): void {
   router.push(`/projects/${props.projectId}`)
 }
@@ -528,6 +556,44 @@ function goBack(): void {
         v-if="workflowStore.isPaused && workflowStore.currentGate?.gateKey === 'gate_render_review'"
         @confirm="handleRenderConfirm"
       />
+
+      <section v-if="workflowStore.isPaused && workflowStore.currentGate" class="card mb-6 border border-surface-700/80 bg-surface-800/60">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p class="section-eyebrow">OPTIONAL FEEDBACK</p>
+            <h3 class="mt-1 text-sm font-semibold text-surface-100">这个 Gate 的结果符合你的预期吗？</h3>
+            <p class="mt-1 text-xs text-surface-500">评分不会阻塞 Workflow，也可以直接跳过。</p>
+          </div>
+          <span v-if="gateFeedbackStatus === 'saved'" class="text-xs text-emerald-400">反馈已记录</span>
+          <span v-else-if="gateFeedbackStatus === 'error'" class="text-xs text-warning">反馈保存失败，可稍后重试</span>
+        </div>
+        <div class="mt-3 flex flex-wrap items-center gap-1">
+          <button
+            v-for="score in 5"
+            :key="score"
+            type="button"
+            :aria-label="`${score} 星`"
+            :class="score <= gateFeedbackScore ? 'text-amber-300' : 'text-surface-600'"
+            class="text-2xl leading-none transition-colors hover:text-amber-200"
+            @click="gateFeedbackScore = score"
+          >★</button>
+          <span v-if="gateFeedbackScore" class="ml-2 text-xs text-surface-400">{{ gateFeedbackScore }}/5</span>
+        </div>
+        <div v-if="gateFeedbackScore" class="mt-3 flex flex-wrap gap-2">
+          <button
+            v-for="reason in feedbackReasonOptions"
+            :key="reason"
+            type="button"
+            :class="gateFeedbackReasons.includes(reason) ? 'border-accent/50 bg-accent/15 text-accent-light' : 'border-surface-700 text-surface-400'"
+            class="rounded-full border px-3 py-1 text-xs transition-colors"
+            @click="gateFeedbackReasons = gateFeedbackReasons.includes(reason) ? gateFeedbackReasons.filter(item => item !== reason) : [...gateFeedbackReasons, reason]"
+          >{{ reason }}</button>
+        </div>
+        <div v-if="gateFeedbackScore" class="mt-3 flex flex-col gap-2 sm:flex-row">
+          <input v-model="gateFeedbackComment" class="input-field flex-1 text-xs" maxlength="2000" placeholder="可以补充一句具体感受（可选）" />
+          <button type="button" class="btn-secondary shrink-0 text-xs" :disabled="gateFeedbackStatus === 'saving'" @click="sendGateFeedback">{{ gateFeedbackStatus === 'saving' ? '保存中…' : '提交反馈' }}</button>
+        </div>
+      </section>
 
       <!-- 未知 Gate 兜底 -->
       <div v-if="workflowStore.isPaused && !workflowStore.currentGate" class="card mb-6 ring-1 ring-warning/40">

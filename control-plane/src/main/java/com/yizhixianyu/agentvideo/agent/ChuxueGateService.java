@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Map;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 /** Unified, user-facing Gate collaboration facade. */
 @Service
@@ -22,12 +23,16 @@ public class ChuxueGateService {
     private final AgentTraceService trace;
     private final TaskRunRepository tasks;
     private final ArtifactRepository artifacts;
+    private final GateFeedbackRepository feedbackRepository;
+    private final ObjectMapper mapper;
 
     public ChuxueGateService(WorkflowRunRepository workflows, WorkflowExecutionService execution,
                              WorkflowAdvanceCoordinator advance, AgentTraceService trace,
-                             TaskRunRepository tasks, ArtifactRepository artifacts) {
+                             TaskRunRepository tasks, ArtifactRepository artifacts,
+                             GateFeedbackRepository feedbackRepository, ObjectMapper mapper) {
         this.workflows = workflows; this.execution = execution; this.advance = advance; this.trace = trace;
         this.tasks = tasks; this.artifacts = artifacts;
+        this.feedbackRepository = feedbackRepository; this.mapper = mapper;
     }
 
     @Transactional(readOnly = true)
@@ -84,6 +89,25 @@ public class ChuxueGateService {
         }
     }
 
+    @Transactional
+    public FeedbackView feedback(String workflowRunId, FeedbackRequest request) {
+        var workflow = workflows.findById(workflowRunId).orElseThrow();
+        var gate = request.gateKey() == null || request.gateKey().isBlank() ? workflow.getCurrentGateKey() : request.gateKey();
+        if (gate == null || !gate.equals(workflow.getCurrentGateKey())) throw new IllegalArgumentException("Feedback must target the current Gate");
+        if (request.score() < 1 || request.score() > 5) throw new IllegalArgumentException("score must be between 1 and 5");
+        try {
+            var entity = feedbackRepository.save(new GateFeedbackEntity(workflowRunId, workflow.getProjectId(), gate,
+                request.score(), request.action(), mapper.writeValueAsString(request.reasonCodes() == null ? List.of() : request.reasonCodes()),
+                request.comment(), mapper.writeValueAsString(request.artifactIds() == null ? List.of() : request.artifactIds())));
+            trace.record("GATE_FEEDBACK", workflow.getAgentTraceId(), workflow.getAgentSessionId(), workflow.getAgentTurnId(),
+                workflow.getAgentPlanId(), workflowRunId, null, null, null, "chuxue", null, "RECORDED",
+                Map.of("gateKey", gate, "score", request.score(), "action", request.action() == null ? "" : request.action()));
+            return new FeedbackView(entity.getId(), gate, request.score(), true);
+        } catch (Exception exc) {
+            throw new IllegalStateException("Failed to persist Gate feedback", exc);
+        }
+    }
+
     private String label(String key) { return key == null ? null : switch (key) {
         case "gate_shot_ranking" -> "镜头排序审核"; case "gate_story_edit" -> "故事计划编辑";
         case "gate_timeline_preview" -> "时间线预览"; case "gate_bgm_review" -> "背景音乐选择";
@@ -98,6 +122,9 @@ public class ChuxueGateService {
 
     public enum Action { ACCEPT, MODIFY, SKIP, REGENERATE, CANCEL }
     public record DecisionRequest(Action action, Map<String, Object> payload) {}
+    public record FeedbackRequest(String gateKey, int score, List<String> reasonCodes, String comment,
+                                  String action, List<String> artifactIds) {}
+    public record FeedbackView(String feedbackId, String gateKey, int score, boolean recorded) {}
     public record GateView(String workflowRunId, String workflowStatus, String gateKey, String label,
                            String description, List<String> options, List<String> candidateArtifactIds) {}
 }

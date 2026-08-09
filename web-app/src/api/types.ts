@@ -70,7 +70,7 @@
    | 'SKIPPED'
 
  /** Gate 定义（来自后端 WorkflowDefinition） */
- export interface GateInfo {
+export interface GateInfo {
    gateKey: string
    label: string
    description: string
@@ -178,6 +178,13 @@ export interface WorkflowPlanPreview {
   defaultSelected: boolean
   canvas: WorkflowCanvasGraph
   llmUsed: boolean
+}
+
+export interface GateFeedback {
+  feedbackId: string
+  gateKey: string
+  score: number
+  recorded: boolean
 }
 
 export interface WorkflowCanvasNode {

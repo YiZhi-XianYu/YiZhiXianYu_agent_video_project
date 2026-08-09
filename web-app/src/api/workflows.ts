@@ -84,3 +84,16 @@ export async function saveGateDraft(workflowRunId: string, gateKey: string, body
 export async function getGateDraft<T = unknown>(workflowRunId: string, gateKey: string): Promise<T> {
   return get<T>(`/api/v1/workflow-runs/${workflowRunId}/gate-drafts/${encodeURIComponent(gateKey)}`)
 }
+
+export interface GateFeedbackRequest {
+  gateKey: string
+  score: number
+  reasonCodes?: string[]
+  comment?: string
+  action?: string
+  artifactIds?: string[]
+}
+
+export async function submitGateFeedback(workflowRunId: string, body: GateFeedbackRequest): Promise<{ feedbackId: string; gateKey: string; score: number; recorded: boolean }> {
+  return post(`/api/v1/workflow-runs/${workflowRunId}/chuxue-gate/feedback`, body)
+}

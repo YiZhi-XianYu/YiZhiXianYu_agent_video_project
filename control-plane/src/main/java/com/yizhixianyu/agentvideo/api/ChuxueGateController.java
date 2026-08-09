@@ -37,6 +37,15 @@ public class ChuxueGateController {
         return gates.decide(workflowRunId, decision);
     }
 
+    @PostMapping("/feedback")
+    public ChuxueGateService.FeedbackView feedback(@PathVariable String workflowRunId,
+                                                   @RequestBody ChuxueGateService.FeedbackRequest feedback,
+                                                   HttpServletRequest request) {
+        var view = gates.current(workflowRunId);
+        requireProject(view.workflowRunId(), request);
+        return gates.feedback(workflowRunId, feedback);
+    }
+
     private void requireProject(String workflowRunId, HttpServletRequest request) {
         var snapshot = workflows.getSnapshot(workflowRunId);
         projects.getRequiredForUser(snapshot.projectId(), auth.requireUser(request).id());
