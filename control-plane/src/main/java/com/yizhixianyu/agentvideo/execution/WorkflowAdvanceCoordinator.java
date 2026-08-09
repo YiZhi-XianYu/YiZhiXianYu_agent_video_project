@@ -29,6 +29,14 @@ public class WorkflowAdvanceCoordinator {
         execute(workflowRunId, () -> { workflows.recoverWorkflow(workflowRunId); return null; });
     }
 
+    public void cancelWorkflow(String workflowRunId) {
+        execute(workflowRunId, () -> { workflows.cancelWorkflow(workflowRunId); return null; });
+    }
+
+    public void retryWorkflow(String workflowRunId) {
+        execute(workflowRunId, () -> { workflows.retryWorkflow(workflowRunId); return null; });
+    }
+
     public String applyCustomStoryPlan(String workflowRunId, Map<String, Object> plan) {
         return execute(workflowRunId, () -> workflows.applyCustomStoryPlan(workflowRunId, plan));
     }

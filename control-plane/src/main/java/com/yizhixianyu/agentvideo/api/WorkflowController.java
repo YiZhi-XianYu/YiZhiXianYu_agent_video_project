@@ -163,6 +163,20 @@ public class WorkflowController {
         return workflowService.listProjectRuns(projectId);
     }
 
+    @PostMapping("/workflow-runs/{workflowRunId}/retry")
+    public WorkflowExecutionService.WorkflowSnapshot retryRun(@PathVariable String workflowRunId, HttpServletRequest request) {
+        requireWorkflow(workflowRunId, request);
+        advanceCoordinator.retryWorkflow(workflowRunId);
+        return workflowService.getSnapshot(workflowRunId);
+    }
+
+    @PostMapping("/workflow-runs/{workflowRunId}/cancel")
+    public WorkflowExecutionService.WorkflowSnapshot cancelRun(@PathVariable String workflowRunId, HttpServletRequest request) {
+        requireWorkflow(workflowRunId, request);
+        advanceCoordinator.cancelWorkflow(workflowRunId);
+        return workflowService.getSnapshot(workflowRunId);
+    }
+
     private void requireProject(String projectId, HttpServletRequest request) {
         projectService.getRequiredForUser(projectId, authService.requireUser(request).id());
     }

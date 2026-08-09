@@ -230,6 +230,16 @@ public class WorkflowRunEntity extends BaseEntity {
         return errorMessage;
     }
 
+    public void cancel() {
+        if (status == RunStatus.SUCCEEDED || status == RunStatus.FAILED) {
+            throw new IllegalStateException("Cannot cancel terminal Workflow");
+        }
+        status = RunStatus.FAILED;
+        progress = Math.min(progress, 99);
+        completedAt = Instant.now();
+        errorMessage = "Workflow cancelled by user";
+    }
+
     public void attachAgentContext(String sessionId, String turnId, String planId, String traceId) {
         this.agentSessionId = sessionId;
         this.agentTurnId = turnId;

@@ -90,22 +90,56 @@ public class BlackboardService {
             .map(a -> new ArtifactView(a.getId(), a.getExternalArtifactId(), a.getType(), a.getContentHash(), a.getProducerTaskRunId())).toList();
         var traceViews = traces.findBySessionIdOrderByOccurredAtAsc(session.getId()).stream()
             .map(t -> new TraceView(t.getEventType(), t.getTraceId(), t.getWorkflowRunId(), t.getTaskRunId(), t.getExecutionId(), t.getOccurredAt())).toList();
-        var runtime = workflow == null ? new RuntimeView(null, null, 0, null, null, null) :
+        var latestFailure = traceViews.stream().filter(t -> "TASK_FAILED".equals(t.eventType()) || "TASK_FALLBACK_RETRY".equals(t.eventType()))
+            .reduce((first, second) -> second).orElse(null);
+        var activeTask = workflow == null ? null : tasks.findByWorkflowRunIdOrderByCreatedAtAsc(workflow.getId()).stream()
+            .filter(t -> t.getStatus() == com.yizhixianyu.agentvideo.execution.TaskStatus.RUNNING
+                || t.getStatus() == com.yizhixianyu.agentvideo.execution.TaskStatus.DISPATCHING
+                || t.getStatus() == com.yizhixianyu.agentvideo.execution.TaskStatus.RETRY_WAIT)
+            .findFirst().orElse(null);
+        var runtime = workflow == null ? new RuntimeView(null, null, 0, null, null, null, null, null, null, false, List.of(), null) :
             new RuntimeView(workflow.getStatus().name(), workflow.getCurrentGateKey(), workflow.getProgress(),
-                workflow.getErrorMessage(), nextAction(workflow), workflow.getCompletedAt());
+                workflow.getErrorMessage(), nextAction(workflow, activeTask), workflow.getCompletedAt(),
+                activeTask == null ? null : activeTask.getNodeKey(), activeTask == null ? null : activeTask.getStatus().name(),
+                activeTask == null ? null : activeTask.getErrorMessage(), activeTask != null && activeTask.getStatus() == com.yizhixianyu.agentvideo.execution.TaskStatus.RETRY_WAIT,
+                actions(workflow, activeTask), latestFailure == null ? null : latestFailure.eventType());
         return new BlackboardView(1L, session.getId(), session.getUserId(), session.getProjectId(), session.getNaturalLanguageGoal(),
             session.getTargetDurationMs(), session.getStatus(), session.getCurrentPlanId(), session.getDagVersion(),
             session.getCurrentWorkflowRunId(), session.getCurrentGateKey(), runtime, turnViews, taskViews, artifactViews, traceViews);
     }
 
-    private String nextAction(WorkflowRunEntity workflow) {
+    private String nextAction(WorkflowRunEntity workflow, TaskRunEntity activeTask) {
         return switch (workflow.getStatus()) {
             case PAUSED -> "请处理当前 Gate: " + workflow.getCurrentGateKey();
             case SUCCEEDED -> "成片已完成，可查看输出 Artifact";
             case FAILED -> "Workflow 失败，请检查错误并选择重试或修改方案";
-            case RUNNING -> "等待 Worker 执行下一个 Task";
+            case RUNNING -> activeTask == null ? "正在准备下一个 Task" : humanTaskMessage(activeTask);
             default -> "等待 Workflow 启动";
         };
+    }
+
+    private String humanTaskMessage(TaskRunEntity task) {
+        return switch (task.getNodeKey()) {
+            case "video_probe" -> "正在探测视频素材";
+            case "video_proxy_generate" -> "正在生成代理视频";
+            case "video_shot_detect" -> "正在分析镜头切分";
+            case "vision_vlm_analyze" -> "正在理解画面语义";
+            case "shot_ranking" -> "正在筛选高质量镜头";
+            case "story_plan" -> "已经生成初版故事计划";
+            case "timeline_compose" -> "正在编排时间线";
+            case "subtitle_compose" -> "正在生成字幕";
+            case "bgm_select" -> "正在准备背景音乐候选";
+            case "video_render" -> "正在渲染最终视频";
+            default -> "正在执行 " + task.getNodeKey();
+        };
+    }
+
+    private List<String> actions(WorkflowRunEntity workflow, TaskRunEntity task) {
+        if (workflow.getStatus() == com.yizhixianyu.agentvideo.execution.RunStatus.PAUSED) return List.of("CONTINUE", "EDIT", "CANCEL");
+        if (workflow.getStatus() == com.yizhixianyu.agentvideo.execution.RunStatus.FAILED) return List.of("RETRY", "EDIT", "CANCEL");
+        if (task != null && task.getStatus() == com.yizhixianyu.agentvideo.execution.TaskStatus.RETRY_WAIT) return List.of("RETRY", "CANCEL");
+        if (workflow.getStatus() == com.yizhixianyu.agentvideo.execution.RunStatus.RUNNING) return List.of("PAUSE", "CANCEL");
+        return List.of();
     }
 
     private void saveSnapshot(String key, BlackboardView view, Long expectedRevision) {
@@ -129,7 +163,9 @@ public class BlackboardService {
                                  String workflowRunId, String currentGateKey, RuntimeView runtime, List<TurnView> turns,
                                  List<TaskView> tasks, List<ArtifactView> artifacts, List<TraceView> traces) {}
     public record RuntimeView(String workflowStatus, String currentGateKey, int progress, String errorMessage,
-                              String nextAction, java.time.Instant completedAt) {}
+                              String nextAction, java.time.Instant completedAt, String currentTaskNode,
+                              String currentTaskStatus, String currentTaskError, boolean retryable,
+                              List<String> availableActions, String latestFailureEvent) {}
     public record TurnView(String id, int sequenceNumber, String role, String content, String planId, String workflowRunId) {}
     public record TaskView(String taskRunId, String nodeKey, String toolName, String toolVersion, String status, int attempt, int progress, String errorMessage) {}
     public record ArtifactView(String id, String externalArtifactId, String type, String contentHash, String producerTaskRunId) {}

@@ -1088,8 +1088,10 @@ public class WorkflowExecutionService {
         }
         if (task.canRetry(effectiveMaxAttempts(task))) {
             task.scheduleRetry(message, nextRetryAt(task), true);
+            recordTaskTrace("TASK_RETRY_SCHEDULED", workflowRunId, task, "RETRY_WAIT", Map.of("reason", message, "sameAttempt", true));
         } else {
             task.markFailed(message);
+            recordTaskTrace("TASK_FAILED", workflowRunId, task, "FAILED", Map.of("reason", message, "retryable", false));
         }
         evaluateWorkflow(workflowRunId);
     }
@@ -1130,6 +1132,7 @@ public class WorkflowExecutionService {
         if ("RUNNING".equals(response.status())) {
             task.markRunning();
             task.updateProgress(response.progress());
+            recordTaskTrace("TASK_RUNNING", workflowRunId, task, "RUNNING", Map.of("progress", response.progress(), "tool", response.tool()));
             return;
         }
         if ("QUEUED".equals(response.status())) {
@@ -1146,6 +1149,7 @@ public class WorkflowExecutionService {
                 }
             }
             task.markSucceeded();
+            recordTaskTrace("TASK_SUCCEEDED", workflowRunId, task, "SUCCEEDED", Map.of("tool", response.tool(), "outputCount", response.outputs() == null ? 0 : response.outputs().size()));
             recordTaskMetric(task, "SUCCEEDED");
             evaluateWorkflow(task.getWorkflowRunId());
             return;
@@ -1155,8 +1159,10 @@ public class WorkflowExecutionService {
             var retryable = response.error() != null && response.error().retryable();
             if (retryable && task.canRetry(effectiveMaxAttempts(task))) {
                 task.scheduleRetry(message, nextRetryAt(task), false);
+                recordTaskTrace("TASK_FALLBACK_RETRY", workflowRunId, task, "RETRY_WAIT", Map.of("reason", message, "fallbackReason", response.error() == null ? "UNKNOWN" : String.valueOf(response.error().code())));
             } else {
                 task.markFailed(message);
+                recordTaskTrace("TASK_FAILED", workflowRunId, task, "FAILED", Map.of("reason", message, "retryable", retryable));
             }
             recordTaskMetric(task, response.status());
             evaluateWorkflow(task.getWorkflowRunId());
@@ -1166,6 +1172,15 @@ public class WorkflowExecutionService {
     private void recordTaskMetric(TaskRunEntity task, String status) {
         if (workflowMetrics == null || task == null) return;
         workflowMetrics.taskFinished(task.getToolName(), status, taskMetricSamples.remove(task.getId()));
+    }
+
+    private void recordTaskTrace(String eventType, String workflowRunId, TaskRunEntity task, String status, Map<String, Object> payload) {
+        if (agentTrace == null || task == null) return;
+        var workflow = workflowRepository.findById(workflowRunId).orElse(null);
+        agentTrace.record(eventType, workflow == null ? null : workflow.getAgentTraceId(),
+            workflow == null ? null : workflow.getAgentSessionId(), workflow == null ? null : workflow.getAgentTurnId(),
+            workflow == null ? null : workflow.getAgentPlanId(), workflowRunId, task.getId(), null, null,
+            "chuxue-runtime", task.getToolName(), status, payload);
     }
 
 
@@ -1330,6 +1345,38 @@ public class WorkflowExecutionService {
                 task == null ? null : task.getToolName(), "APPROVED",
                 Map.of("gateKey", completedGateKey, "confirmationSource", "USER"));
         }
+        evaluateWorkflow(workflowRunId);
+    }
+
+    @Transactional
+    public void cancelWorkflow(String workflowRunId) {
+        var workflow = workflowRepository.findLockedById(workflowRunId).orElseThrow();
+        if (workflow.getStatus() == RunStatus.SUCCEEDED || workflow.getStatus() == RunStatus.FAILED) {
+            throw new IllegalStateException("Workflow is already terminal: " + workflowRunId);
+        }
+        var tasks = taskRepository.findByWorkflowRunIdOrderByCreatedAtAsc(workflowRunId);
+        tasks.stream().filter(task -> task.getStatus() == TaskStatus.PENDING || task.getStatus() == TaskStatus.READY
+            || task.getStatus() == TaskStatus.RETRY_WAIT).forEach(task -> task.markSkipped("Workflow cancelled by user"));
+        workflow.cancel();
+        syncAgentRuntime(workflow);
+        if (agentTrace != null) agentTrace.record("WORKFLOW_CANCELLED", null, workflow.getAgentSessionId(),
+            workflow.getAgentTurnId(), workflow.getAgentPlanId(), workflowRunId, null, null, null,
+            "chuxue", null, "CANCELLED", Map.of("reason", "USER_REQUEST"));
+    }
+
+    @Transactional
+    public void retryWorkflow(String workflowRunId) {
+        var workflow = workflowRepository.findLockedById(workflowRunId).orElseThrow();
+        if (workflow.getStatus() != RunStatus.FAILED) throw new IllegalStateException("Only failed Workflow can be retried");
+        var tasks = taskRepository.findByWorkflowRunIdOrderByCreatedAtAsc(workflowRunId);
+        tasks.stream().filter(task -> task.getStatus() == TaskStatus.FAILED || task.getStatus() == TaskStatus.SKIPPED)
+            .forEach(TaskRunEntity::resetForReexecution);
+        workflow.start();
+        workflow.updateProgress(5);
+        syncAgentRuntime(workflow);
+        if (agentTrace != null) agentTrace.record("WORKFLOW_RETRY_REQUESTED", null, workflow.getAgentSessionId(),
+            workflow.getAgentTurnId(), workflow.getAgentPlanId(), workflowRunId, null, null, null,
+            "chuxue", null, "RETRYING", Map.of("reason", "USER_REQUEST"));
         evaluateWorkflow(workflowRunId);
     }
 
