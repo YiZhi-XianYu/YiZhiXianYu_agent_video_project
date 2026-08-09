@@ -41,4 +41,9 @@ public class AgentTraceService {
     public List<AgentTraceEventEntity> bySession(String sessionId) {
         return repository.findBySessionIdOrderByOccurredAtAsc(sessionId);
     }
+
+    @Transactional(readOnly = true)
+    public List<AgentTraceEventEntity> byTask(String taskRunId) {
+        return repository.findByTaskRunIdOrderByOccurredAtAsc(taskRunId);
+    }
 }
