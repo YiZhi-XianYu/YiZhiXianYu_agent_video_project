@@ -14,6 +14,7 @@ from app.llm.router import model_router, estimate_cost_usd
 from app.llm.prompt import DurationParsingPrompt, StoryProposalPrompt
 from app.core.models import ArtifactDescriptor, ToolExecutionRequest
 from app.tools.artifact_json import matching_inputs, read_json_artifact, write_json_artifact
+from app.rag.video_quality import retrieve_story_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,21 @@ class StoryPlanTool:
             raise ValueError("Story Plan requires at least one unique Shot of 600 ms or longer")
 
         semantic_by_shot = _build_semantic_map(request.inputs)
+        retrieval_evidence = retrieve_story_evidence(
+            candidates, semantic_by_shot, target_duration, max_shots
+        )
+        retrieval_scores = {
+            role: {str(item.get("shotId")): float(item.get("score", 0) or 0)
+                   for item in rows}
+            for role, rows in (retrieval_evidence.get("roles") or {}).items()
+        }
+        candidates = [
+            {**shot, "retrievalScores": {
+                role: round(scores.get(str(shot.get("shotId")), 0.0), 4)
+                for role, scores in retrieval_scores.items()
+            }}
+            for shot in candidates
+        ]
 
         route = model_router.route("STORY_PLAN", request_id=uuid.uuid4().hex[:12]).to_dict()
         audit = LlmAuditRecord(
@@ -120,10 +136,12 @@ class StoryPlanTool:
             and route.get("available", False)
         ):
             llm_result = _try_llm_story_plan(
-                ranking, candidates, target_duration, max_shots, audit, semantic_by_shot
+                ranking, candidates, target_duration, max_shots, audit, semantic_by_shot,
+                retrieval_evidence,
             )
             if llm_result is not None:
                 llm_result["llmAudit"] = audit.to_dict()
+                llm_result["retrieval"] = retrieval_evidence
                 return [write_json_artifact("STORY_PLAN", "story-plan.json", llm_result, llm_result)]
 
         # deterministic fallback
@@ -139,6 +157,7 @@ class StoryPlanTool:
             ranking, ranking_inputs[0], candidates, target_duration, max_shots, STORY_BEATS
         )
         proposal["llmAudit"] = audit.to_dict()
+        proposal["retrieval"] = retrieval_evidence
         return [write_json_artifact("STORY_PLAN", "story-plan.json", proposal, proposal)]
 
 
@@ -437,6 +456,7 @@ def _try_llm_story_plan(
     max_shots: int,
     audit: LlmAuditRecord,
     semantic_by_shot: dict[str, dict[str, list[str]]] | None = None,
+    retrieval_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Attempt LLM story proposal. Returns None if LLM fails or validation fails."""
     audit.start()
@@ -449,6 +469,7 @@ def _try_llm_story_plan(
         system = StoryProposalPrompt.build_system_prompt()
         user = StoryProposalPrompt.build_user_prompt(
             candidates, target_duration, budgets, asset_count, max_shots, semantic_by_shot,
+            retrieval_evidence,
         )
         audit.system_prompt_hash = StoryProposalPrompt.hash_system_prompt()
 
@@ -1027,16 +1048,17 @@ def _select_for_beat(
 
 def _beat_sort_key(role: str, shot: dict[str, Any]) -> tuple[Any, ...]:
     chronology = shot["startMs"] / max(1, shot["endMs"])
+    retrieval = float((shot.get("retrievalScores") or {}).get(role, 0.0))
     if role == "HOOK":
-        role_score = 0.55 * shot["finalScore"] + 0.45 * shot.get("motionInterest", 0.0)
+        role_score = 0.48 * shot["finalScore"] + 0.40 * shot.get("motionInterest", 0.0) + 0.12 * retrieval
     elif role == "INTRO":
-        role_score = 0.45 * shot["finalScore"] + 0.30 * shot["composition"] + 0.25 * (1.0 - chronology)
+        role_score = 0.40 * shot["finalScore"] + 0.27 * shot["composition"] + 0.21 * (1.0 - chronology) + 0.12 * retrieval
     elif role == "JOURNEY":
-        role_score = 0.55 * shot["finalScore"] + 0.25 * shot.get("motionInterest", 0.0) + 0.20 * shot["durationFitness"]
+        role_score = 0.48 * shot["finalScore"] + 0.22 * shot.get("motionInterest", 0.0) + 0.18 * shot["durationFitness"] + 0.12 * retrieval
     elif role == "CLIMAX":
-        role_score = 0.55 * shot["qualityScore"] + 0.30 * shot.get("motionInterest", 0.0) + 0.15 * shot["finalScore"]
+        role_score = 0.48 * shot["qualityScore"] + 0.27 * shot.get("motionInterest", 0.0) + 0.13 * shot["finalScore"] + 0.12 * retrieval
     else:
-        role_score = 0.45 * shot["finalScore"] + 0.30 * shot["stability"] + 0.25 * chronology
+        role_score = 0.40 * shot["finalScore"] + 0.27 * shot["stability"] + 0.21 * chronology + 0.12 * retrieval
     return role_score, shot["finalScore"], -shot["rank"]
 
 

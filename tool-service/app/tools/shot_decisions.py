@@ -10,6 +10,7 @@ from app.core.models import ArtifactDescriptor, ToolExecutionRequest
 from app.llm.provider import LlmError, get_provider
 from app.tools.artifact_json import matching_inputs, read_json_artifact, write_json_artifact
 from app.tools.timeline_validator import TimelineValidator
+from app.rag.video_quality import retrieve_story_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,26 @@ HIGHLIGHT_REVIEW_USER = """Story Plan:
 Candidate Pool ({candidate_count} shots):
 {ranking_json}
 
+Project-local retrieval evidence:
+{retrieval_json}
+
 Review the selection. Suggest improvements or confirm it is good."""
+
+
+def _semantic_from_ranking(ranking: dict[str, Any]) -> dict[str, dict[str, list[str]]]:
+    semantic: dict[str, dict[str, list[str]]] = {}
+    for shot in ranking.get("shots") or []:
+        sid = shot.get("shotId")
+        if not sid:
+            continue
+        semantic[sid] = {}
+        for key, field in (("scene", "sceneTags"), ("object", "objectTags"), ("person", "personTags")):
+            values = []
+            for item in shot.get(field) or []:
+                values.append(str(item.get("label", item)) if isinstance(item, dict) else str(item))
+            if values:
+                semantic[sid][key] = values
+    return semantic
 
 
 class HighlightSelectionTool:
@@ -118,11 +138,17 @@ class HighlightSelectionTool:
         strategy = "STORY_PLAN_COMPILATION_V1"
         llm_changes: list[dict[str, Any]] = []
         llm_reviewed = False
+        retrieval_evidence = retrieve_story_evidence(
+            (ranking_data or {}).get("shots") or [],
+            _semantic_from_ranking(ranking_data or {}),
+            int(story.get("targetDurationMs", 30_000)),
+            int(story.get("maxShots", 12)),
+        ) if ranking_data is not None else {"strategy": "PROJECT_HYBRID_ROLE_RETRIEVAL_V1", "roles": {}}
 
         provider = get_provider()
         if provider.name != "noop" and ranking_data is not None:
             try:
-                changes = self._llm_review(provider, story, ranking_data)
+                changes = self._llm_review(provider, story, ranking_data, retrieval_evidence)
                 if changes is not None:
                     llm_changes = changes
                     llm_reviewed = True
@@ -154,6 +180,7 @@ class HighlightSelectionTool:
             "llmSuggestions": llm_changes,
             "llmRefinements": applied_changes,
             "rejectedLlmRefinements": rejected_changes,
+            "retrieval": retrieval_evidence,
             "shots": selected,
         }
 
@@ -162,7 +189,7 @@ class HighlightSelectionTool:
 
         return [write_json_artifact("HIGHLIGHT_SET", "highlight-set.json", payload, payload)]
 
-    def _llm_review(self, provider: Any, story: dict[str, Any], ranking: dict[str, Any]) -> list[dict[str, Any]] | None:
+    def _llm_review(self, provider: Any, story: dict[str, Any], ranking: dict[str, Any], retrieval: dict[str, Any] | None = None) -> list[dict[str, Any]] | None:
         """Ask LLM to review and optionally refine the shot selection."""
         # Build compact representations
         story_beats = []
@@ -203,6 +230,7 @@ class HighlightSelectionTool:
             story_json=json.dumps(story_beats, ensure_ascii=False, indent=2),
             candidate_count=len(candidates),
             ranking_json=json.dumps(candidates[:40], ensure_ascii=False, indent=2),
+            retrieval_json=json.dumps(retrieval or {}, ensure_ascii=False, indent=2),
         )
 
         result = provider.generate_json(

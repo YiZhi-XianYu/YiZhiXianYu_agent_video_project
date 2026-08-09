@@ -116,6 +116,9 @@ Beat duration budgets:
 Candidate shots (shotId, asset, rank, score, quality, motion, duration, semantic tags):
 {candidates_text}
 
+Project-local retrieval evidence by narrative role (use as supporting evidence, not as new IDs):
+{retrieval_evidence_text}
+
 Please propose a shot-to-beat assignment that best tells a travel story."""
 
     @classmethod
@@ -131,6 +134,7 @@ Please propose a shot-to-beat assignment that best tells a travel story."""
         asset_count: int,
         max_shots: int,
         semantic_by_shot: dict[str, dict[str, list[str]]] | None = None,
+        retrieval_evidence: dict[str, Any] | None = None,
     ) -> str:
         """Build the user prompt from ranked candidate data."""
         beat_names = ["HOOK", "INTRO", "JOURNEY", "CLIMAX", "ENDING"]
@@ -163,12 +167,20 @@ Please propose a shot-to-beat assignment that best tells a travel story."""
             parts.append(f"reasons: {', '.join(reasons)}")
             candidate_lines.append(" | ".join(parts))
 
+        retrieval_text = "none"
+        if retrieval_evidence:
+            lines = []
+            for role, rows in (retrieval_evidence.get("roles") or {}).items():
+                ids = ", ".join(str(item.get("shotId")) for item in rows[:4])
+                lines.append(f"  {role}: {ids or 'none'}")
+            retrieval_text = "\n".join(lines)
         return cls.USER_TEMPLATE.format(
             target_duration_ms=target_duration_ms,
             max_shots=max_shots,
             asset_count=asset_count,
             beat_budgets_text=beat_budgets_text,
             candidates_text="\n".join(candidate_lines),
+            retrieval_evidence_text=retrieval_text,
         )
 
     @classmethod

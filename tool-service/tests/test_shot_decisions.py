@@ -5,6 +5,7 @@ from app.core.models import ArtifactInput, ToolExecutionRequest
 from app.tools.shot_decisions import HighlightSelectionTool, ShotRankingTool, TimelineComposeTool
 from app.tools.story_plan import LlmStoryProposalValidator, StoryPlanTool, StoryProposalValidator
 from app.tools.timeline_validator import TimelineValidator
+from app.rag.video_quality import retrieve_story_evidence
 
 
 def write_input(tmp_path, name: str, payload: dict) -> ArtifactInput:
@@ -58,6 +59,17 @@ def test_ranking_highlights_and_timeline_are_deterministic(tmp_path, monkeypatch
     assert timeline_payload["durationMs"] == 30000
     assert timeline_payload["validation"] == {"valid": True, "errors": []}
     assert timeline_payload["tracks"][0]["clips"][0]["storyRole"] == "HOOK"
+
+
+def test_project_rag_retrieves_role_specific_evidence() -> None:
+    candidates = [
+        ranked_shot("wide", 0, 5000, 1) | {"sceneTags": [{"label": "OPEN_FIELD"}], "motionInterest": 0.2},
+        ranked_shot("action", 5000, 10000, 2) | {"objectTags": [{"label": "PERSON"}], "motionInterest": 0.95},
+    ]
+    evidence = retrieve_story_evidence(candidates, {}, 10000, 6)
+    assert evidence["strategy"] == "PROJECT_HYBRID_ROLE_RETRIEVAL_V1"
+    assert evidence["roles"]["HOOK"][0]["shotId"] == "action"
+    assert evidence["roles"]["ENDING"]
 
 
 def test_highlight_refinements_cannot_chain_into_duplicate_story_shots() -> None:
