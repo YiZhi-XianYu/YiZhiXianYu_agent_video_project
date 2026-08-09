@@ -34,11 +34,13 @@ public class ChuxueAgentService {
     private final ObjectMapper mapper;
     private final WorkflowAdmissionCoordinator admission;
     private final WorkflowDefinitionValidator validator;
+    private final ChuxueIntentParser intentParser;
 
     public ChuxueAgentService(AgentSessionService sessions, BlackboardService blackboard,
                               DynamicWorkflowPlanner planner, AgentTraceService trace,
                               AgentPlanSnapshotRepository snapshots, ObjectMapper mapper,
-                              WorkflowAdmissionCoordinator admission, WorkflowDefinitionValidator validator) {
+                              WorkflowAdmissionCoordinator admission, WorkflowDefinitionValidator validator,
+                              ChuxueIntentParser intentParser) {
         this.sessions = sessions;
         this.blackboard = blackboard;
         this.planner = planner;
@@ -47,19 +49,36 @@ public class ChuxueAgentService {
         this.mapper = mapper;
         this.admission = admission;
         this.validator = validator;
+        this.intentParser = intentParser;
     }
 
     @Transactional
     public Decision plan(String userId, String sessionId, String goal, Integer targetDurationMs,
                          ProxyQuality quality, List<String> assetIds, boolean autoMode) {
         var session = sessions.requireOwned(userId, sessionId);
+        var parsedIntent = intentParser.parse(goal, targetDurationMs, autoMode);
         var turn = sessions.addTurn(userId, sessionId, "USER", goal);
-        session.updateGoal(goal, targetDurationMs, turn.getId());
+        session.updateGoal(goal, parsedIntent.targetDurationMs(), turn.getId());
+        if (parsedIntent.needsClarification()) {
+            trace.record("CHUXUE_CLARIFICATION_REQUIRED", UUID.randomUUID().toString(), sessionId, turn.getId(), null, null,
+                null, null, null, AGENT_NAME, null, "WAITING_CLARIFICATION", Map.of("question", parsedIntent.clarificationQuestion()));
+            return new Decision(null, sessionId, turn.getId(), null, goal, null, parsedIntent);
+        }
         var board = blackboard.refresh(userId, sessionId, null);
-        var effectiveGoal = goal == null || goal.isBlank() ? board.goal() : goal.trim();
-        var effectiveDuration = targetDurationMs != null ? targetDurationMs : board.targetDurationMs();
+        boolean modificationOnly = intentParser.isModificationOnly(goal);
+        var effectiveGoal = goal == null || goal.isBlank() ? board.goal()
+            : modificationOnly && board.goal() != null && !board.goal().isBlank()
+                ? board.goal() + "\nUser refinement: " + goal.trim() : goal.trim();
+        var effectiveDuration = targetDurationMs != null ? targetDurationMs
+            : modificationOnly && !intentParser.hasDuration(goal) && board.targetDurationMs() != null
+                ? board.targetDurationMs() : parsedIntent.targetDurationMs();
+        var requested = (parsedIntent.subtitlesExplicit() || parsedIntent.bgmExplicit())
+            ? new DynamicWorkflowPlanner.WorkflowCapabilities(true,
+                !parsedIntent.subtitlesExplicit() || parsedIntent.subtitles(),
+                !parsedIntent.subtitlesExplicit() || parsedIntent.subtitles(), parsedIntent.bgmExplicit() ? parsedIntent.bgm() : true)
+            : null;
         var preview = planner.previewWithBlackboard(userId, sessionId, quality, durationPrompt(effectiveDuration),
-            autoMode, null, false, effectiveGoal, assetIds);
+            autoMode, requested, requested == null, effectiveGoal, assetIds);
         var traceId = UUID.randomUUID().toString();
         var planId = "plan-" + UUID.randomUUID();
         var definitionJson = toJson(preview.definition());
@@ -71,7 +90,7 @@ public class ChuxueAgentService {
             null, AGENT_NAME, null, preview.requiresConfirmation() ? "WAITING_CONFIRMATION" : "PLAN_READY",
             Map.of("targetDurationMs", Integer.parseInt(preview.intent().targetDuration()), "llmUsed", preview.llmUsed(),
                 "requiresConfirmation", preview.requiresConfirmation()));
-        return new Decision(snapshot.getId(), sessionId, turn.getId(), traceId, effectiveGoal, preview);
+        return new Decision(snapshot.getId(), sessionId, turn.getId(), traceId, effectiveGoal, preview, parsedIntent);
     }
 
     @Transactional
@@ -112,9 +131,9 @@ public class ChuxueAgentService {
     }
 
     public record Decision(String planId, String sessionId, String turnId, String traceId, String goal,
-                           DynamicWorkflowPlanner.WorkflowPlanPreview preview) {
+                           DynamicWorkflowPlanner.WorkflowPlanPreview preview, ChuxueIntentParser.Intent intent) {
         public int targetDurationMs() {
-            return Integer.parseInt(preview.intent().targetDuration());
+            return intent != null ? intent.targetDurationMs() : preview == null ? 0 : Integer.parseInt(preview.intent().targetDuration());
         }
     }
 

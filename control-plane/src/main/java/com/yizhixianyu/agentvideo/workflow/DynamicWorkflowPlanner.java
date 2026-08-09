@@ -42,7 +42,10 @@ public class DynamicWorkflowPlanner {
         var defaults = WorkflowCapabilities.defaults();
         var llmIntent = useDefault || requested != null ? null : requestIntent(goal, durationPrompt, assetIds == null ? 1 : assetIds.size());
         var capabilities = useDefault ? defaults : requested != null ? requested.normalized() : capabilitiesFromIntent(llmIntent);
-        var targetDurationMs = llmIntent == null ? parseDurationMs(goal) : llmIntent.targetDurationMs();
+        // An explicit duration is user intent and must not be silently changed by the model.
+        var targetDurationMs = durationPrompt != null && !durationPrompt.isBlank()
+            ? parseDurationMs(durationPrompt)
+            : llmIntent == null ? parseDurationMs(goal) : llmIntent.targetDurationMs();
         var defaultDefinition = template.create(quality, goal, autoMode, targetDurationMs);
         var candidate = buildDefinition(defaultDefinition, capabilities);
         validator.validate(candidate);
