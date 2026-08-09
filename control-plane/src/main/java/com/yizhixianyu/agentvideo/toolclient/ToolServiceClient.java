@@ -63,6 +63,14 @@ public class ToolServiceClient {
         return send(httpRequest, WorkflowIntentResponse.class);
     }
 
+    public ChuxueChatResponse chat(ChuxueChatRequest request) {
+        var httpRequest = HttpRequest.newBuilder(resolve("api/v1/chuxue/chat"))
+            .timeout(Duration.ofSeconds(45)).header("Content-Type", "application/json; charset=UTF-8")
+            .header("Accept", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(toJson(request), StandardCharsets.UTF_8)).build();
+        return send(httpRequest, ChuxueChatResponse.class);
+    }
+
     private <T> T send(HttpRequest request, Class<T> responseType) {
         try {
             var response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
@@ -163,4 +171,7 @@ public class ToolServiceClient {
         int targetDurationMs,
         Map<String, Object> modelRoute
     ) {}
+
+    public record ChuxueChatRequest(String message, List<Map<String, String>> history, Map<String, Object> context) {}
+    public record ChuxueChatResponse(String reply, boolean shouldPlan, Map<String, Object> modelRoute, boolean llmUsed) {}
 }

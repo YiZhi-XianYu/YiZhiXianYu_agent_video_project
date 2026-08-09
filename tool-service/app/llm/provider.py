@@ -101,6 +101,30 @@ class LlmError(Exception):
     """Raised when an LLM call fails for any reason (transport, schema, timeout)."""
 
 
+def _parse_json_response(content_text: str, request_id: str, provider_name: str) -> dict[str, Any]:
+    """Parse common model JSON variants while retaining useful diagnostics."""
+    raw = content_text.strip()
+    logger.debug("%s raw structured response [%s]: %s", provider_name, request_id, raw[:4000])
+    candidates = [raw]
+    if raw.startswith("```"):
+        unfenced = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.I | re.S).strip()
+        candidates.append(unfenced)
+    start, end = raw.find("{"), raw.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(raw[start:end + 1])
+    last_error: Exception | None = None
+    for candidate in dict.fromkeys(candidates):
+        try:
+            value = json.loads(candidate)
+            if not isinstance(value, dict):
+                raise ValueError("structured response root must be an object")
+            return value
+        except (json.JSONDecodeError, ValueError) as exc:
+            last_error = exc
+    logger.warning("%s JSON parse failed [%s]: %s; raw=%s", provider_name, request_id, last_error, raw[:1000])
+    raise LlmError(f"{provider_name} returned invalid structured JSON: {last_error}") from last_error
+
+
 class NoopProvider(LlmProvider):
     """No-op provider used when no LLM is configured. Always raises LlmError."""
 
@@ -191,7 +215,7 @@ class DeepSeekProvider(LlmProvider):
             raise LlmError("DeepSeek returned empty content")
 
         try:
-            result = json.loads(content_text)
+            result = _parse_json_response(content_text, request_id, "DeepSeek")
         except json.JSONDecodeError as exc:
             logger.warning(
                 "DeepSeek non-JSON response [%s] after %dms: %s",
@@ -333,7 +357,7 @@ class OpenAIProvider(LlmProvider):
             raise LlmError("OpenAI returned empty content")
 
         try:
-            result = json.loads(content_text)
+            result = _parse_json_response(content_text, request_id, "OpenAI")
         except json.JSONDecodeError as exc:
             logger.warning(
                 "OpenAI non-JSON response [%s] after %dms (should not happen with strict mode): %s",

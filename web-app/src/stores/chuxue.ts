@@ -2,7 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
 export type ChuxueState = 'idle' | 'sleeping'
-export type ChuxueChatMessage = { id: string; role: 'user' | 'assistant'; content: string; planId?: string | null }
+export type ChuxueChatMessage = { id: string; role: 'user' | 'assistant' | 'system'; content: string; planId?: string | null }
 
 const NEXT_SLEEP_MIN_MS = 45_000
 const NEXT_SLEEP_MAX_MS = 90_000
@@ -70,6 +70,10 @@ export const useChuxueStore = defineStore('chuxue', () => {
   function closeChat(): void { chatOpen.value = false }
   function ensureSession(sessionId: string): void { chatSessionId.value = sessionId }
   function addChatMessage(message: ChuxueChatMessage): void { chatMessages.value.push(message) }
+  function resetChat(sessionId: string | null = null): void {
+    chatSessionId.value = sessionId
+    chatMessages.value = []
+  }
 
   function notifyVideoCompleted(): void {
     if (state.value === 'sleeping') wake()
@@ -118,6 +122,7 @@ export const useChuxueStore = defineStore('chuxue', () => {
     closeChat,
     ensureSession,
     addChatMessage,
+    resetChat,
     notifyVideoCompleted,
   }
 })

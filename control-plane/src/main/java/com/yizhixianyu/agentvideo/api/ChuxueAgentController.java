@@ -3,6 +3,7 @@ package com.yizhixianyu.agentvideo.api;
 import com.yizhixianyu.agentvideo.agent.ChuxueAgentService;
 import com.yizhixianyu.agentvideo.auth.AuthService;
 import com.yizhixianyu.agentvideo.execution.ProxyQuality;
+import com.yizhixianyu.agentvideo.toolclient.ToolServiceClient;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -46,6 +47,15 @@ public class ChuxueAgentController {
         return chuxue.confirm(auth.requireUser(servletRequest).id(), projectId, planId);
     }
 
+    @PostMapping("/chat")
+    public ToolServiceClient.ChuxueChatResponse chat(@PathVariable String projectId,
+                                                      @Valid @RequestBody ChatRequest request,
+                                                      HttpServletRequest servletRequest) {
+        var user = auth.requireUser(servletRequest);
+        if (!projectId.equals(request.projectId())) throw new IllegalArgumentException("projectId does not match request");
+        return chuxue.chat(user.id(), request.sessionId(), request.message(), request.history());
+    }
+
     public record PlanRequest(
         @NotBlank String projectId,
         @NotBlank String sessionId,
@@ -56,4 +66,7 @@ public class ChuxueAgentController {
         boolean autoMode,
         @Size(max = 20) java.util.Set<String> reviewGateKeys
     ) {}
+
+    public record ChatRequest(@NotBlank String projectId, @NotBlank String sessionId, @NotBlank String message,
+                              @Size(max = 30) List<java.util.Map<String, String>> history) {}
 }

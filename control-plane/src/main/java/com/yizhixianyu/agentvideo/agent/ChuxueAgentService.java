@@ -8,6 +8,7 @@ import com.yizhixianyu.agentvideo.trace.AgentTraceService;
 import com.yizhixianyu.agentvideo.workflow.DynamicWorkflowPlanner;
 import com.yizhixianyu.agentvideo.workflow.WorkflowDefinition;
 import com.yizhixianyu.agentvideo.workflow.WorkflowDefinitionValidator;
+import com.yizhixianyu.agentvideo.toolclient.ToolServiceClient;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
@@ -35,12 +36,13 @@ public class ChuxueAgentService {
     private final WorkflowAdmissionCoordinator admission;
     private final WorkflowDefinitionValidator validator;
     private final ChuxueIntentParser intentParser;
+    private final ToolServiceClient toolClient;
 
     public ChuxueAgentService(AgentSessionService sessions, BlackboardService blackboard,
                               DynamicWorkflowPlanner planner, AgentTraceService trace,
                               AgentPlanSnapshotRepository snapshots, ObjectMapper mapper,
                               WorkflowAdmissionCoordinator admission, WorkflowDefinitionValidator validator,
-                              ChuxueIntentParser intentParser) {
+                              ChuxueIntentParser intentParser, ToolServiceClient toolClient) {
         this.sessions = sessions;
         this.blackboard = blackboard;
         this.planner = planner;
@@ -50,6 +52,22 @@ public class ChuxueAgentService {
         this.admission = admission;
         this.validator = validator;
         this.intentParser = intentParser;
+        this.toolClient = toolClient;
+    }
+
+    @Transactional
+    public ToolServiceClient.ChuxueChatResponse chat(String userId, String sessionId, String message,
+                                                     List<Map<String, String>> history) {
+        var board = blackboard.get(userId, sessionId);
+        var context = Map.<String, Object>of("goal", board.goal() == null ? "" : board.goal(),
+            "targetDurationMs", board.targetDurationMs() == null ? 30000 : board.targetDurationMs(),
+            "workflowStatus", board.runtime() == null ? "IDLE" : String.valueOf(board.runtime().workflowStatus()));
+        var response = toolClient.chat(new ToolServiceClient.ChuxueChatRequest(message, history == null ? List.of() : history, context));
+        sessions.addTurn(userId, sessionId, "USER", message);
+        if (response.llmUsed() && response.reply() != null && !response.reply().isBlank()) {
+            sessions.addTurn(userId, sessionId, "ASSISTANT", response.reply());
+        }
+        return response;
     }
 
     @Transactional
@@ -64,7 +82,7 @@ public class ChuxueAgentService {
                          java.util.Set<String> reviewGateKeys) {
         var session = sessions.requireOwned(userId, sessionId);
         var parsedIntent = intentParser.parse(goal, targetDurationMs, autoMode);
-        var turn = sessions.addTurn(userId, sessionId, "USER", goal);
+        var turn = sessions.addPlanningTurn(userId, sessionId, goal);
         session.updateGoal(goal, parsedIntent.targetDurationMs(), turn.getId());
         if (parsedIntent.needsClarification()) {
             trace.record("CHUXUE_CLARIFICATION_REQUIRED", UUID.randomUUID().toString(), sessionId, turn.getId(), null, null,
@@ -79,13 +97,18 @@ public class ChuxueAgentService {
         var effectiveDuration = targetDurationMs != null ? targetDurationMs
             : modificationOnly && !intentParser.hasDuration(goal) && board.targetDurationMs() != null
                 ? board.targetDurationMs() : parsedIntent.targetDurationMs();
+        // Explicit user constraints are deterministic guardrails and must not
+        // be replaced by the default workflow or a model suggestion.
         var requested = (parsedIntent.subtitlesExplicit() || parsedIntent.bgmExplicit())
             ? new DynamicWorkflowPlanner.WorkflowCapabilities(true,
                 !parsedIntent.subtitlesExplicit() || parsedIntent.subtitles(),
-                !parsedIntent.subtitlesExplicit() || parsedIntent.subtitles(), parsedIntent.bgmExplicit() ? parsedIntent.bgm() : true)
+                !parsedIntent.subtitlesExplicit() || parsedIntent.subtitles(),
+                parsedIntent.bgmExplicit() ? parsedIntent.bgm() : true)
             : null;
         var preview = planner.previewWithBlackboard(userId, sessionId, quality, durationPrompt(effectiveDuration),
-            autoMode, requested, requested == null, effectiveGoal, assetIds, reviewGateKeys);
+            // Always allow the structured-intent router for Chuxue turns;
+            // explicit capabilities above remain authoritative.
+            autoMode, requested, false, effectiveGoal, assetIds, reviewGateKeys);
         var traceId = UUID.randomUUID().toString();
         var planId = "plan-" + UUID.randomUUID();
         var definitionJson = toJson(preview.definition());

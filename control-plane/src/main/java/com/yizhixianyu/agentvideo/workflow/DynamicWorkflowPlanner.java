@@ -47,7 +47,10 @@ public class DynamicWorkflowPlanner {
                                        Set<String> reviewGateKeys) {
         validateReviewGates(reviewGateKeys);
         var defaults = WorkflowCapabilities.defaults();
-        var llmIntent = useDefault || requested != null ? null : requestIntent(goal, durationPrompt, assetIds == null ? 1 : assetIds.size());
+        // The model may still provide semantic explanation and pacing when the
+        // user explicitly constrains optional capabilities. Those constraints
+        // remain authoritative in the deterministic capability selection below.
+        var llmIntent = useDefault ? null : requestIntent(goal, durationPrompt, assetIds == null ? 1 : assetIds.size());
         var capabilities = useDefault ? defaults : requested != null ? requested.normalized() : capabilitiesFromIntent(llmIntent);
         // An explicit duration is user intent and must not be silently changed by the model.
         var targetDurationMs = durationPrompt != null && !durationPrompt.isBlank()

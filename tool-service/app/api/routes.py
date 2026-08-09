@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 from typing import Any
 import re
 import uuid
+import logging
 
 from app.llm.provider import LlmError, generate_json_with_fallback
 from app.core.models import AcceptedExecution, ToolExecutionRecord, ToolExecutionRequest
@@ -13,6 +14,7 @@ from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from fastapi.responses import Response
 
 router = APIRouter(prefix="/api/v1")
+logger = logging.getLogger(__name__)
 
 @router.get("/metrics", include_in_schema=False)
 def metrics() -> Response:
@@ -32,6 +34,17 @@ class WorkflowIntentResponse(BaseModel):
     explanation: str
     targetDurationMs: int
     modelRoute: dict[str, Any]
+
+class ChuxueChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    history: list[dict[str, str]] = Field(default_factory=list, max_length=30)
+    context: dict[str, Any] = Field(default_factory=dict)
+
+class ChuxueChatResponse(BaseModel):
+    reply: str
+    shouldPlan: bool
+    modelRoute: dict[str, Any]
+    llmUsed: bool
 
 def _parse_duration_ms(text: str) -> int:
     minute = re.search(r"(\d+(?:\.\d+)?)\s*(?:分钟|分|minutes?|mins?)", text or "", re.I)
@@ -103,6 +116,74 @@ def workflow_intent(request: WorkflowIntentRequest) -> WorkflowIntentResponse:
         failed_route["fallbackReason"] = "MODEL_CALL_FAILED"
         return WorkflowIntentResponse(llmUsed=False, capabilities=defaults, pacing="BALANCED", explanation="LLM 暂不可用，已回退到系统默认流程图", targetDurationMs=duration_ms, modelRoute=failed_route)
 
+@router.post("/chuxue/chat-legacy", response_model=ChuxueChatResponse, include_in_schema=False)
+def chuxue_chat(request: ChuxueChatRequest) -> ChuxueChatResponse:
+    route = model_router.route("CHAT", request_id=uuid.uuid4().hex[:12]).to_dict()
+    if not route["available"]:
+        return ChuxueChatResponse(reply="", shouldPlan=False, modelRoute=route, llmUsed=False)
+    system = (
+        "你是初雪，一个温和、简洁、懂视频制作的创作助手。\n"
+        "你要和用户自然对话，但不能执行工具、生成命令或编造执行状态。\n"
+        "如果用户明确提出制作或修改视频方案，shouldPlan=true；普通寒暄、追问或解释时为false。\n"
+        "回复使用中文，先回应用户，再给出必要的下一步。只输出JSON。"
+    )
+    schema = {"title": "chuxue_chat", "type": "object", "additionalProperties": False,
+              "properties": {"reply": {"type": "string", "minLength": 1}, "shouldPlan": {"type": "boolean"}},
+              "required": ["reply", "shouldPlan"]}
+    user = {"message": request.message.strip(), "history": request.history[-20:], "context": request.context}
+    try:
+        result, used_route, _provider = generate_json_with_fallback("CHAT", system, str(user), schema,
+                                                                       temperature=0.5, max_tokens=500,
+                                                                       request_id=uuid.uuid4().hex[:12])
+        return ChuxueChatResponse(reply=str(result.get("reply") or "我明白了。"), shouldPlan=bool(result.get("shouldPlan")), modelRoute=used_route, llmUsed=True)
+    except Exception:
+        failed = dict(route); failed["fallbackReason"] = "MODEL_CALL_FAILED"
+        return ChuxueChatResponse(reply="", shouldPlan=False, modelRoute=failed, llmUsed=False)
+
+@router.post("/chuxue/chat", response_model=ChuxueChatResponse)
+def chuxue_chat_v2(request: ChuxueChatRequest) -> ChuxueChatResponse:
+    route = model_router.route("CHAT", request_id=uuid.uuid4().hex[:12]).to_dict()
+    if not route["available"]:
+        route["fallbackReason"] = "LLM_UNAVAILABLE"
+        return ChuxueChatResponse(reply="", shouldPlan=False, modelRoute=route, llmUsed=False)
+    system = (
+        "你是初雪，一个温和、聪明、懂视频创作的中文助手。你必须同时完成自然回复和是否进入工作流的判断。\n"
+        "reply 是主要输出：必须结合用户当前消息、历史对话和项目上下文自然回应，即使 shouldPlan=false 也必须有信息量。\n"
+        "禁止只回复‘我明白了’、‘好的’、‘收到’、‘明白了’等空泛确认语。用户说你好时应自我介绍；用户问你是谁时应说明能力；用户说暂时没有想法时应自然陪伴并提供轻量启发。\n"
+        "用户明确提出制作或修改视频方案时 shouldPlan=true；寒暄、闲聊、解释、追问或尚未形成制作意图时为 false。\n"
+        "不得执行工具、生成命令或编造执行状态。严格只输出一个 JSON 对象，不要 Markdown、代码围栏或额外解释。"
+    )
+    schema = {"title": "chuxue_chat", "type": "object", "additionalProperties": False,
+              "properties": {"reply": {"type": "string", "minLength": 2}, "shouldPlan": {"type": "boolean"}},
+              "required": ["reply", "shouldPlan"]}
+    user = {"message": request.message.strip(), "history": request.history[-20:], "context": request.context}
+    last_route = route
+    for attempt in range(2):
+        request_id = uuid.uuid4().hex[:12]
+        prompt = system if attempt == 0 else system + "\n上次输出不合格。这次必须返回非空、有具体信息的 reply 和布尔 shouldPlan。"
+        try:
+            result, last_route, _provider = generate_json_with_fallback(
+                "CHAT", prompt, str(user), schema, temperature=0.5 if attempt == 0 else 0.7,
+                max_tokens=500, request_id=request_id)
+            reply = result.get("reply")
+            should_plan = result.get("shouldPlan")
+            if not isinstance(reply, str) or not reply.strip():
+                logger.warning("Chuxue chat validation failed [%s]: missing/empty reply, keys=%s", request_id, list(result.keys()))
+                continue
+            reply = reply.strip()
+            if reply in {"我明白了", "好的", "收到", "明白了"}:
+                logger.warning("Chuxue chat quality failed [%s]: generic reply=%r", request_id, reply)
+                continue
+            if not isinstance(should_plan, bool):
+                logger.warning("Chuxue chat validation failed [%s]: shouldPlan type=%s", request_id, type(should_plan).__name__)
+                continue
+            return ChuxueChatResponse(reply=reply, shouldPlan=should_plan, modelRoute=last_route, llmUsed=True)
+        except Exception as exc:
+            logger.exception("Chuxue chat model attempt %d failed [%s]: %s", attempt + 1, request_id, exc)
+    failed = dict(last_route)
+    failed["fallbackReason"] = "CHAT_RESPONSE_INVALID_AFTER_RETRY"
+    return ChuxueChatResponse(reply="", shouldPlan=False, modelRoute=failed, llmUsed=False)
+
 @router.get("/health")
 def health() -> dict[str, str]:
     return {"status": "UP"}
@@ -114,7 +195,7 @@ def list_tools() -> list[dict]:
 @router.get("/model-routes")
 def list_model_routes() -> list[dict]:
     return [model_router.route(capability).to_dict() for capability in (
-        "STRUCTURED_INTENT", "STORY_PLAN", "SHOT_SEMANTICS", "LONG_AUDIO_TRANSCRIPTION"
+        "CHAT", "STRUCTURED_INTENT", "STORY_PLAN", "SHOT_SEMANTICS", "LONG_AUDIO_TRANSCRIPTION"
     )]
 
 @router.get("/model-provider-health")

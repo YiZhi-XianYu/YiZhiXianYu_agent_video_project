@@ -34,6 +34,12 @@ public class AgentSessionService {
         return session;
     }
 
+    @Transactional(readOnly = true)
+    public List<AgentSessionEntity> list(String userId, String projectId) {
+        projects.getRequiredForUser(projectId, userId);
+        return sessions.findByProjectIdAndUserIdOrderByUpdatedAtDesc(projectId, userId);
+    }
+
     @Transactional
     public AgentSessionTurnEntity addTurn(String userId, String sessionId, String role, String content) {
         var session = requireOwned(userId, sessionId);
@@ -42,6 +48,20 @@ public class AgentSessionService {
         trace.record("SESSION_TURN_ADDED", UUID.randomUUID().toString(), sessionId, turn.getId(), session.getCurrentPlanId(),
             session.getCurrentWorkflowRunId(), null, null, null, "agent-runtime", null, role, java.util.Map.of());
         return turn;
+    }
+
+    @Transactional
+    public AgentSessionTurnEntity addPlanningTurn(String userId, String sessionId, String content) {
+        requireOwned(userId, sessionId);
+        var existing = turns.findBySessionIdOrderBySequenceNumberAsc(sessionId);
+        if (existing.size() >= 2) {
+            var assistant = existing.get(existing.size() - 1);
+            var user = existing.get(existing.size() - 2);
+            if ("ASSISTANT".equalsIgnoreCase(assistant.getRole())
+                && "USER".equalsIgnoreCase(user.getRole())
+                && content.equals(user.getContent())) return user;
+        }
+        return addTurn(userId, sessionId, "USER", content);
     }
 
     @Transactional

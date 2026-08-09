@@ -12,6 +12,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import java.time.Instant;
 import java.util.List;
+import org.springframework.web.bind.annotation.RequestParam;
 
 @RestController
 @RequestMapping("/api/v1/agent-sessions")
@@ -25,6 +26,12 @@ public class AgentSessionController {
     public SessionView create(@Valid @RequestBody CreateRequest request, HttpServletRequest servletRequest) {
         var user = auth.requireUser(servletRequest);
         return SessionView.from(service.create(user.id(), request.projectId(), request.goal(), request.targetDurationMs()));
+    }
+
+    @GetMapping
+    public List<SessionView> list(@RequestParam String projectId, HttpServletRequest request) {
+        var user = auth.requireUser(request);
+        return service.list(user.id(), projectId).stream().map(SessionView::from).toList();
     }
 
     @GetMapping("/{sessionId}")

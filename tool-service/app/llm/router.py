@@ -47,7 +47,7 @@ class ProviderHealth:
                     for name, until in self._cooldown_until.items()}
 
 
-TEXT_CAPABILITIES = {"STRUCTURED_INTENT", "STORY_PLAN"}
+TEXT_CAPABILITIES = {"STRUCTURED_INTENT", "STORY_PLAN", "CHAT"}
 VLM_CAPABILITIES = {"SHOT_SEMANTICS"}
 ASR_CAPABILITIES = {"LONG_AUDIO_TRANSCRIPTION"}
 
