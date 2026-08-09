@@ -27,6 +27,7 @@ const messages = computed(() => chuxue.chatMessages)
 const messagesRef = ref<HTMLElement | null>(null)
 let runtimeTimer: number | null = null
 let sessionsRefreshing = false
+let lastWorkflowStatus: string | null = null
 
 const workflowActive = computed(() => {
   const status = runtime.value?.runtime?.workflowStatus
@@ -85,8 +86,28 @@ async function refreshSessions(showLoading = true): Promise<void> {
 async function refreshRuntime(sessionId: string): Promise<void> {
   const snapshot = await getChuxueRuntime(sessionId)
   if (chuxue.chatSessionId !== sessionId) return
+  const nextStatus = snapshot.runtime?.workflowStatus || null
+  const becameTerminal = nextStatus !== lastWorkflowStatus && ['SUCCEEDED', 'FAILED'].includes(nextStatus || '')
   runtime.value = snapshot
-  pendingPlan.value = snapshot.status === 'PLAN_READY' && !snapshot.workflowRunId ? snapshot.planId : null
+  lastWorkflowStatus = nextStatus
+  // A session created before the terminal-workflow detachment fix may still
+  // contain the old run ID. PLAN_READY is authoritative for the confirmation
+  // card when that run is already terminal.
+  pendingPlan.value = snapshot.status === 'PLAN_READY'
+    && (!snapshot.workflowRunId || ['SUCCEEDED', 'FAILED'].includes(snapshot.runtime?.workflowStatus || ''))
+    ? snapshot.planId : null
+  if (becameTerminal) await reloadTurns(sessionId)
+}
+
+async function reloadTurns(sessionId: string): Promise<void> {
+  const turns = await getChuxueTurns(sessionId)
+  if (chuxue.chatSessionId !== sessionId) return
+  chuxue.resetChat(sessionId)
+  for (const turn of turns) {
+    const role = turn.role === 'USER' ? 'user' : turn.role === 'SYSTEM' ? 'system' : 'assistant'
+    chuxue.addChatMessage({ id: turn.id, role, content: turn.content, planId: turn.planId })
+  }
+  scrollToBottom()
 }
 
 function stopRuntimePolling(): void {
@@ -112,6 +133,7 @@ function newConversation(): void {
   chuxue.resetChat(null)
   pendingPlan.value = null
   runtime.value = null
+  lastWorkflowStatus = null
   input.value = ''
   scrollToBottom()
 }
@@ -127,7 +149,10 @@ async function selectConversation(session: ChuxueSession): Promise<void> {
     chuxue.addChatMessage({ id: turn.id, role, content: turn.content, planId: turn.planId })
   }
   runtime.value = snapshot
-  pendingPlan.value = snapshot.status === 'PLAN_READY' && !snapshot.workflowRunId ? snapshot.planId : null
+  lastWorkflowStatus = snapshot.runtime?.workflowStatus || null
+  pendingPlan.value = snapshot.status === 'PLAN_READY'
+    && (!snapshot.workflowRunId || ['SUCCEEDED', 'FAILED'].includes(snapshot.runtime?.workflowStatus || ''))
+    ? snapshot.planId : null
   startRuntimePolling(sessionId)
   scrollToBottom()
 }
@@ -176,9 +201,10 @@ async function send(): Promise<void> {
     const decision = await planWithChuxue(
       project.currentProjectId,
       requestSessionId,
-      goal,
+      chat.planningGoal || goal,
       project.assets.map(asset => asset.id),
       chat.userTurnId,
+      chat.targetDurationMs,
     )
     if (chuxue.chatSessionId !== requestSessionId) return
     pendingPlan.value = decision.planId
@@ -200,7 +226,7 @@ async function confirm(): Promise<void> {
   try {
     await confirmChuxuePlan(project.currentProjectId, pendingPlan.value)
     pendingPlan.value = null
-    const turns = await getChuxueTurns(sessionId)
+      const turns = await getChuxueTurns(sessionId)
     if (chuxue.chatSessionId === sessionId) {
       chuxue.resetChat(sessionId)
       for (const turn of turns) {
@@ -263,7 +289,7 @@ onBeforeUnmount(stopRuntimePolling)
             >
               <MessageSquare />
               <span>{{ session.goal || '未命名创作会话' }}</span>
-              <i v-if="session.currentWorkflowRunId && !['COMPLETED', 'FAILED'].includes(session.status)" />
+              <i v-if="session.currentWorkflowRunId && ['EXECUTING', 'WAITING_GATE'].includes(session.status)" />
             </button>
             <div v-if="!loadingSessions && !sessionList.length" class="chuxue-session-empty">还没有历史会话</div>
           </div>
@@ -287,15 +313,14 @@ onBeforeUnmount(stopRuntimePolling)
               </button>
             </div>
 
-            <div v-if="runtime?.workflowRunId" class="chuxue-workflow-card" :class="runtime.runtime?.workflowStatus?.toLowerCase()">
+            <div v-if="runtime?.workflowRunId && workflowActive" class="chuxue-workflow-card" :class="runtime.runtime?.workflowStatus?.toLowerCase()">
               <div class="chuxue-workflow-heading">
                 <Workflow />
                 <div><strong>{{ workflowStatusText }}</strong><span>{{ runtime.workflowRunId }}</span></div>
                 <b>{{ runtime.runtime?.progress || 0 }}%</b>
               </div>
               <div class="chuxue-workflow-progress"><i :style="{ width: `${runtime.runtime?.progress || 0}%` }" /></div>
-              <p v-if="workflowActive">该 Workflow 完成或失败前，当前会话不会开启新的 Workflow。</p>
-              <p v-else-if="runtime.runtime?.errorMessage">{{ runtime.runtime.errorMessage }}</p>
+              <p>该 Workflow 完成或失败前，当前会话不会开启新的 Workflow。</p>
             </div>
           </div>
 

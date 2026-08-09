@@ -52,6 +52,10 @@ public class WorkflowAdmissionCoordinator {
             // Replace the temporary lease with the real workflow id.
             concurrency.release(projectId, admissionId);
             concurrency.acquire(projectId, workflow.getId());
+            // The execution service may finish a tiny/eager workflow before
+            // the real ID lease is installed. Do not leave that terminal run
+            // occupying the Redis concurrency set.
+            releaseIfTerminal(workflow);
             return workflow;
         } catch (RuntimeException exception) {
             concurrency.release(projectId, admissionId);

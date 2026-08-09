@@ -17,6 +17,7 @@ function randomDuration(min: number, max: number): number {
 export const useChuxueStore = defineStore('chuxue', () => {
   const state = ref<ChuxueState>('idle')
   const bubbleVisible = ref(false)
+  const completionNotice = ref<{ workflowRunId: string; projectId: string } | null>(null)
   const active = ref(false)
   const chatOpen = ref(false)
   const chatMessages = ref<ChuxueChatMessage[]>([])
@@ -75,10 +76,11 @@ export const useChuxueStore = defineStore('chuxue', () => {
     chatMessages.value = []
   }
 
-  function notifyVideoCompleted(): void {
+  function notifyVideoCompleted(workflowRunId: string, projectId: string): void {
     if (state.value === 'sleeping') wake()
 
     bubbleVisible.value = true
+    completionNotice.value = { workflowRunId, projectId }
     clearTimer(bubbleTimer)
     bubbleTimer = window.setTimeout(() => {
       bubbleVisible.value = false
@@ -102,6 +104,7 @@ export const useChuxueStore = defineStore('chuxue', () => {
     bubbleTimer = null
     state.value = 'idle'
     bubbleVisible.value = false
+    completionNotice.value = null
     chatOpen.value = false
     chatMessages.value = []
     chatSessionId.value = null
@@ -110,6 +113,7 @@ export const useChuxueStore = defineStore('chuxue', () => {
   return {
     state,
     bubbleVisible,
+    completionNotice,
     isSleeping,
     start,
     stop,

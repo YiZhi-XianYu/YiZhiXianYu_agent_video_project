@@ -149,12 +149,6 @@ onUnmounted(() => {
 <template>
   <section class="chuxue-pet-slot" aria-label="动态助手初雪">
     <ChuxueChatCard v-if="chuxue.chatOpen" />
-    <Transition name="chuxue-bubble">
-      <div v-if="chuxue.bubbleVisible" class="chuxue-speech-bubble" role="status" aria-live="polite">
-        视频做好了
-      </div>
-    </Transition>
-
     <div
       class="chuxue-stage"
       :class="{ sleeping: chuxue.isSleeping }"
@@ -259,49 +253,6 @@ onUnmounted(() => {
   backdrop-filter: blur(8px);
 }
 
-.chuxue-speech-bubble {
-  position: absolute;
-  left: 50%;
-  bottom: min(225px, 29vh);
-  z-index: 2;
-  transform: translateX(-50%);
-  width: max-content;
-  max-width: 210px;
-  padding: 10px 14px;
-  border: 1px solid rgba(95, 158, 255, 0.28);
-  border-radius: 14px;
-  background: linear-gradient(145deg, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.98));
-  color: rgb(219 234 254);
-  font-size: 12px;
-  font-weight: 600;
-  box-shadow: 0 14px 35px rgba(2, 6, 23, 0.42), 0 0 18px rgba(95, 158, 255, 0.08);
-  pointer-events: none;
-}
-
-.chuxue-speech-bubble::after {
-  content: '';
-  position: absolute;
-  left: 50%;
-  bottom: -6px;
-  width: 11px;
-  height: 11px;
-  transform: translateX(-50%) rotate(45deg);
-  border-right: 1px solid rgba(95, 158, 255, 0.28);
-  border-bottom: 1px solid rgba(95, 158, 255, 0.28);
-  background: rgb(15 23 42);
-}
-
-.chuxue-bubble-enter-active,
-.chuxue-bubble-leave-active {
-  transition: opacity 180ms ease, transform 180ms ease;
-}
-
-.chuxue-bubble-enter-from,
-.chuxue-bubble-leave-to {
-  opacity: 0;
-  transform: translateX(-50%) translateY(7px) scale(0.96);
-}
-
 @media (max-height: 720px) {
   .chuxue-nameplate {
     display: none;
@@ -309,9 +260,7 @@ onUnmounted(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chuxue-stage,
-  .chuxue-bubble-enter-active,
-  .chuxue-bubble-leave-active {
+  .chuxue-stage {
     transition: none;
   }
 }

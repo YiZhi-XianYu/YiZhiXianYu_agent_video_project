@@ -25,6 +25,8 @@ export interface ChuxueTurn {
 export interface ChuxueChatResponse {
   reply: string
   shouldPlan: boolean
+  planningGoal: string | null
+  targetDurationMs: number | null
   llmUsed: boolean
   modelRoute?: Record<string, unknown>
   userTurnId: string
@@ -86,9 +88,9 @@ export async function getChuxueRuntime(sessionId: string): Promise<ChuxueRuntime
   return get<ChuxueRuntime>(`/api/v1/agent-sessions/${sessionId}/chuxue/runtime`)
 }
 
-export async function planWithChuxue(projectId: string, sessionId: string, goal: string, assetIds: string[], userTurnId?: string): Promise<ChuxueDecision> {
+export async function planWithChuxue(projectId: string, sessionId: string, goal: string, assetIds: string[], userTurnId?: string, targetDurationMs?: number | null): Promise<ChuxueDecision> {
   return post<ChuxueDecision>(`/api/v1/projects/${projectId}/chuxue/plan`, {
-    projectId, sessionId, goal, quality: '1080P', assetIds, autoMode: true, userTurnId,
+    projectId, sessionId, goal, targetDurationMs, quality: '1080P', assetIds, autoMode: true, userTurnId,
   })
 }
 

@@ -3,6 +3,7 @@ package com.yizhixianyu.agentvideo.agent;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yizhixianyu.agentvideo.execution.ProxyQuality;
+import com.yizhixianyu.agentvideo.asset.AssetService;
 import com.yizhixianyu.agentvideo.execution.RunStatus;
 import com.yizhixianyu.agentvideo.execution.WorkflowAdmissionCoordinator;
 import com.yizhixianyu.agentvideo.execution.WorkflowExecutionService;
@@ -41,13 +42,14 @@ public class ChuxueAgentService {
     private final ChuxueIntentParser intentParser;
     private final ToolServiceClient toolClient;
     private final WorkflowRunRepository workflows;
+    private final AssetService assets;
 
     public ChuxueAgentService(AgentSessionService sessions, BlackboardService blackboard,
                               DynamicWorkflowPlanner planner, AgentTraceService trace,
                               AgentPlanSnapshotRepository snapshots, ObjectMapper mapper,
                               WorkflowAdmissionCoordinator admission, WorkflowDefinitionValidator validator,
                               ChuxueIntentParser intentParser, ToolServiceClient toolClient,
-                              WorkflowRunRepository workflows) {
+                              WorkflowRunRepository workflows, AssetService assets) {
         this.sessions = sessions;
         this.blackboard = blackboard;
         this.planner = planner;
@@ -59,6 +61,7 @@ public class ChuxueAgentService {
         this.intentParser = intentParser;
         this.toolClient = toolClient;
         this.workflows = workflows;
+        this.assets = assets;
     }
 
     public ChatResult chat(String userId, String sessionId, String message,
@@ -67,19 +70,61 @@ public class ChuxueAgentService {
         // switch while the request is running must not hide the sent message.
         var userTurn = sessions.addTurn(userId, sessionId, "USER", message);
         var board = blackboard.get(userId, sessionId);
-        var context = Map.<String, Object>of(
-            "goal", board.goal() == null ? "" : board.goal(),
-            "targetDurationMs", board.targetDurationMs() == null ? 30000 : board.targetDurationMs(),
-            "workflowStatus", board.runtime() == null ? "IDLE" : String.valueOf(board.runtime().workflowStatus())
-        );
+        var context = new java.util.LinkedHashMap<String, Object>();
+        var runtime = board.runtime();
+        var workflowStatus = runtime == null || runtime.workflowStatus() == null ? "IDLE" : runtime.workflowStatus();
+        var workflowActive = board.workflowRunId() != null && !"SUCCEEDED".equals(workflowStatus) && !"FAILED".equals(workflowStatus);
+        context.put("goal", board.goal() == null ? "" : board.goal());
+        context.put("targetDurationMs", board.targetDurationMs());
+        context.put("workflowRunId", board.workflowRunId());
+        context.put("workflowStatus", workflowStatus);
+        context.put("workflowActive", workflowActive);
+        context.put("progress", runtime == null ? 0 : runtime.progress());
+        context.put("currentTaskNode", runtime == null ? null : runtime.currentTaskNode());
+        context.put("currentTaskStatus", runtime == null ? null : runtime.currentTaskStatus());
+        context.put("nextAction", runtime == null ? null : runtime.nextAction());
+        context.put("currentGateKey", board.currentGateKey());
+        var projectAssets = assets.listByProject(board.projectId());
+        context.put("assetCount", projectAssets.size());
+        context.put("assetNames", projectAssets.stream().limit(20).map(asset -> asset.getFileName()).toList());
+        context.put("capabilityContract", capabilityContract());
         var response = toolClient.chat(new ToolServiceClient.ChuxueChatRequest(
             message, history == null ? List.of() : history, context));
         AgentSessionTurnEntity assistantTurn = null;
         if (response.llmUsed() && response.reply() != null && !response.reply().isBlank()) {
             assistantTurn = sessions.addTurn(userId, sessionId, "ASSISTANT", response.reply());
         }
-        return new ChatResult(response.reply(), response.shouldPlan(), response.modelRoute(), response.llmUsed(),
-            userTurn.getId(), assistantTurn == null ? null : assistantTurn.getId());
+        if (response.targetDurationMs() != null && !workflowActive) {
+            sessions.updateTargetDuration(userId, sessionId, response.targetDurationMs());
+        }
+        return new ChatResult(response.reply(), response.shouldPlan(), response.planningGoal(), response.targetDurationMs(),
+            response.modelRoute(), response.llmUsed(), userTurn.getId(), assistantTurn == null ? null : assistantTurn.getId());
+    }
+
+    private Map<String, Object> capabilityContract() {
+        return Map.of(
+            "identity", "初雪是视频创作项目的智能入口与执行协同 Agent，不是通用全能助手",
+            "can", List.of(
+                "理解用户的视频创作需求和自然语言修改意见",
+                "读取当前项目的素材摘要、Workflow 状态、任务进度和可解释运行信息",
+                "提出受控的 Workflow 计划并在用户确认后请求后端启动",
+                "在 Workflow 完成或失败后，根据新需求提出下一版计划",
+                "解释镜头、字幕、音乐、模型和 Worker 等已记录的决策"
+            ),
+            "limited", List.of(
+                "可以进行一般话题的简短交流",
+                "可以尝试用用户指定的常见语言交流或翻译，但不应自称专业语言教师、母语者或保证专业准确性",
+                "可以解释与本项目相关的代码和架构，但不是独立的软件开发 Agent"
+            ),
+            "cannot", List.of(
+                "不能直接执行任意命令、编辑任意文件或调用未治理的工具",
+                "不能仅凭聊天声称已经暂停、取消、重试或启动 Workflow",
+                "不能在当前 Workflow 完成或失败前创建第二个 Workflow",
+                "不能编造项目中不存在的素材、镜头、字幕、音乐、进度或输出结果"
+            ),
+            "primaryLanguage", "中文",
+            "executionRule", "聊天只负责理解、解释和提出建议；实际状态以后端 Blackboard 和 Workflow API 为准"
+        );
     }
 
     @Transactional
@@ -105,7 +150,6 @@ public class ChuxueAgentService {
         var turn = userTurnId == null
             ? sessions.addPlanningTurn(userId, sessionId, goal)
             : sessions.requireUserTurn(userId, sessionId, userTurnId);
-        session.updateGoal(goal, parsedIntent.targetDurationMs(), turn.getId());
         if (parsedIntent.needsClarification()) {
             trace.record("CHUXUE_CLARIFICATION_REQUIRED", UUID.randomUUID().toString(), sessionId, turn.getId(), null, null,
                 null, null, null, AGENT_NAME, null, "WAITING_CLARIFICATION",
@@ -121,6 +165,7 @@ public class ChuxueAgentService {
         var effectiveDuration = targetDurationMs != null ? targetDurationMs
             : modificationOnly && !intentParser.hasDuration(goal) && board.targetDurationMs() != null
                 ? board.targetDurationMs() : parsedIntent.targetDurationMs();
+        session.updateGoal(effectiveGoal, effectiveDuration, turn.getId());
         var requested = (parsedIntent.subtitlesExplicit() || parsedIntent.bgmExplicit())
             ? new DynamicWorkflowPlanner.WorkflowCapabilities(
                 true,
@@ -228,6 +273,7 @@ public class ChuxueAgentService {
 
     public record Confirmed(String planId, String workflowRunId, String status, String statusUrl) {}
 
-    public record ChatResult(String reply, boolean shouldPlan, Map<String, Object> modelRoute, boolean llmUsed,
+    public record ChatResult(String reply, boolean shouldPlan, String planningGoal, Integer targetDurationMs,
+                             Map<String, Object> modelRoute, boolean llmUsed,
                              String userTurnId, String assistantTurnId) {}
 }

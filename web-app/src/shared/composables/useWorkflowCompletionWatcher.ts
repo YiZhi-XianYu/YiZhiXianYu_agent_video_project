@@ -53,7 +53,11 @@ export function useWorkflowCompletionWatcher(): void {
         const previous = seenStatuses.get(run.id)
         if (initialized && shouldNotify(run, previous)) {
           notifiedRunIds.add(run.id)
-          chuxue.notifyVideoCompleted()
+          const projectId = projects.projects.find(project => {
+            const projectRuns = successfulResults[projects.projects.indexOf(project)]
+            return projectRuns?.status === 'fulfilled' && projectRuns.value.some(item => item.id === run.id)
+          })?.id
+          if (projectId) chuxue.notifyVideoCompleted(run.id, projectId)
         }
         seenStatuses.set(run.id, run.status)
       }

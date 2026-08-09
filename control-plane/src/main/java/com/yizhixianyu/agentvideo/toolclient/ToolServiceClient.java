@@ -173,5 +173,6 @@ public class ToolServiceClient {
     ) {}
 
     public record ChuxueChatRequest(String message, List<Map<String, String>> history, Map<String, Object> context) {}
-    public record ChuxueChatResponse(String reply, boolean shouldPlan, Map<String, Object> modelRoute, boolean llmUsed) {}
+    public record ChuxueChatResponse(String reply, boolean shouldPlan, String planningGoal, Integer targetDurationMs,
+                                     Map<String, Object> modelRoute, boolean llmUsed) {}
 }

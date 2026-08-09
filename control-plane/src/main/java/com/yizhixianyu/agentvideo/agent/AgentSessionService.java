@@ -44,8 +44,9 @@ public class AgentSessionService {
     public AgentSessionTurnEntity addTurn(String userId, String sessionId, String role, String content) {
         var session = requireOwned(userId, sessionId);
         var turn = turns.save(new AgentSessionTurnEntity(sessionId, (int) turns.countBySessionId(sessionId) + 1, role, content));
-        session.updateGoal("USER".equalsIgnoreCase(role) ? content : null, null,
-            "SYSTEM".equalsIgnoreCase(role) ? null : turn.getId());
+        // A chat turn is transcript data, not the canonical creative brief.
+        // The brief is updated only after Chuxue produces a validated plan.
+        session.recordTurn(turn.getId());
         trace.record("SESSION_TURN_ADDED", UUID.randomUUID().toString(), sessionId, turn.getId(), session.getCurrentPlanId(),
             session.getCurrentWorkflowRunId(), null, null, null, "agent-runtime", null, role, java.util.Map.of());
         return turn;
@@ -74,6 +75,11 @@ public class AgentSessionService {
             throw new IllegalArgumentException("Planning turn must be a USER turn from the same Agent Session");
         }
         return turn;
+    }
+
+    @Transactional
+    public void updateTargetDuration(String userId, String sessionId, int targetDurationMs) {
+        requireOwned(userId, sessionId).updateTargetDuration(targetDurationMs);
     }
 
     @Transactional
@@ -112,12 +118,25 @@ public class AgentSessionService {
     public void syncRuntimeFromWorkflow(String sessionId, String workflowStatus, String gateKey) {
         if (sessionId == null || sessionId.isBlank()) return;
         sessions.findById(sessionId).ifPresent(session -> {
+            var previousStatus = session.getStatus();
             session.syncRuntime(workflowStatus, gateKey);
+            if ("SUCCEEDED".equals(workflowStatus) && !"COMPLETED".equals(previousStatus)) {
+                appendWorkflowStatusTurn(session, "Workflow 已完成，视频已经处理完毕。", session.getCurrentWorkflowRunId());
+            } else if ("FAILED".equals(workflowStatus) && !"FAILED".equals(previousStatus)) {
+                appendWorkflowStatusTurn(session, "Workflow 执行失败，可以查看错误后重试或调整方案。", session.getCurrentWorkflowRunId());
+            }
             if (redis != null) {
                 try { redis.delete("avp:v1:agent:blackboard:" + sessionId); }
                 catch (RuntimeException ignored) { /* Redis is a rebuildable snapshot. */ }
             }
         });
+    }
+
+    private void appendWorkflowStatusTurn(AgentSessionEntity session, String content, String workflowRunId) {
+        var turn = new AgentSessionTurnEntity(session.getId(),
+            (int) turns.countBySessionId(session.getId()) + 1, "SYSTEM", content);
+        turn.linkWorkflow(workflowRunId);
+        turns.save(turn);
     }
 
     @Transactional(readOnly = true)

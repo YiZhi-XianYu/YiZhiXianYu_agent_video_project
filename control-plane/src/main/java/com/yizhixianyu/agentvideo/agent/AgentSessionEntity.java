@@ -37,10 +37,23 @@ public class AgentSessionEntity extends BaseEntity {
         if (!"EXECUTING".equals(status) && !"WAITING_GATE".equals(status)) status = "PLANNING";
     }
 
+    public void recordTurn(String turnId) {
+        if (turnId != null) this.currentTurnId = turnId;
+    }
+
+    public void updateTargetDuration(Integer targetDurationMs) {
+        if (targetDurationMs != null) this.targetDurationMs = targetDurationMs;
+    }
+
     public void recordPlan(String turnId, String planId, int dagVersion) {
         this.currentTurnId = turnId;
         this.currentPlanId = planId;
         this.dagVersion = dagVersion;
+        // A terminal Workflow belongs to the previous creative attempt. A
+        // newly proposed plan must detach that stale runtime pointer so the
+        // confirmation flow can bind the next Workflow to this Session.
+        this.currentWorkflowRunId = null;
+        this.currentGateKey = null;
         this.status = "PLAN_READY";
     }
 

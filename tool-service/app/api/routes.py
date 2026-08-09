@@ -4,6 +4,7 @@ from typing import Any
 import re
 import uuid
 import logging
+import json
 
 from app.llm.provider import LlmError, generate_json_with_fallback
 from app.core.models import AcceptedExecution, ToolExecutionRecord, ToolExecutionRequest
@@ -45,6 +46,62 @@ class ChuxueChatResponse(BaseModel):
     shouldPlan: bool
     modelRoute: dict[str, Any]
     llmUsed: bool
+    planningGoal: str | None = None
+    targetDurationMs: int | None = None
+
+
+def _chat_user_prompt(request: ChuxueChatRequest) -> str:
+    """Serialize chat context as real JSON instead of Python repr.
+
+    DeepSeek is much less likely to confuse an earlier turn with the latest
+    request when roles, ordering, and the current message are explicit JSON.
+    """
+    history = []
+    for item in (request.history or [])[-20:]:
+        role = str(item.get("role", "user")).lower()
+        if role not in {"user", "assistant"}:
+            role = "user"
+        history.append({"role": role, "content": str(item.get("content", ""))})
+    payload = {
+        "conversationHistory": history,
+        "latestUserMessage": request.message.strip(),
+        "projectContext": request.context or {},
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _is_low_quality_chat_reply(reply: object) -> bool:
+    if not isinstance(reply, str) or not reply.strip():
+        return True
+    normalized = re.sub(r"[\s。！!，,、]+", "", reply.strip())
+    return normalized in {"我明白了", "好的", "收到", "明白了", "嗯", "哦"}
+
+
+def _duplicates_assistant_history(reply: str, history: list[dict[str, str]]) -> bool:
+    normalized = re.sub(r"\s+", "", reply.strip())
+    if not normalized:
+        return False
+    return any(
+        str(item.get("role", "")).lower() == "assistant"
+        and re.sub(r"\s+", "", str(item.get("content", "")).strip()) == normalized
+        for item in (history or [])[-20:]
+    )
+
+
+def _is_exploratory_video_request(message: str) -> bool:
+    """Keep vague ideation in conversation instead of creating a Workflow."""
+    text = re.sub(r"[\s，。！？!?,、]+", "", message or "")
+    if any(marker in text for marker in ("没什么想法", "没有想法", "帮我想想计划", "先聊聊", "还没想好")):
+        return True
+    return bool(re.fullmatch(r"(?:那)?(?:我)?(?:想|要|想要)?(?:剪|做|制作)(?:一个|个)?视频(?:的想法)?", text))
+
+
+def _contradicts_active_workflow(reply: str, workflow_active: bool) -> bool:
+    if not workflow_active:
+        return False
+    compact = re.sub(r"\s+", "", reply or "")
+    promises = ("我来开启新的", "我会开启新的", "现在开启新的", "立即开启新的", "开始新的Workflow", "再创建一个Workflow")
+    return any(phrase.lower() in compact.lower() for phrase in promises)
 
 def _parse_duration_ms(text: str) -> int:
     minute = re.search(r"(\d+(?:\.\d+)?)\s*(?:分钟|分|minutes?|mins?)", text or "", re.I)
@@ -130,12 +187,15 @@ def chuxue_chat(request: ChuxueChatRequest) -> ChuxueChatResponse:
     schema = {"title": "chuxue_chat", "type": "object", "additionalProperties": False,
               "properties": {"reply": {"type": "string", "minLength": 1}, "shouldPlan": {"type": "boolean"}},
               "required": ["reply", "shouldPlan"]}
-    user = {"message": request.message.strip(), "history": request.history[-20:], "context": request.context}
+    user = _chat_user_prompt(request)
     try:
         result, used_route, _provider = generate_json_with_fallback("CHAT", system, str(user), schema,
                                                                        temperature=0.5, max_tokens=500,
                                                                        request_id=uuid.uuid4().hex[:12])
-        return ChuxueChatResponse(reply=str(result.get("reply") or "我明白了。"), shouldPlan=bool(result.get("shouldPlan")), modelRoute=used_route, llmUsed=True)
+        reply = result.get("reply")
+        if _is_low_quality_chat_reply(reply):
+            raise LlmError("CHAT_REPLY_LOW_QUALITY")
+        return ChuxueChatResponse(reply=str(reply).strip(), shouldPlan=bool(result.get("shouldPlan")), modelRoute=used_route, llmUsed=True)
     except Exception:
         failed = dict(route); failed["fallbackReason"] = "MODEL_CALL_FAILED"
         return ChuxueChatResponse(reply="", shouldPlan=False, modelRoute=failed, llmUsed=False)
@@ -148,36 +208,91 @@ def chuxue_chat_v2(request: ChuxueChatRequest) -> ChuxueChatResponse:
         return ChuxueChatResponse(reply="", shouldPlan=False, modelRoute=route, llmUsed=False)
     system = (
         "你是初雪，一个温和、聪明、懂视频创作的中文助手。你必须同时完成自然回复和是否进入工作流的判断。\n"
-        "reply 是主要输出：必须结合用户当前消息、历史对话和项目上下文自然回应，即使 shouldPlan=false 也必须有信息量。\n"
-        "禁止只回复‘我明白了’、‘好的’、‘收到’、‘明白了’等空泛确认语。用户说你好时应自我介绍；用户问你是谁时应说明能力；用户说暂时没有想法时应自然陪伴并提供轻量启发。\n"
-        "用户明确提出制作或修改视频方案时 shouldPlan=true；寒暄、闲聊、解释、追问或尚未形成制作意图时为 false。\n"
+        "必须优先理解 latestUserMessage；它代表用户此刻真正要回应的内容，不能被更早的历史话题覆盖。\n"
+        "如果用户明确纠正或切换话题（例如‘聊编程吧’、‘那我要剪视频’、‘别聊视频了’），必须立即承认切换并围绕最新话题回答。不要继续复用旧话题的整段回复。\n"
+        "projectContext 是后端事实，优先级高于你根据历史做出的猜测。不得声称自己能修改或启动尚未由后端确认的执行状态。\n"
+        "capabilityContract 是后端注入的能力契约。介绍‘你是谁’或回答‘你会不会某事’时，只能依据该契约，不得扩大能力范围。你首先是视频创作 Agent：可以理解需求、读取项目事实、提出受控计划、在用户确认后请求后端启动、解释运行状态；不能把自己描述成通用编程 Agent、专业语言教师、母语者或可以直接操作系统的助手。\n"
+        "对非视频话题可以礼貌地进行有限交流，但要诚实说明这不是核心能力；用户明确要求换回中文或其他语言时可以切换回复语言，但不要承诺专业语言能力。\n"
+        "若 projectContext.workflowActive=true，当前会话在该 Workflow 完成或失败前禁止创建第二个 Workflow。此时 shouldPlan 必须为 false；用户要求‘再剪一个’或‘开启新的 Workflow’时，应明确说明当前 Workflow 仍在执行，并报告 workflowRunId、workflowStatus、progress、nextAction。\n"
+        "用户询问‘做到哪一步’‘视频怎么样了’时，必须直接依据 projectContext 中的 workflowStatus、progress、currentTaskNode、nextAction 回答，不得编造、不得说自己看不到细节。\n"
+        "如果 workflowStatus=SUCCEEDED，要明确已完成；如果 workflowStatus=FAILED，要明确已失败；不要继续声称仍在运行。\n"
+        "reply 是主要输出：必须结合最新消息、必要的历史上下文和项目上下文自然回应，即使 shouldPlan=false 也必须有信息量。\n"
+        "禁止只回复‘我明白了’、‘好的’、‘收到’、‘明白了’等空泛确认语，也禁止复制之前已经说过的整段回复。\n"
+        "普通问题（包括编程、MySQL等）可以正常回答，但不要假装自己已经创建计划。只有用户明确表示要制作/剪辑/修改视频，或明确要求你帮忙制定视频制作计划时，shouldPlan=true；单纯说‘我有想法’或讨论概念时仍为 false。\n"
+        "shouldPlan=true 表示信息已经足够交给后端立即生成一个可确认的 Workflow，而不只是用户有剪视频的意愿。\n"
+        "同时输出 missingInformation：列出生成可靠 Workflow 仍缺少的关键信息。只要 missingInformation 非空，shouldPlan 必须为 false。\n"
+        "planningGoal 是交给后端的完整、独立、可执行创作需求，不能只写‘可以’‘开始吧’‘和原来一样’。如果用户用简短确认承接前文，你必须从历史中重述素材范围、主题、时长、风格和明确约束。shouldPlan=false 时 planningGoal=null。\n"
+        "targetDurationMs 是当前对话中用户最新确认的目标时长。用户明确说‘20秒’时输出20000，即使此轮仍需继续澄清；未知时为null。绝不能把已经确认的20秒恢复成默认30秒。\n"
+        "‘我想剪视频’、‘我有剪视频的想法’、‘我没什么想法，你帮我想想计划’都属于探索阶段：先提供少量方向或提出最少量澄清问题，missingInformation 非空，shouldPlan=false。\n"
+        "只有目标基本可执行（例如明确了素材范围，并具备主题/目标时长/关键偏好中的必要信息）或用户确认了此前已讨论清楚的方案，missingInformation 才能为空且 shouldPlan=true。\n"
         "不得执行工具、生成命令或编造执行状态。严格只输出一个 JSON 对象，不要 Markdown、代码围栏或额外解释。"
     )
     schema = {"title": "chuxue_chat", "type": "object", "additionalProperties": False,
-              "properties": {"reply": {"type": "string", "minLength": 2}, "shouldPlan": {"type": "boolean"}},
-              "required": ["reply", "shouldPlan"]}
-    user = {"message": request.message.strip(), "history": request.history[-20:], "context": request.context}
+              "properties": {
+                  "reply": {"type": "string", "minLength": 2},
+                  "shouldPlan": {"type": "boolean"},
+                  "missingInformation": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
+                  "planningGoal": {"type": ["string", "null"]},
+                  "targetDurationMs": {"type": ["integer", "null"], "minimum": 5000, "maximum": 300000},
+              },
+              "required": ["reply", "shouldPlan", "missingInformation", "planningGoal", "targetDurationMs"]}
+    user = _chat_user_prompt(request)
     last_route = route
     for attempt in range(2):
         request_id = uuid.uuid4().hex[:12]
-        prompt = system if attempt == 0 else system + "\n上次输出不合格。这次必须返回非空、有具体信息的 reply 和布尔 shouldPlan。"
+        prompt = system if attempt == 0 else system + (
+            "\n上次输出不合格。这次必须重新理解 latestUserMessage，返回新的、有具体信息的 reply、"
+            "布尔 shouldPlan 和 missingInformation；不要复制历史中的助手回复。")
         try:
             result, last_route, _provider = generate_json_with_fallback(
                 "CHAT", prompt, str(user), schema, temperature=0.5 if attempt == 0 else 0.7,
                 max_tokens=500, request_id=request_id)
             reply = result.get("reply")
             should_plan = result.get("shouldPlan")
+            missing_information = result.get("missingInformation")
+            planning_goal = result.get("planningGoal")
+            target_duration_ms = result.get("targetDurationMs")
             if not isinstance(reply, str) or not reply.strip():
                 logger.warning("Chuxue chat validation failed [%s]: missing/empty reply, keys=%s", request_id, list(result.keys()))
                 continue
             reply = reply.strip()
-            if reply in {"我明白了", "好的", "收到", "明白了"}:
+            if _is_low_quality_chat_reply(reply):
                 logger.warning("Chuxue chat quality failed [%s]: generic reply=%r", request_id, reply)
+                continue
+            if _duplicates_assistant_history(reply, request.history):
+                logger.warning("Chuxue chat quality failed [%s]: duplicated historical assistant reply", request_id)
+                continue
+            workflow_active = bool((request.context or {}).get("workflowActive"))
+            if _contradicts_active_workflow(reply, workflow_active):
+                logger.warning("Chuxue chat quality failed [%s]: reply contradicts active Workflow", request_id)
                 continue
             if not isinstance(should_plan, bool):
                 logger.warning("Chuxue chat validation failed [%s]: shouldPlan type=%s", request_id, type(should_plan).__name__)
                 continue
-            return ChuxueChatResponse(reply=reply, shouldPlan=should_plan, modelRoute=last_route, llmUsed=True)
+            if not isinstance(missing_information, list) or not all(isinstance(item, str) for item in missing_information):
+                logger.warning("Chuxue chat validation failed [%s]: invalid missingInformation", request_id)
+                continue
+            if missing_information and should_plan:
+                logger.warning("Chuxue chat corrected [%s]: planning suppressed because information is missing: %s",
+                               request_id, missing_information)
+                should_plan = False
+            if should_plan and _is_exploratory_video_request(request.message):
+                logger.warning("Chuxue chat corrected [%s]: exploratory request is not ready for planning", request_id)
+                should_plan = False
+            if workflow_active and should_plan:
+                logger.warning("Chuxue chat corrected [%s]: active Workflow suppresses new planning", request_id)
+                should_plan = False
+            if should_plan and (not isinstance(planning_goal, str) or not planning_goal.strip()):
+                logger.warning("Chuxue chat validation failed [%s]: planningGoal is required for planning", request_id)
+                continue
+            if target_duration_ms is not None and not isinstance(target_duration_ms, int):
+                logger.warning("Chuxue chat validation failed [%s]: targetDurationMs type=%s", request_id,
+                               type(target_duration_ms).__name__)
+                continue
+            return ChuxueChatResponse(reply=reply, shouldPlan=should_plan,
+                                      planningGoal=planning_goal.strip() if should_plan else None,
+                                      targetDurationMs=target_duration_ms,
+                                      modelRoute=last_route, llmUsed=True)
         except Exception as exc:
             logger.exception("Chuxue chat model attempt %d failed [%s]: %s", attempt + 1, request_id, exc)
     failed = dict(last_route)

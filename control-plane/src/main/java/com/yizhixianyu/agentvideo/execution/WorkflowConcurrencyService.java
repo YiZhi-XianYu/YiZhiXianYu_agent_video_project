@@ -13,6 +13,8 @@ import java.util.Collections;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.HashSet;
+import java.util.Set;
 
 /** User/project workflow admission control with Redis leases and a MySQL fallback. */
 @Service
@@ -65,6 +67,11 @@ public class WorkflowConcurrencyService {
         String projectKey = key("project", projectId);
         if (redisEnabled && redis != null) {
             try {
+                // MySQL is the source of truth.  A process crash or a terminal
+                // transition during container restart can leave an old Redis
+                // member behind; reconcile only IDs that are verified terminal
+                // before applying the new admission decision.
+                reconcileTerminalLeases(project.getOwnerUserId(), projectId, userKey, projectKey);
                 long now = System.currentTimeMillis();
                 long expiry = now + leaseSeconds * 1000;
                 Long acquired = redis.execute(ACQUIRE_SCRIPT, java.util.List.of(userKey, projectKey),
@@ -83,6 +90,29 @@ public class WorkflowConcurrencyService {
         if (projectActive >= projectLimit) throw new WorkflowConcurrencyLimitException("project", projectLimit);
     }
 
+    private void reconcileTerminalLeases(String userId, String projectId, String userKey, String projectKey) {
+        Set<String> terminalInUser = new HashSet<>();
+        for (var ownedProject : projects.list(userId)) {
+            for (var workflow : workflows.findByProjectIdOrderByCreatedAtDesc(ownedProject.getId())) {
+                if (isTerminal(workflow)) terminalInUser.add(workflow.getId());
+            }
+        }
+        Set<String> terminalInProject = new HashSet<>();
+        for (var workflow : workflows.findByProjectIdOrderByCreatedAtDesc(projectId)) {
+            if (isTerminal(workflow)) terminalInProject.add(workflow.getId());
+        }
+        // Remove only database-verified terminal members. Never clear the
+        // complete sorted set, since another active project/run may exist.
+        for (var workflowId : terminalInUser) {
+            redis.execute(RELEASE_SCRIPT, java.util.List.of(userKey, projectKey), workflowId);
+        }
+        for (var workflowId : terminalInProject) {
+            if (!terminalInUser.contains(workflowId)) {
+                redis.execute(RELEASE_SCRIPT, java.util.List.of(userKey, projectKey), workflowId);
+            }
+        }
+    }
+
     public void release(String projectId, String workflowRunId) {
         if (!redisEnabled || redis == null) return;
         try {
@@ -93,6 +123,10 @@ public class WorkflowConcurrencyService {
 
     private boolean active(WorkflowRunEntity workflow) {
         return workflow.getStatus() == RunStatus.CREATED || workflow.getStatus() == RunStatus.RUNNING || workflow.getStatus() == RunStatus.PAUSED;
+    }
+
+    private boolean isTerminal(WorkflowRunEntity workflow) {
+        return workflow.getStatus() == RunStatus.SUCCEEDED || workflow.getStatus() == RunStatus.FAILED;
     }
 
     private String key(String scope, String value) {
