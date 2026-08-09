@@ -1,6 +1,7 @@
 package com.yizhixianyu.agentvideo.api;
 
 import com.yizhixianyu.agentvideo.auth.AccessDeniedException;
+import com.yizhixianyu.agentvideo.agent.ActiveSessionWorkflowException;
 import com.yizhixianyu.agentvideo.auth.AuthRateLimitException;
 import com.yizhixianyu.agentvideo.auth.AuthenticationRequiredException;
 import com.yizhixianyu.agentvideo.auth.CsrfProtectionException;
@@ -59,6 +60,14 @@ public class ApiExceptionHandler {
         return error(HttpStatus.TOO_MANY_REQUESTS, "WORKFLOW_CONCURRENCY_LIMITED", exception);
     }
 
+    @ExceptionHandler(ActiveSessionWorkflowException.class)
+    public ResponseEntity<ActiveWorkflowError> activeSessionWorkflow(ActiveSessionWorkflowException exception) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .contentType(MediaType.APPLICATION_JSON)
+            .body(new ActiveWorkflowError("ACTIVE_SESSION_WORKFLOW", exception.getMessage(), Instant.now(),
+                exception.getWorkflowRunId(), exception.getWorkflowStatus()));
+    }
+
     @ExceptionHandler({IllegalArgumentException.class, MethodArgumentNotValidException.class})
     public ResponseEntity<ApiError> badRequest(Exception exception) {
         return error(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", exception);
@@ -77,4 +86,7 @@ public class ApiExceptionHandler {
 
     public record ApiError(String code, String message, Instant timestamp) {
     }
+
+    public record ActiveWorkflowError(String code, String message, Instant timestamp,
+                                      String workflowRunId, String workflowStatus) {}
 }

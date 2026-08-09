@@ -3,7 +3,6 @@ package com.yizhixianyu.agentvideo.api;
 import com.yizhixianyu.agentvideo.agent.ChuxueAgentService;
 import com.yizhixianyu.agentvideo.auth.AuthService;
 import com.yizhixianyu.agentvideo.execution.ProxyQuality;
-import com.yizhixianyu.agentvideo.toolclient.ToolServiceClient;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -38,7 +37,7 @@ public class ChuxueAgentController {
             throw new IllegalArgumentException("projectId does not match request");
         }
         return chuxue.plan(user.id(), request.sessionId(), request.goal(), request.targetDurationMs(),
-            request.quality(), request.assetIds(), request.autoMode(), request.reviewGateKeys());
+            request.quality(), request.assetIds(), request.autoMode(), request.reviewGateKeys(), request.userTurnId());
     }
 
     @PostMapping("/plans/{planId}/confirm")
@@ -48,7 +47,7 @@ public class ChuxueAgentController {
     }
 
     @PostMapping("/chat")
-    public ToolServiceClient.ChuxueChatResponse chat(@PathVariable String projectId,
+    public ChuxueAgentService.ChatResult chat(@PathVariable String projectId,
                                                       @Valid @RequestBody ChatRequest request,
                                                       HttpServletRequest servletRequest) {
         var user = auth.requireUser(servletRequest);
@@ -64,7 +63,8 @@ public class ChuxueAgentController {
         @NotNull ProxyQuality quality,
         @NotNull @Size(min = 1, max = 20) List<@NotBlank String> assetIds,
         boolean autoMode,
-        @Size(max = 20) java.util.Set<String> reviewGateKeys
+        @Size(max = 20) java.util.Set<String> reviewGateKeys,
+        String userTurnId
     ) {}
 
     public record ChatRequest(@NotBlank String projectId, @NotBlank String sessionId, @NotBlank String message,

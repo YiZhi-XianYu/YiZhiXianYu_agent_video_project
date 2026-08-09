@@ -33,7 +33,7 @@ public class AgentSessionEntity extends BaseEntity {
     public void updateGoal(String goal, Integer targetDurationMs, String turnId) {
         if (goal != null && !goal.isBlank()) this.naturalLanguageGoal = goal.trim();
         if (targetDurationMs != null) this.targetDurationMs = targetDurationMs;
-        this.currentTurnId = turnId;
+        if (turnId != null) this.currentTurnId = turnId;
         if (!"EXECUTING".equals(status) && !"WAITING_GATE".equals(status)) status = "PLANNING";
     }
 

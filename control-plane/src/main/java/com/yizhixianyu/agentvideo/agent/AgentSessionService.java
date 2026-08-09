@@ -44,7 +44,8 @@ public class AgentSessionService {
     public AgentSessionTurnEntity addTurn(String userId, String sessionId, String role, String content) {
         var session = requireOwned(userId, sessionId);
         var turn = turns.save(new AgentSessionTurnEntity(sessionId, (int) turns.countBySessionId(sessionId) + 1, role, content));
-        session.updateGoal("USER".equalsIgnoreCase(role) ? content : null, null, turn.getId());
+        session.updateGoal("USER".equalsIgnoreCase(role) ? content : null, null,
+            "SYSTEM".equalsIgnoreCase(role) ? null : turn.getId());
         trace.record("SESSION_TURN_ADDED", UUID.randomUUID().toString(), sessionId, turn.getId(), session.getCurrentPlanId(),
             session.getCurrentWorkflowRunId(), null, null, null, "agent-runtime", null, role, java.util.Map.of());
         return turn;
@@ -62,6 +63,17 @@ public class AgentSessionService {
                 && content.equals(user.getContent())) return user;
         }
         return addTurn(userId, sessionId, "USER", content);
+    }
+
+    @Transactional(readOnly = true)
+    public AgentSessionTurnEntity requireUserTurn(String userId, String sessionId, String turnId) {
+        requireOwned(userId, sessionId);
+        var turn = turns.findById(turnId)
+            .orElseThrow(() -> new IllegalArgumentException("Agent Session turn not found"));
+        if (!sessionId.equals(turn.getSessionId()) || !"USER".equalsIgnoreCase(turn.getRole())) {
+            throw new IllegalArgumentException("Planning turn must be a USER turn from the same Agent Session");
+        }
+        return turn;
     }
 
     @Transactional

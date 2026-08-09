@@ -6,6 +6,8 @@ export interface ChuxueSession {
   goal: string
   targetDurationMs: number | null
   currentWorkflowRunId: string | null
+  currentPlanId: string | null
+  currentGateKey: string | null
   status: string
 }
 
@@ -13,7 +15,7 @@ export interface ChuxueTurn {
   id: string
   sessionId: string
   sequenceNumber: number
-  role: 'USER' | 'ASSISTANT'
+  role: 'USER' | 'ASSISTANT' | 'SYSTEM'
   content: string
   planId: string | null
   workflowRunId: string | null
@@ -25,6 +27,24 @@ export interface ChuxueChatResponse {
   shouldPlan: boolean
   llmUsed: boolean
   modelRoute?: Record<string, unknown>
+  userTurnId: string
+  assistantTurnId: string | null
+}
+
+export interface ChuxueRuntime {
+  sessionId: string
+  status: string
+  planId: string | null
+  workflowRunId: string | null
+  currentGateKey: string | null
+  runtime: {
+    workflowStatus: string | null
+    progress: number
+    nextAction: string | null
+    currentTaskNode: string | null
+    currentTaskStatus: string | null
+    errorMessage: string | null
+  } | null
 }
 
 export interface ChuxueDecision {
@@ -62,9 +82,13 @@ export async function getChuxueTurns(sessionId: string): Promise<ChuxueTurn[]> {
   return get<ChuxueTurn[]>(`/api/v1/agent-sessions/${sessionId}/turns`)
 }
 
-export async function planWithChuxue(projectId: string, sessionId: string, goal: string, assetIds: string[]): Promise<ChuxueDecision> {
+export async function getChuxueRuntime(sessionId: string): Promise<ChuxueRuntime> {
+  return get<ChuxueRuntime>(`/api/v1/agent-sessions/${sessionId}/chuxue/runtime`)
+}
+
+export async function planWithChuxue(projectId: string, sessionId: string, goal: string, assetIds: string[], userTurnId?: string): Promise<ChuxueDecision> {
   return post<ChuxueDecision>(`/api/v1/projects/${projectId}/chuxue/plan`, {
-    projectId, sessionId, goal, quality: '1080P', assetIds, autoMode: true,
+    projectId, sessionId, goal, quality: '1080P', assetIds, autoMode: true, userTurnId,
   })
 }
 
