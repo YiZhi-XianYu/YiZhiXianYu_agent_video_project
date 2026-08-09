@@ -3,6 +3,9 @@
 *.iml
 .vscode/
 
+#docs
+/docs
+
 # Java
 control-plane/target/
 
