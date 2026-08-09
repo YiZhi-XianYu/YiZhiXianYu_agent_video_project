@@ -76,6 +76,7 @@ public class WorkflowExecutionService {
     private com.yizhixianyu.agentvideo.cache.RedisDraftService redisCache;
     private WorkflowConcurrencyService workflowConcurrency;
     private com.yizhixianyu.agentvideo.trace.AgentTraceService agentTrace;
+    private com.yizhixianyu.agentvideo.agent.AgentSessionService agentSessions;
     private final Map<String, Timer.Sample> taskMetricSamples = new java.util.concurrent.ConcurrentHashMap<>();
 
     @Autowired(required = false)
@@ -96,6 +97,11 @@ public class WorkflowExecutionService {
     @Autowired(required = false)
     public void setAgentTrace(ObjectProvider<com.yizhixianyu.agentvideo.trace.AgentTraceService> provider) {
         this.agentTrace = provider.getIfAvailable();
+    }
+
+    @Autowired(required = false)
+    public void setAgentSessions(ObjectProvider<com.yizhixianyu.agentvideo.agent.AgentSessionService> provider) {
+        this.agentSessions = provider.getIfAvailable();
     }
 
 
@@ -224,6 +230,7 @@ public class WorkflowExecutionService {
                                                 String planId, String traceId) {
         var workflow = workflowRepository.findLockedById(workflowRunId).orElseThrow();
         workflow.attachAgentContext(sessionId, turnId, planId, traceId);
+        syncAgentRuntime(workflow);
         if (agentTrace != null) {
             agentTrace.record("WORKFLOW_ATTACHED_TO_SESSION", traceId, sessionId, turnId, planId,
                 workflowRunId, null, null, null, "agent-runtime", null, workflow.getStatus().name(), Map.of());
@@ -1375,6 +1382,7 @@ public class WorkflowExecutionService {
                         workflow.pause(gate.gateKey());
                         // The downstream task stays PENDING until the user continues the Gate.
                         // Return now so this transaction commits instead of evaluating the same Gate forever.
+                        syncAgentRuntime(workflow);
                         return;
                     }
                     var governanceGate = findGovernanceGateForTask(task, workflow);
@@ -1391,6 +1399,7 @@ public class WorkflowExecutionService {
                                     "reason", "Tool requires confirmation before dispatch"
                                 ));
                         }
+                        syncAgentRuntime(workflow);
                         return;
                     }
                     task.markReady();
@@ -1405,6 +1414,7 @@ public class WorkflowExecutionService {
             var pendingGate = findTerminalGate(definition, tasks, workflow);
             if (pendingGate != null) {
                 workflow.pause(pendingGate.gateKey());
+                syncAgentRuntime(workflow);
                 return;
             }
             var failed = tasks.stream()
@@ -1432,6 +1442,14 @@ public class WorkflowExecutionService {
         } else if (workflow.getStatus() == RunStatus.RUNNING) {
             workflow.start();
             workflow.updateProgress((int) (terminal * 100 / tasks.size()));
+        }
+        syncAgentRuntime(workflow);
+    }
+
+    private void syncAgentRuntime(WorkflowRunEntity workflow) {
+        if (agentSessions != null && workflow.getAgentSessionId() != null) {
+            agentSessions.syncRuntimeFromWorkflow(
+                workflow.getAgentSessionId(), workflow.getStatus().name(), workflow.getCurrentGateKey());
         }
     }
     private boolean isTerminal(TaskRunEntity task) {

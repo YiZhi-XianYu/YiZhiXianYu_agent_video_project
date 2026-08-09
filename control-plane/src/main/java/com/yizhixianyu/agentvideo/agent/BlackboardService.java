@@ -90,9 +90,22 @@ public class BlackboardService {
             .map(a -> new ArtifactView(a.getId(), a.getExternalArtifactId(), a.getType(), a.getContentHash(), a.getProducerTaskRunId())).toList();
         var traceViews = traces.findBySessionIdOrderByOccurredAtAsc(session.getId()).stream()
             .map(t -> new TraceView(t.getEventType(), t.getTraceId(), t.getWorkflowRunId(), t.getTaskRunId(), t.getExecutionId(), t.getOccurredAt())).toList();
+        var runtime = workflow == null ? new RuntimeView(null, null, 0, null, null, null) :
+            new RuntimeView(workflow.getStatus().name(), workflow.getCurrentGateKey(), workflow.getProgress(),
+                workflow.getErrorMessage(), nextAction(workflow), workflow.getCompletedAt());
         return new BlackboardView(1L, session.getId(), session.getUserId(), session.getProjectId(), session.getNaturalLanguageGoal(),
             session.getTargetDurationMs(), session.getStatus(), session.getCurrentPlanId(), session.getDagVersion(),
-            session.getCurrentWorkflowRunId(), session.getCurrentGateKey(), turnViews, taskViews, artifactViews, traceViews);
+            session.getCurrentWorkflowRunId(), session.getCurrentGateKey(), runtime, turnViews, taskViews, artifactViews, traceViews);
+    }
+
+    private String nextAction(WorkflowRunEntity workflow) {
+        return switch (workflow.getStatus()) {
+            case PAUSED -> "请处理当前 Gate: " + workflow.getCurrentGateKey();
+            case SUCCEEDED -> "成片已完成，可查看输出 Artifact";
+            case FAILED -> "Workflow 失败，请检查错误并选择重试或修改方案";
+            case RUNNING -> "等待 Worker 执行下一个 Task";
+            default -> "等待 Workflow 启动";
+        };
     }
 
     private void saveSnapshot(String key, BlackboardView view, Long expectedRevision) {
@@ -113,8 +126,10 @@ public class BlackboardService {
 
     public record BlackboardView(Long revision, String sessionId, String userId, String projectId, String goal,
                                  Integer targetDurationMs, String status, String planId, Integer dagVersion,
-                                 String workflowRunId, String currentGateKey, List<TurnView> turns,
+                                 String workflowRunId, String currentGateKey, RuntimeView runtime, List<TurnView> turns,
                                  List<TaskView> tasks, List<ArtifactView> artifacts, List<TraceView> traces) {}
+    public record RuntimeView(String workflowStatus, String currentGateKey, int progress, String errorMessage,
+                              String nextAction, java.time.Instant completedAt) {}
     public record TurnView(String id, int sequenceNumber, String role, String content, String planId, String workflowRunId) {}
     public record TaskView(String taskRunId, String nodeKey, String toolName, String toolVersion, String status, int attempt, int progress, String errorMessage) {}
     public record ArtifactView(String id, String externalArtifactId, String type, String contentHash, String producerTaskRunId) {}

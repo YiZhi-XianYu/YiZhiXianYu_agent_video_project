@@ -3,6 +3,8 @@ package com.yizhixianyu.agentvideo.agent;
 import com.yizhixianyu.agentvideo.auth.AccessDeniedException;
 import com.yizhixianyu.agentvideo.project.ProjectService;
 import com.yizhixianyu.agentvideo.trace.AgentTraceService;
+import com.yizhixianyu.agentvideo.cache.RedisDraftService;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
@@ -14,10 +16,13 @@ public class AgentSessionService {
     private final AgentSessionTurnRepository turns;
     private final ProjectService projects;
     private final AgentTraceService trace;
+    private final RedisDraftService redis;
 
     public AgentSessionService(AgentSessionRepository sessions, AgentSessionTurnRepository turns,
-                               ProjectService projects, AgentTraceService trace) {
+                               ProjectService projects, AgentTraceService trace,
+                               ObjectProvider<RedisDraftService> redisProvider) {
         this.sessions = sessions; this.turns = turns; this.projects = projects; this.trace = trace;
+        this.redis = redisProvider.getIfAvailable();
     }
 
     @Transactional
@@ -61,6 +66,26 @@ public class AgentSessionService {
         if (turnId != null) turns.findById(turnId).ifPresent(turn -> turn.linkPlan(planId));
         trace.record("SESSION_PLAN_CREATED", null, sessionId, turnId, planId, null, null, null, null,
             "planner", null, session.getStatus(), java.util.Map.of("dagVersion", dagVersion));
+    }
+
+    @Transactional
+    public AgentSessionEntity syncRuntime(String userId, String sessionId, String workflowStatus, String gateKey) {
+        var session = requireOwned(userId, sessionId);
+        session.syncRuntime(workflowStatus, gateKey);
+        return session;
+    }
+
+    /** Synchronizes a Workflow-owned runtime transition without requiring an HTTP user context. */
+    @Transactional
+    public void syncRuntimeFromWorkflow(String sessionId, String workflowStatus, String gateKey) {
+        if (sessionId == null || sessionId.isBlank()) return;
+        sessions.findById(sessionId).ifPresent(session -> {
+            session.syncRuntime(workflowStatus, gateKey);
+            if (redis != null) {
+                try { redis.delete("avp:v1:agent:blackboard:" + sessionId); }
+                catch (RuntimeException ignored) { /* Redis is a rebuildable snapshot. */ }
+            }
+        });
     }
 
     @Transactional(readOnly = true)
