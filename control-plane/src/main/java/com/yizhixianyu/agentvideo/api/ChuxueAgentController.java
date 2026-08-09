@@ -40,6 +40,12 @@ public class ChuxueAgentController {
             request.quality(), request.assetIds(), request.autoMode());
     }
 
+    @PostMapping("/plans/{planId}/confirm")
+    public ChuxueAgentService.Confirmed confirm(@PathVariable String projectId, @PathVariable String planId,
+                                                HttpServletRequest servletRequest) {
+        return chuxue.confirm(auth.requireUser(servletRequest).id(), projectId, planId);
+    }
+
     public record PlanRequest(
         @NotBlank String projectId,
         @NotBlank String sessionId,

@@ -1,0 +1,22 @@
+CREATE TABLE agent_plan_snapshots (
+    id VARCHAR(40) NOT NULL,
+    created_at DATETIME(6) NOT NULL,
+    updated_at DATETIME(6) NOT NULL,
+    version BIGINT NOT NULL DEFAULT 0,
+    session_id VARCHAR(40) NOT NULL,
+    turn_id VARCHAR(80) NOT NULL,
+    project_id VARCHAR(40) NOT NULL,
+    trace_id VARCHAR(80) NOT NULL,
+    status VARCHAR(30) NOT NULL,
+    quality VARCHAR(30) NOT NULL,
+    auto_mode BIT(1) NOT NULL,
+    goal LONGTEXT NOT NULL,
+    target_duration_ms INT NOT NULL,
+    asset_ids_json LONGTEXT NOT NULL,
+    definition_json LONGTEXT NOT NULL,
+    PRIMARY KEY (id),
+    INDEX idx_agent_plan_session (session_id, created_at),
+    INDEX idx_agent_plan_turn (turn_id),
+    INDEX idx_agent_plan_project (project_id, created_at),
+    INDEX idx_agent_plan_trace (trace_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
