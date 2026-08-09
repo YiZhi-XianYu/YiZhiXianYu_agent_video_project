@@ -40,7 +40,7 @@ public class DynamicWorkflowPlanner {
     public WorkflowPlanPreview preview(ProxyQuality quality, String durationPrompt, boolean autoMode,
                                        WorkflowCapabilities requested, boolean useDefault, String goal, List<String> assetIds) {
         var defaults = WorkflowCapabilities.defaults();
-        var llmIntent = useDefault || requested != null ? null : requestIntent(goal, assetIds == null ? 1 : assetIds.size());
+        var llmIntent = useDefault || requested != null ? null : requestIntent(goal, durationPrompt, assetIds == null ? 1 : assetIds.size());
         var capabilities = useDefault ? defaults : requested != null ? requested.normalized() : capabilitiesFromIntent(llmIntent);
         var targetDurationMs = llmIntent == null ? parseDurationMs(goal) : llmIntent.targetDurationMs();
         var defaultDefinition = template.create(quality, goal, autoMode, targetDurationMs);
@@ -66,10 +66,13 @@ public class DynamicWorkflowPlanner {
         return preview(quality, durationPrompt, autoMode, requested, useDefault, effectiveGoal, assetIds);
     }
 
-    private ToolServiceClient.WorkflowIntentResponse requestIntent(String goal, int assetCount) {
+    private ToolServiceClient.WorkflowIntentResponse requestIntent(String goal, String durationPrompt, int assetCount) {
         if (toolClient == null) return null;
         try {
-            return toolClient.requestWorkflowIntent(new ToolServiceClient.WorkflowIntentRequest(goal == null ? "" : goal, null, assetCount, List.of("vlmAnalysis", "sourceTranscription", "subtitles", "bgm")));
+            Integer durationMs = durationPrompt == null || durationPrompt.isBlank() ? null : parseDurationMs(durationPrompt);
+            return toolClient.requestWorkflowIntent(new ToolServiceClient.WorkflowIntentRequest(
+                goal == null ? "" : goal, durationPrompt, assetCount,
+                List.of("vlmAnalysis", "sourceTranscription", "subtitles", "bgm"), durationMs));
         } catch (RuntimeException ignored) { return null; }
     }
 

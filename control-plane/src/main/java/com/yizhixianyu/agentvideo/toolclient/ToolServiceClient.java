@@ -146,8 +146,14 @@ public class ToolServiceClient {
         String goal,
         String targetDuration,
         int assetCount,
-        List<String> availableCapabilities
-    ) {}
+        List<String> availableCapabilities,
+        Integer targetDurationMs
+    ) {
+        public WorkflowIntentRequest(String goal, String targetDuration, int assetCount,
+                                      List<String> availableCapabilities) {
+            this(goal, targetDuration, assetCount, availableCapabilities, null);
+        }
+    }
 
     public record WorkflowIntentResponse(
         boolean llmUsed,

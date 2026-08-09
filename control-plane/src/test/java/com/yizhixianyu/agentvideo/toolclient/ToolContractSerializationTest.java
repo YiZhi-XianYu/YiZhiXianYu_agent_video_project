@@ -4,10 +4,24 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ToolContractSerializationTest {
+
+    @Test
+    void serializesStructuredWorkflowIntentDuration() throws Exception {
+        var request = new ToolServiceClient.WorkflowIntentRequest(
+            "制作旅行短片", "45 seconds", 2,
+            List.of("vlmAnalysis", "subtitles"), 45000
+        );
+
+        var json = new ObjectMapper().writeValueAsString(request);
+
+        assertThat(json).contains("\"targetDuration\":\"45 seconds\"");
+        assertThat(json).contains("\"targetDurationMs\":45000");
+    }
 
     @Test
     void serializesTheToolExecutionContract() throws Exception {
