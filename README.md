@@ -1,384 +1,324 @@
 # Agent-Driven 智能视频制作流水线
 
-这是一个面向多素材视频创作的学习型项目。用户上传多个视频素材，输入成片目标和时长，系统自动完成素材探测、代理视频生成、镜头切分、质量分析、语义理解、镜头排序、故事编排、时间线生成、BGM/字幕处理和最终渲染。
+这是一个面向多素材视频创作的全链路工程项目。用户在项目中上传视频素材，通过“初雪”对话式 Agent 描述创作目标，系统将自然语言转换为受控的 Workflow Definition，再由 Java 控制面调度 Python 工具和 RabbitMQ Worker 完成媒体分析、镜头筛选、故事编排、时间线合成、字幕/BGM 处理与最终渲染。
 
-本文是新人接手项目时的第一入口。建议先按“快速启动 → 业务流程 → 目录导航 → 架构原理”的顺序阅读。
+项目的核心不是让大语言模型直接执行命令，而是建立一条可校验、可暂停、可恢复、可解释的执行链：
 
-正式项目目录：
+```text
+用户对话
+  → 初雪 Agent（上下文理解、约束提取、计划建议）
+  → Java Control Plane（Session / Blackboard / Planner / Gate / Trace）
+  → Workflow / Task 调度
+  → RabbitMQ + Python Worker
+  → Artifact 与状态回写
+  → 初雪和 Workflow Monitor 同步展示
+```
+
+当前正式代码目录：
 
 ```text
 C:\Users\XRZ\Desktop\ninth\WwDa3B884n8dj
 ```
 
-不要把以下目录当作当前代码：
+## 1. 当前能力概览
 
-- `C:\Users\XRZ\Desktop\third\WwDa3B884n8dj`：历史副本；
-- `C:\Users\XRZ\Desktop\summer\WwDa3B884n8dj`：旧版/测试素材参考目录；
-- `C:\Users\XRZ\Desktop\sbell2`：旧备份目录。
+### 1.1 架构图
 
-## 1. 五分钟了解项目
+![](架构图.png)
 
-### 1.1 一句话理解
+**纯文字总览：**
 
-这是一个“Java 控制面 + Python 工具执行面 + DAG Workflow + RabbitMQ Worker”的视频生产系统：
-
-- Java 决定任务能不能执行、什么时候执行、执行结果如何落库；
-- Python 调用 FFmpeg、Whisper、VLM 等工具完成实际计算；
-- MySQL 保存最终业务状态；
-- RabbitMQ 投递异步任务；
-- Redis 保存可丢失草稿和缓存；
-- OSS 保存视频、音频和图片等媒体对象。
-
-### 1.2 一次视频生成的主流程
-
-```mermaid
-flowchart TD
-    A[上传多个素材] --> B[探测媒体信息]
-    B --> C[生成代理视频]
-    C --> D[镜头切分]
-    D --> E[质量评分 + VLM 分析]
-    E --> F[跨素材镜头排序]
-    F --> G[故事计划]
-    G --> H[高光选择]
-    H --> I[时间线生成]
-    I --> J[字幕映射]
-    I --> K[BGM 候选]
-    J --> L[最终渲染]
-    K --> L
-    L --> M[最终视频预览/下载]
+```text
+                         浏览器
+               Vue 3 + TypeScript + Pinia
+          初雪 AI 对话 · Workflow Monitor · Gate 审核
+                         │ REST / Cookie / CSRF
+                         ▼
+          ┌──────────────────────────────────┐
+          │   Java 21 · Spring Boot 3.4      │
+          │   Control Plane        :8080     │
+          │                                  │
+          │  [可选] 初雪 Agent（Session ·     │
+          │      Blackboard · Planner · Gate）│
+          │  Workflow 引擎（Definition → Run  │
+          │      → Task · Execution · 并发锁）│
+          │ Tool Client · Callback Controller│
+          │  Auth · Storage Router · Outbox  │
+          └──────────────────────────────────┘
+       ┌──────────┼───────────────┬──────────────┐
+       │          │               │              │
+    MySQL 8   RabbitMQ 3.13    Redis 7     本地 Volume
+   业务事实    Outbox → 队列     Blackboard    / 阿里云 OSS
+   Projects   Task 分发         Gate 草稿     媒体二进制
+   Workflows  Worker 消费      并发锁         Artifact
+   Sessions                    限流           JSON / SRT
+   Artifacts
+   Trace · Gate Feedback
+       │          │               │              │
+       │          ▼               │              │
+       │  ┌─────────────────────────────────┐    │
+       │  │  Python 3.12 · FastAPI          │    │
+       │  │  Tool Service         :8090     │    │
+       │  │                                 │    │
+       │  │  Execution Service（资源组调度） │    │
+       │  │                                 │    │
+       │  │FFmpeg / FFprobe（探测·代理·渲染）│    │
+       │  │  Whisper（语音转写·字幕合成）     │    │
+       │  │  VLM / CLIP（场景·物体·人物识别） │    │
+       │  │  Model Router（LLM 路由与降级）  │    │
+       │  │  Story Plan · Shot Ranking      │    │
+       │  │  Timeline · BGM · Subtitle      │    │
+       │  │                                 │    │
+       │  │  SQLite WAL（执行日志·幂等·恢复） │    │
+       │  │  Rabbit Worker（异步消费·回调）   │    │
+       │  └─────────────────────────────────┘    │
+       │          │                              │
+       └──────────┴── Artifact 元数据与结果 ──────┘
 ```
 
-### 1.3 当前产品边界
+默认生产路径是 `Outbox → RabbitMQ → Rabbit Task Worker → Execution Service`。当 `RABBITMQ_ENABLED=false` 时，Java `ToolServiceClient` 直接调用 FastAPI Tool Execution API；两条路径最终都进入同一个 Python `Execution Service`，结果通过回调或轮询回到 Control Plane。
 
-- 动态 DAG 只发生在执行前；用户确认后拓扑冻结；
-- 运行中的 Gate 可以编辑 Story Plan、Timeline、BGM 等业务 Artifact，但不能增删运行中节点；
-- 不实现运行中 Replan；需求改变时创建新的 Workflow；
-- 半自动模式保留运行中人工 Gate，全自动模式跳过人工暂停，但仍执行后端校验；
-- LLM 只输出受约束的结构化意图，不直接执行 Shell、FFmpeg、SQL 或任意工具。
+### 1.2 技术栈汇总
 
-## 2. 当前运行方式
+| 层次 | 技术 | 在项目中的职责 |
+| --- | --- | --- |
+| 前端 | Vue 3、TypeScript、Vite | 页面、初雪聊天、Workflow 和 Gate 交互 |
+| 前端状态 | Pinia、Vue Router | Session、项目、Workflow、审核状态和路由 |
+| 控制面 | Java 21、Spring Boot 3.4、Spring MVC | REST API、业务编排、权限和生命周期控制 |
+| 持久化 | Spring Data JPA、Hibernate、MySQL 8 | Project、Asset、Session、Workflow、Task、Artifact、Trace |
+| 数据库迁移 | Flyway | 版本化创建和升级 MySQL Schema |
+| 缓存与并发 | Redis 7、Redis Lock/Draft | Blackboard 快照、草稿、锁、限流和短期缓存 |
+| 消息 | RabbitMQ 3.13、Spring AMQP、Pika | Outbox 投递、异步任务、Worker 消费与回调 |
+| 执行面 | Python 3.12、FastAPI、Uvicorn | 工具 API、执行服务和 Worker 运行时 |
+| Agent 编排 | LangGraph 0.6 | 初雪的上下文准备、约束提取、分类和决策边界 |
+| 模型路由 | DeepSeek/OpenAI/Claude 配置路由、Whisper、CLIP | 文本、VLM、长音频能力选择和降级 |
+| 媒体处理 | FFmpeg、FFprobe | 探测、代理、镜头、字幕、时间线和渲染 |
+| 视觉/语音 | PyTorch、Transformers、faster-whisper、Pillow | 视觉分析、质量评分和转写 |
+| 对象存储 | 本地共享 Volume、阿里云 OSS SDK | 保存视频、音频、图片和 JSON Artifact |
+| 观测 | Spring Actuator、Micrometer、Prometheus、Agent Trace | 健康检查、指标、模型审计和全链路解释 |
+| 部署 | Docker Compose | 本地开发、Worker profile 和生产 Compose |
 
-### 2.1 已验证的本地容器
+### 初雪 Agent
 
-当前 Compose 可启动：
+- 支持中文多轮对话和历史 Session；
+- 能理解目标时长、字幕、BGM、风格和人工审核要求；
+- 通过 LangGraph 完成有限的上下文准备、约束提取、请求分类和提案校验；
+- LLM 只输出结构化结果，不能直接选择任意工具、命令或执行路径；
+- 工作流执行期间能读取 Blackboard 中的真实状态，并拒绝重复创建并发 Workflow；
+- 可以解释当前进度、素材摘要、BGM 选择和失败/fallback 状态。
 
-| 服务 | 地址/作用 |
-| --- | --- |
-| Control Plane | `http://127.0.0.1:8080` |
-| Tool Service | `http://127.0.0.1:8090` |
-| RabbitMQ 管理台 | `http://127.0.0.1:15672` |
-| RabbitMQ AMQP | `127.0.0.1:5672` |
-| Redis | `127.0.0.1:6379` |
-| MySQL | `127.0.0.1:3307` |
+### Workflow
 
-RabbitMQ、Redis 和四类 Worker 已接入本地 Compose。RabbitMQ 临时密码通过 `.env` 的 `RABBITMQ_DEFAULT_PASS` 配置，当前学习环境使用的密码不要复制到其他环境。
+默认多素材模板包含以下节点：
 
-### 并发参数
+```text
+video_probe
+video_proxy_generate
+video_shot_detect
+vision_quality_score
+vision_vlm_analyze
+source_transcribe（可选）
+shot_ranking
+story_plan
+highlight_selection
+timeline_compose
+bgm_select（可选）
+subtitle_compose（可选）
+video_render
+```
 
-任务并发由三层参数共同控制：Worker 的 Python 资源组槽位、重任务总上限，以及 RabbitMQ 消费者的 `prefetch`。当前 Compose 默认值是 LIGHT=4、MEDIA=3、MODEL=2、RENDER=2、重任务总上限=4、`prefetch=2`。可通过以下环境变量调整：
+用户确认计划后，Definition 会被冻结并展开为具体 TaskRun。运行中不能随意改变 DAG；需要改变创作目标时，先等待当前 Workflow 成功或失败，再在 Session 中创建新的计划。
+
+### 人工 Gate
+
+默认可选的人工 Gate 包括：
+
+- `gate_shot_ranking`：镜头排序审核；
+- `gate_story_edit`：故事计划编辑；
+- `gate_timeline_preview`：时间线预览；
+- `gate_bgm_review`：BGM 候选选择；
+- `gate_render_review`：最终成片预览。
+
+用户可以在初雪中提出“中间审核”或“开启人工审核”。前者默认在时间线阶段暂停，后者按工作流顺序启用所有可用审核 Gate。聊天中的 Gate 直接复用 Workflow Monitor 的完整组件，和工作流页面操作同一个 WorkflowRun/Gate。
+
+## 2. 本地 Docker 快速启动
+
+### 2.1 前置条件
+
+- Docker Desktop；
+- Docker Compose v2；
+- 如需本地前端开发，安装 Node.js 22；
+- 如需运行 Python 测试，使用 `agent-video-pipeline` Conda 环境。
+
+### 2.2 配置环境变量
+
+复制或编辑项目根目录 `.env`，至少确认以下配置：
 
 ```dotenv
-TOOL_EXECUTION_LIGHT_LIMIT=4
-TOOL_EXECUTION_MEDIA_LIMIT=3
-TOOL_EXECUTION_MODEL_LIMIT=2
-TOOL_EXECUTION_RENDER_LIMIT=2
-TOOL_EXECUTION_HEAVY_LIMIT=4
-TOOL_RABBITMQ_PREFETCH=2
+LLM_PROVIDER=deepseek
+LLM_MODEL=deepseek-chat
+LLM_API_KEY=你的模型密钥
+RABBITMQ_ENABLED=true
+REDIS_ENABLED=true
 ```
 
-模型和渲染通常更占内存、CPU、磁盘，并发不是越大越好；调整后应观察 Worker 资源、RabbitMQ Ready/Unacked 消息和任务耗时。
+本地默认使用 MySQL、Redis、RabbitMQ 和本地 Artifact 存储。配置 OSS 后可以把媒体对象切换到 OSS，但数据库仍保存 Artifact 元数据和业务状态。
 
-`prefetch` 不是实际执行线程数。Worker 在成功提交到本地 `ExecutionService` 后确认 Rabbit 消息，实际同时执行数量由资源组槽位决定。要提高吞吐，优先调整槽位或增加同一资源组 Worker 副本；横向扩展前必须规划每个副本的独立 ExecutionStore，避免多个进程争用同一个 SQLite 文件。
-
-### 2.2 启动全部服务
-
-在正式项目根目录执行：
+### 2.3 启动核心服务
 
 ```powershell
 cd C:\Users\XRZ\Desktop\ninth\WwDa3B884n8dj
+docker compose up -d --build
+docker compose ps
+```
+
+如需启动独立的 MEDIA、MODEL、RENDER Worker：
+
+```powershell
 docker compose --profile workers up -d --build
 docker compose --profile workers ps
 ```
 
-检查健康状态：
+### 2.4 服务地址
+
+| 服务 | 地址 | 作用 |
+| --- | --- | --- |
+| Web / Control Plane | `http://127.0.0.1:8080` | Vue 静态页面、REST API、业务控制面 |
+| Tool Service | `http://127.0.0.1:8090` | Python 工具、LLM、Worker 执行入口 |
+| Tool Service 健康检查 | `http://127.0.0.1:8090/api/v1/health` | 执行面健康状态 |
+| Spring 健康检查 | `http://127.0.0.1:8080/actuator/health` | 控制面健康状态 |
+| RabbitMQ 管理台 | `http://127.0.0.1:15672` | 队列、消费者和消息观察 |
+| MySQL | `127.0.0.1:3307` | 业务事实数据 |
+| Redis | `127.0.0.1:6379` | 快照、草稿、锁和限流 |
+
+### 2.5 停止服务
 
 ```powershell
-Invoke-WebRequest http://127.0.0.1:8080/actuator/health
-Invoke-WebRequest http://127.0.0.1:8090/api/v1/health
-docker exec avp-rabbitmq rabbitmqctl list_queues name consumers messages
+docker compose stop
 ```
 
-### 2.3 停止服务
+开发排障时优先使用 `stop`、`restart` 和日志查看。除非确认可以删除本地数据，否则不要使用 `docker compose down -v`。
 
-```powershell
-docker compose --profile workers stop
-```
+## 3. 本地开发与测试
 
-不要随意使用 `down -v`，它会删除 Compose 管理的数据库、Redis、RabbitMQ 数据卷。学习排障时优先使用 `stop`、`restart` 和查看日志。
-
-### 2.4 前端本地开发
+### 前端
 
 ```powershell
 cd web-app
 npm ci
-npm run build
 npm run dev
+npm run build
 ```
 
-前端生产构建会在 `control-plane/Dockerfile` 中自动执行，并复制到 Java 静态资源目录。`node_modules`、构建产物和本地运行数据不要提交到 Git。
+生产构建会由 `control-plane/Dockerfile` 自动完成，并复制到 Spring Boot 的静态资源目录。
 
-### 2.5 后端测试
+### Java Control Plane
 
 ```powershell
 cd control-plane
-mvn test
-
-cd ..\tool-service
-python -m pytest -q
+cmd.exe /d /c call "C:\software\IDEA\IntelliJ IDEA 2025.2.2\plugins\maven\lib\maven3\bin\mvn.cmd" -q test
 ```
 
-## 3. 业务概念
+### Python Tool Service
 
-| 概念 | 新人理解 |
-| --- | --- |
-| Project | 用户的创作空间，可以拥有多个素材和多个 Workflow |
-| Asset | 用户上传的原始视频、音频或图片 |
-| WorkflowRun | 一次完整的成片尝试 |
-| WorkflowDefinition | 执行前确认的逻辑 DAG 定义 |
-| TaskRun | Workflow 展开后的一个实际执行步骤 |
-| Artifact | Task 产生的不可变结果，例如镜头列表、Story Plan、Timeline、视频 |
-| Gate | 需要用户审核或编辑的业务暂停点 |
-| Attempt | 同一个 Task 的第几次尝试 |
-| Outbox | 与业务事务一起写入、等待发布到 RabbitMQ 的消息记录 |
+```powershell
+cd tool-service
+& "C:\software\Anaconda\envs\agent-video-pipeline\python.exe" -m pytest -q
+```
 
-一个关键区别：13 个逻辑节点不等于 13 个运行时 Task。上传两个视频后，素材级节点会展开成两份甚至更多 Task，最后汇聚到工作流级排序、故事和渲染任务。
+当前已验证的测试基线：
 
-## 4. 动态 DAG 如何工作
+```text
+Control Plane：Maven tests passed
+Tool Service：123 passed, 2 skipped, 1 warning
+Web App：production build passed
+```
+
+## 4. 一次创作请求如何运行
 
 ```mermaid
 sequenceDiagram
     actor User as 用户
-    participant Web as Vue 画布
-    participant Java as DynamicWorkflowPlanner
-    participant LLM as LLM
-    participant Validator as WorkflowDefinitionValidator
+    participant Web as Vue + ChuxueChatCard
+    participant CP as Java Control Plane
+    participant LLM as Model Router / LLM
     participant DB as MySQL
+    participant MQ as RabbitMQ
+    participant Worker as Python Tool Worker
 
-    User->>Web: 输入自然语言目标和时长
-    Web->>Java: 请求候选流程图
-    Java->>LLM: 请求结构化 Workflow Intent
-    LLM-->>Java: 能力意图/目标时长
-    Java->>Java: 默认模板 + Intent 生成候选 DAG
-    Java-->>Web: 中文节点、连线、布局
-    User->>Web: 拖拽节点、手动连线、删除或恢复默认
-    Web->>Validator: 提交确认 DAG
-    Validator-->>Web: 合法或错误提示
-    Web->>DB: 创建拓扑冻结的 WorkflowRun
+    User->>Web: 描述主题、时长、字幕/BGM和审核偏好
+    Web->>CP: /projects/{id}/chuxue/chat
+    CP->>DB: 写入 User Turn
+    CP->>CP: 刷新 Blackboard
+    CP->>LLM: 结构化聊天决策
+    LLM-->>CP: reply + shouldPlan + constraints
+    CP-->>Web: 自然回复或计划建议
+    Web->>CP: /chuxue/plan
+    CP->>CP: Intent → 受控 Workflow Definition
+    CP->>DB: 保存 Plan Snapshot
+    Web->>CP: 用户确认计划
+    CP->>DB: 创建 WorkflowRun / TaskRun
+    CP->>MQ: Outbox 发布 ToolExecution
+    MQ->>Worker: 投递任务
+    Worker-->>CP: Artifact / 状态 / 进度回调
+    CP->>DB: 更新 Task、Artifact、Trace
+    CP-->>Web: 状态、Gate 和解释
 ```
 
-字幕有一个特别重要的依赖：`subtitle.compose` 必须依赖 `audio.source-transcribe` 产生的 `SOURCE_TRANSCRIPT`。用户没有转写需求时，后端会禁用字幕链路，而不是让字幕节点空跑。
-
-## 5. 架构总览
-
-```mermaid
-graph TD
-    Browser[Vue 3 + TypeScript 前端] -->|REST / Cookie / CSRF| CP[Java 21 Spring Boot Control Plane]
-    CP --> MySQL[(MySQL：最终业务真相)]
-    CP --> Outbox[Transactional Outbox]
-    Outbox --> Rabbit[(RabbitMQ：Task 队列)]
-    Rabbit --> W1[LIGHT Worker]
-    Rabbit --> W2[MEDIA Worker]
-    Rabbit --> W3[MODEL Worker]
-    Rabbit --> W4[RENDER Worker]
-    CP --> Redis[(Redis：草稿/缓存/进度)]
-    CP --> OSS[(阿里云 OSS：视频/音频/图片)]
-    W1 --> Tool[Python FastAPI Tool Service]
-    W2 --> Tool
-    W3 --> Tool
-    W4 --> Tool
-    Tool --> FFmpeg[FFmpeg / FFprobe]
-    Tool --> ML[PyTorch / Whisper / VLM]
-    Tool --> OSS
-    Tool --> Journal[(SQLite WAL Execution Journal)]
-    Tool -->|Callback / Poll| CP
-```
-
-更详尽的原理、数据流图、时序图和故障图见根目录的 [`技术架构原理说明.md`](技术架构原理说明.md)。
-
-## 6. 目录导航：接手时先看哪里
+## 5. 目录导航
 
 ```text
-web-app/
-  src/features/workflow/       动态 DAG、Workflow 监控、Gate 页面
-  src/features/audit/          LLM 审计页面
-  src/api/                     前端 API 封装
-  src/stores/                  Pinia 状态
-
-control-plane/src/main/java/
-  .../api/                     REST Controller、认证入口、内部接口
-  .../workflow/                Definition、Planner、Validator、模板
-  .../execution/               Workflow、Task、依赖、调度、恢复
-  .../artifact/                Artifact 元数据
-  .../outbox/                  Outbox 和 Rabbit 拓扑
-  .../storage/                 Local/OSS Artifact Storage
-  .../cache/                   Redis 草稿/缓存服务
+control-plane/src/main/java/.../
+  agent/          初雪 Agent、Session、Blackboard、Gate、解释服务
+  workflow/       Definition、模板、动态 Planner、Validator、治理策略
+  execution/      WorkflowRun、TaskRun、依赖、调度、重试、恢复、取消
+  artifact/       Artifact 元数据和查询
+  outbox/         事务消息 Outbox 与 RabbitMQ 拓扑
+  trace/          Agent Trace 和审计事件
+  storage/        本地存储 / OSS 路由
+  cache/          Redis 草稿、锁、冲突检测
+  api/            REST Controller
 
 tool-service/app/
-  api/                         FastAPI 路由
-  core/                        配置和数据模型
-  registry/                    Tool Manifest 注册
-  execution/                   执行队列、SQLite Journal、资源限制
-  messaging/                   RabbitMQ Worker
-  tools/                       具体媒体、模型、规划和渲染工具
+  agent/          LangGraph 初雪运行边界
+  api/            FastAPI 路由、聊天和 Workflow Intent 接口
+  llm/            Model Router、Provider、JSON 解析、审计
+  registry/       Tool Registry、Manifest、Tool Governance
+  execution/      执行服务、资源组和 SQLite 执行日志
+  messaging/      RabbitMQ Worker
+  tools/          FFmpeg、FFprobe、Whisper、VLM、规划和渲染工具
+  rag/            项目内镜头证据的确定性混合检索
+  music/          BGM Provider 和候选曲库
 
-contracts/                     跨服务 Schema 和协议
-docs/                          阶段交接、部署、压测和设计文档
-docker-compose.yml             本地服务和 Worker profile
-docker-compose.prod.yml        生产 Compose 模板
-.env                           本地环境变量，不提交敏感信息
+web-app/src/
+  components/     App Shell、初雪宠物、聊天卡片、通用组件
+  features/       项目、素材、Workflow、Gate、审核、审计、版本页面
+  stores/         Pinia 状态：project、chuxue、workflow、review、auth
+  api/            前端 REST API 封装
+
+contracts/        LLM 和跨服务契约
+deploy/           部署配置
+docs/             阶段性开发记录和测试材料
 ```
 
-## 7. 推荐阅读顺序
+## 6. 当前设计边界
 
-### 第一步：看数据模型
+1. MySQL 是 Workflow、Task、Artifact、Session、Trace 和 Gate 反馈的事实来源；Redis 只保存可重建的快照、草稿、锁和限流数据。
+2. LLM 不拥有工具调用权限。模型返回值必须经过 JSON Schema、业务约束和后端 Planner 校验。
+3. Workflow Definition 在执行前生成并冻结。运行中只允许修改当前 Gate 对应的 Story Plan、Timeline 或 BGM Artifact。
+4. 一个 Agent Session 在当前 Workflow 成功或失败前不会创建第二个执行任务。
+5. Artifact 是任务之间传递结果的主要边界，媒体文件和结构化 JSON 均通过 Artifact 关联。
+6. RAG 当前是项目内的混合证据检索，用于辅助 Story Plan/镜头角色选择，不是外部爆款视频训练系统。
+7. OSS 是可选存储后端；本地开发可使用共享 Docker volume。
 
-1. `control-plane/.../workflow/WorkflowDefinition.java`；
-2. `control-plane/.../execution/WorkflowRunEntity.java`；
-3. `control-plane/.../execution/TaskRunEntity.java`；
-4. `control-plane/.../artifact/ArtifactEntity.java`。
+## 7. 项目定位
 
-### 第二步：跟踪一条执行主线
+这是一个以工程化 Agent Runtime 为核心的智能视频制作项目，重点展示：
 
-1. `WorkflowExecutionService.createMultiAssetAnalysisRun()`：创建 Workflow；
-2. `expandTasks()`：逻辑 DAG 展开为 TaskRun；
-3. `evaluateWorkflow()`：判断 READY、Gate 和终态；
-4. `prepareDispatch()`：构造 Tool 请求；
-5. `applyToolResult()`：保存 Artifact 并推进下游；
-6. `recoverWorkflow()`：服务重启后恢复。
+- Agent 与确定性 Control Plane 的职责分离；
+- Session / Blackboard 驱动的多轮上下文；
+- 受治理的 Tool Registry 和 Model Router；
+- 可恢复的 DAG Workflow 与 RabbitMQ Worker；
+- Artifact、Gate、Trace 组成的可解释执行链。
 
-### 第三步：理解消息和执行
-
-1. `execution/RabbitDispatchService.java`；
-2. `outbox/OutboxService.java`；
-3. `outbox/RabbitTopologyConfiguration.java`；
-4. `tool-service/app/messaging/rabbit_worker.py`；
-5. `tool-service/app/execution/service.py`。
-
-### 第四步：理解前端交互
-
-1. `WorkflowTopologyPlanner.vue`：动态 DAG 画布；
-2. Workflow 监控页面：Task/Gate/Artifact 展示；
-3. Story Plan 和 Timeline 页面：业务 Artifact 编辑；
-4. `LlmAuditPanel.vue`：后端聚合审计列表。
-
-## 8. 关键数据流
-
-### 8.1 媒体上传
-
-```text
-浏览器 FormData
-  → ProjectController
-  → AssetService
-  → 视频/音频/图片写入 OSS
-  → AssetEntity 保存 storageUri、hash、大小、媒体类型
-  → 浏览器获得短时预签名 URL
-```
-
-### 8.2 Task 执行
-
-```text
-Task READY
-  → Task DISPATCHING + Outbox PENDING（同一 MySQL 事务）
-  → Publisher Confirm
-  → RabbitMQ 资源队列
-  → Worker claim
-  → OSS 输入物化
-  → Python Tool 执行
-  → 输出上传 OSS
-  → Callback（RabbitMQ 模式）/ Poller（HTTP 回退模式）
-  → MySQL Artifact + Task 状态
-  → 下游 Task 变 READY
-```
-
-### 8.3 Redis 的边界
-
-Redis 只保存可以丢失、可以重建的数据：DAG 草稿、Gate 草稿、LLM 审计列表缓存、进度快照和心跳。Workflow、Task、Artifact 和 Outbox 不能只放 Redis。
-
-## 9. RabbitMQ/Redis 开关与回滚
-
-```dotenv
-RABBITMQ_ENABLED=true
-REDIS_ENABLED=true
-RABBITMQ_DEFAULT_PASS=本地密码
-RABBITMQ_WORKER_TOKEN=内部 Worker token
-```
-
-排障时可以切换：
-
-- RabbitMQ 异常：设置 `RABBITMQ_ENABLED=false`，回到 HTTP Tool dispatch；
-- Redis 异常：设置 `REDIS_ENABLED=false`，使用内存/数据库回退；
-- Worker 崩溃：RabbitMQ 会重新投递，幂等键和 Attempt 防止旧结果污染；
-- RabbitMQ 模式下每个资源组 Worker 使用独立执行存储，Control Plane 不再用主 Tool Service 轮询其他 Worker 的 executionId；Worker 回调是结果的权威路径；
-- Outbox 发布失败：记录 `FAILED`、`attempts`、`nextAttemptAt`，等待重试；
-- Poison message：进入 DLQ，不无限 requeue。
-
-## 10. 常见排障命令
-
-```powershell
-# 查看所有容器
-docker compose --profile workers ps
-
-# 查看 Java 日志
-docker compose logs --tail=200 control-plane
-
-# 查看 Python/Worker 日志
-docker compose logs --tail=200 tool-service tool-worker-media tool-worker-model tool-worker-render
-
-# 查看 RabbitMQ 队列、消费者和积压
-docker exec avp-rabbitmq rabbitmqctl list_queues name consumers messages
-
-# 查看 Redis 是否可用
-docker exec avp-redis redis-cli ping
-
-# 查看健康检查
-Invoke-WebRequest http://127.0.0.1:8080/actuator/health
-Invoke-WebRequest http://127.0.0.1:8090/api/v1/health
-```
-
-如果 Control Plane 启动时报 Rabbit 队列参数不一致，先确认队列中没有未处理消息，再由维护者精确删除旧队列并重建；不要直接删除全部 Docker Volume。
-
-## 11. 当前完成状态
-
-- 第十三阶段：动态 DAG、中文拓扑画布、默认 DAG 回退、服务端校验、半自动/全自动确认已完成；
-- 第十四阶段：可观测性、压测基线、Artifact Storage 抽象、阿里云 OSS 媒体对象存储已完成；
-- 第十五阶段：RabbitMQ、Transactional Outbox、DLQ、资源组 Worker、Redis 草稿/缓存、LLM 审计分页聚合已完成；
-- 前端 `brace-expansion` 高危依赖已通过 npm override 修复，`npm audit` 为 0 vulnerabilities；
-- 本地前端构建、Java 测试、Python 编译和 Docker Compose 部署均已验证。
-
-阶段交接文档：
-
-- [`docs/thirteenth-stage-handoff.md`](docs/thirteenth-stage-handoff.md)
-- [`docs/fourteenth-stage-handoff.md`](docs/fourteenth-stage-handoff.md)
-- [`docs/fifteenth-stage-handoff.md`](docs/fifteenth-stage-handoff.md)
-
-## 12. 安全和提交边界
-
-- 不提交 `.env`、AccessKey、LLM API Key、RabbitMQ 密码、Worker token；
-- 不把视频、音频、图片、模型缓存和运行时 SQLite 提交到 Git；
-- 不修改或删除历史备份目录；
-- 不使用 `git reset --hard`、`git checkout --` 等破坏性操作；
-- 生产环境需要更换学习环境密码，并补充网络隔离、备份、监控和密钥管理。
-
-## 13. 进一步学习
-
-新人完成基础阅读后，可以尝试：
-
-1. 关闭 RabbitMQ，验证 HTTP 回退；
-2. 关闭 Redis，验证草稿和审计重建；
-3. 上传两个素材，对比逻辑节点数和实际 Task 数；
-4. 在 Gate 编辑 Story Plan，观察新 Artifact 和旧 Artifact 的血缘；
-5. 停止 Worker，观察 RabbitMQ 重投；
-6. 查看 Actuator、RabbitMQ 管理台和 Redis 内存指标；
-7. 为一个新 Tool 增加 Manifest、Python 实现、Java 输入映射和测试。
-
-详细技术原理和更多 Mermaid 图见 [`技术架构原理说明.md`](技术架构原理说明.md)。
+后续的 Agent 质量评估、增量执行与 Artifact 复用、Workflow 版本 Diff、交付运维等属于可选的进一步生产化增强，不是当前核心功能运行的前置条件。
