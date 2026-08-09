@@ -37,7 +37,10 @@ const workflowStore = useWorkflowStore()
 const reviewStore = useReviewStore()
 const uiStore = useUiStore()
 const gateDraftStatus = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
+const gateDraftRevision = ref(0)
 let gateDraftTimer: ReturnType<typeof setTimeout> | null = null
+let gateDraftSaveInFlight = false
+let gateDraftSaveQueued = false
 let hydratingGateDraft = false
 
 /** Gate 1 视图模式：true = 画廊视图, false = 列表视图 */
@@ -124,6 +127,7 @@ watch(() => workflowStore.isTerminal, (terminal) => {
 // Gate 变化时同步到 review store
 watch(() => workflowStore.run?.currentGateKey, () => {
   syncGate()
+  gateDraftRevision.value = 0
   gateFeedbackScore.value = 0
   gateFeedbackReasons.value = []
   gateFeedbackComment.value = ''
@@ -144,6 +148,9 @@ watch(() => ({
 
 onUnmounted(() => {
   stopPolling()
+  if (gateDraftTimer) clearTimeout(gateDraftTimer)
+  gateDraftTimer = null
+  gateDraftSaveQueued = false
   workflowStore.clear()
   reviewStore.resetAll()
 })
@@ -186,7 +193,7 @@ async function syncGate(): Promise<void> {
 }
 
 function gateDraftPayload(): Record<string, unknown> {
-  return { version: 1, gateKey: reviewStore.currentGate?.gateKey, shotScores: reviewStore.shotScores, excludedShotIds: [...reviewStore.excludedShotIds], forcedShotIds: [...reviewStore.forcedShotIds], storyPlan: reviewStore.storyPlan, lockedShotIds: [...reviewStore.lockedShotIds], timeline: reviewStore.timeline }
+  return { version: 1, draftRevision: gateDraftRevision.value, gateKey: reviewStore.currentGate?.gateKey, shotScores: reviewStore.shotScores, excludedShotIds: [...reviewStore.excludedShotIds], forcedShotIds: [...reviewStore.forcedShotIds], storyPlan: reviewStore.storyPlan, lockedShotIds: [...reviewStore.lockedShotIds], timeline: reviewStore.timeline }
 }
 
 function scheduleGateDraftSave(): void {
@@ -194,16 +201,53 @@ function scheduleGateDraftSave(): void {
   if (!gateKey || !workflowStore.isPaused) return
   gateDraftStatus.value = 'saving'
   if (gateDraftTimer) clearTimeout(gateDraftTimer)
-  gateDraftTimer = setTimeout(async () => {
-    try { await saveGateDraft(props.runId, gateKey, gateDraftPayload()); gateDraftStatus.value = 'saved' }
-    catch { gateDraftStatus.value = 'error' }
-  }, 700)
+  gateDraftTimer = setTimeout(() => { void flushGateDraftSave(gateKey) }, 700)
+}
+
+async function flushGateDraftSave(gateKey: string): Promise<void> {
+  if (gateDraftSaveInFlight) {
+    gateDraftSaveQueued = true
+    return
+  }
+  // A polling update or a Gate transition can make a delayed save obsolete.
+  if (!workflowStore.isPaused || workflowStore.currentGate?.gateKey !== gateKey) return
+
+  gateDraftSaveInFlight = true
+  try {
+    const result = await saveGateDraft(props.runId, gateKey, gateDraftPayload())
+    if (workflowStore.currentGate?.gateKey === gateKey) {
+      gateDraftRevision.value = result.revision
+      gateDraftStatus.value = 'saved'
+    }
+  } catch (error) {
+    // A conflict means another tab/session won the revision. Reload the server
+    // revision so the next user edit can continue without a permanent error.
+    if (error instanceof ApiError && error.status === 409) {
+      try {
+        const latest = await getGateDraft<Record<string, any>>(props.runId, gateKey)
+        gateDraftRevision.value = Number(latest.draftRevision ?? 0)
+        gateDraftStatus.value = 'saving'
+        gateDraftSaveQueued = true
+      } catch {
+        gateDraftStatus.value = 'error'
+      }
+    } else {
+      gateDraftStatus.value = 'error'
+    }
+  } finally {
+    gateDraftSaveInFlight = false
+    if (gateDraftSaveQueued) {
+      gateDraftSaveQueued = false
+      scheduleGateDraftSave()
+    }
+  }
 }
 
 async function restoreGateDraft(gateKey: string): Promise<void> {
   try {
     const draft = await getGateDraft<Record<string, any>>(props.runId, gateKey)
     if (!draft || draft.version !== 1 || draft.gateKey !== gateKey) return
+    gateDraftRevision.value = Number(draft.draftRevision ?? 0)
     if (Array.isArray(draft.shotScores) && draft.shotScores.length) reviewStore.setShotScores(draft.shotScores)
     if (Array.isArray(draft.excludedShotIds)) reviewStore.setExcludedShotIds(draft.excludedShotIds)
     if (Array.isArray(draft.forcedShotIds)) reviewStore.setForcedShotIds(draft.forcedShotIds)
@@ -223,6 +267,14 @@ function findArtifact(nodeKey: string, type: string): ArtifactSnapshot {
   if (!artifact) throw new Error(`缺少 ${type} Artifact，无法打开当前审核页`)
   return artifact
 }
+
+const dedicatedGateKeys = new Set([
+  'gate_shot_ranking', 'gate_story_edit', 'gate_timeline_preview',
+  'gate_bgm_review', 'gate_render_review',
+])
+const hasDedicatedGateView = computed(() => Boolean(
+  workflowStore.currentGate && dedicatedGateKeys.has(workflowStore.currentGate.gateKey),
+))
 
 /**
  * Return every artifact produced by a node key.  Asset-scoped nodes are
@@ -596,7 +648,7 @@ function goBack(): void {
       </section>
 
       <!-- 未知 Gate 兜底 -->
-      <div v-if="workflowStore.isPaused && !workflowStore.currentGate" class="card mb-6 ring-1 ring-warning/40">
+      <div v-if="workflowStore.isPaused && workflowStore.currentGate && !hasDedicatedGateView" class="card mb-6 ring-1 ring-warning/40">
         <div class="flex items-center gap-4">
           <PauseCircle class="w-6 h-6 text-warning shrink-0" />
           <div class="flex-1">

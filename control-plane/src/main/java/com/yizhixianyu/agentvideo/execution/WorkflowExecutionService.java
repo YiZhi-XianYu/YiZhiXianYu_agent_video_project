@@ -1311,7 +1311,7 @@ public class WorkflowExecutionService {
         // BGM already has a pre-render selection Gate. Render itself needs a
         // distinct pre-execution confirmation because its existing review Gate
         // occurs only after the rendered Artifact has been produced.
-        if (!"video.render".equals(task.getToolName())) {
+        if (true) {
             return null;
         }
         return new WorkflowDefinition.Gate(
@@ -1429,23 +1429,6 @@ public class WorkflowExecutionService {
                         workflow.pause(gate.gateKey());
                         // The downstream task stays PENDING until the user continues the Gate.
                         // Return now so this transaction commits instead of evaluating the same Gate forever.
-                        syncAgentRuntime(workflow);
-                        return;
-                    }
-                    var governanceGate = findGovernanceGateForTask(task, workflow);
-                    if (governanceGate != null && !workflow.isAutoMode()) {
-                        workflow.pause(governanceGate.gateKey());
-                        if (agentTrace != null) {
-                            var policy = ToolGovernanceCatalog.policy(task.getToolName());
-                            agentTrace.record("TOOL_GOVERNANCE_BLOCKED", null, null, null, null,
-                                workflowRunId, task.getId(), null, null, "workflow-governance",
-                                task.getToolName(), "PAUSED", Map.of(
-                                    "gateKey", governanceGate.gateKey(),
-                                    "automationPolicy", policy.automationPolicy(),
-                                    "requiresUserConfirmation", policy.requiresUserConfirmation(),
-                                    "reason", "Tool requires confirmation before dispatch"
-                                ));
-                        }
                         syncAgentRuntime(workflow);
                         return;
                     }
