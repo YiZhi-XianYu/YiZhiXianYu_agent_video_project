@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useChuxueStore } from '@/stores/chuxue'
+import ChuxueChatCard from '@/components/ChuxueChatCard.vue'
 
 interface SpinePlayerInstance {
   setAnimation: (animationName: string, loop: boolean) => void
@@ -99,7 +100,9 @@ function playCurrentState(): void {
 }
 
 function handleInteraction(): void {
+  if (chuxue.chatOpen) return
   if (chuxue.isSleeping) chuxue.wake()
+  else chuxue.openChat()
 }
 
 watch(() => chuxue.state, playCurrentState)
@@ -145,6 +148,7 @@ onUnmounted(() => {
 
 <template>
   <section class="chuxue-pet-slot" aria-label="动态助手初雪">
+    <ChuxueChatCard v-if="chuxue.chatOpen" />
     <Transition name="chuxue-bubble">
       <div v-if="chuxue.bubbleVisible" class="chuxue-speech-bubble" role="status" aria-live="polite">
         视频做好了
@@ -154,18 +158,18 @@ onUnmounted(() => {
     <div
       class="chuxue-stage"
       :class="{ sleeping: chuxue.isSleeping }"
-      :role="chuxue.isSleeping ? 'button' : undefined"
-      :tabindex="chuxue.isSleeping ? 0 : -1"
-      :aria-label="stateLabel"
-      :title="stateLabel"
-      @click="handleInteraction"
-      @keydown.enter.prevent="handleInteraction"
-      @keydown.space.prevent="handleInteraction"
-    >
-      <div :id="PLAYER_CONTAINER_ID" class="chuxue-player" aria-hidden="true" />
-      <div v-if="!ready && !loadError" class="chuxue-loading">初雪正在赶来…</div>
-      <div v-else-if="loadError" class="chuxue-loading error">初雪暂时离开了</div>
-      <span class="chuxue-nameplate">初雪 · {{ chuxue.isSleeping ? '睡眠' : '待机' }}</span>
+        role="button"
+        tabindex="0"
+        :aria-label="stateLabel"
+        :title="stateLabel"
+        @click="handleInteraction"
+        @keydown.enter.prevent="handleInteraction"
+        @keydown.space.prevent="handleInteraction"
+      >
+        <div :id="PLAYER_CONTAINER_ID" class="chuxue-player" aria-hidden="true" />
+        <div v-if="!ready && !loadError" class="chuxue-loading">初雪正在赶来…</div>
+        <div v-else-if="loadError" class="chuxue-loading error">初雪暂时离开了</div>
+        <span class="chuxue-nameplate">初雪 · {{ chuxue.isSleeping ? '睡眠' : '待机' }}</span>
     </div>
   </section>
 </template>
@@ -173,7 +177,6 @@ onUnmounted(() => {
 <style scoped>
 .chuxue-pet-slot {
   position: relative;
-  z-index: 1;
   display: flex;
   min-height: 170px;
   flex: 1 1 auto;

@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
 export type ChuxueState = 'idle' | 'sleeping'
+export type ChuxueChatMessage = { id: string; role: 'user' | 'assistant'; content: string; planId?: string | null }
 
 const NEXT_SLEEP_MIN_MS = 45_000
 const NEXT_SLEEP_MAX_MS = 90_000
@@ -17,6 +18,9 @@ export const useChuxueStore = defineStore('chuxue', () => {
   const state = ref<ChuxueState>('idle')
   const bubbleVisible = ref(false)
   const active = ref(false)
+  const chatOpen = ref(false)
+  const chatMessages = ref<ChuxueChatMessage[]>([])
+  const chatSessionId = ref<string | null>(null)
 
   let nextSleepTimer: number | null = null
   let naturalWakeTimer: number | null = null
@@ -62,6 +66,11 @@ export const useChuxueStore = defineStore('chuxue', () => {
     scheduleNextSleep()
   }
 
+  function openChat(): void { if (state.value === 'idle') chatOpen.value = true }
+  function closeChat(): void { chatOpen.value = false }
+  function ensureSession(sessionId: string): void { chatSessionId.value = sessionId }
+  function addChatMessage(message: ChuxueChatMessage): void { chatMessages.value.push(message) }
+
   function notifyVideoCompleted(): void {
     if (state.value === 'sleeping') wake()
 
@@ -89,6 +98,9 @@ export const useChuxueStore = defineStore('chuxue', () => {
     bubbleTimer = null
     state.value = 'idle'
     bubbleVisible.value = false
+    chatOpen.value = false
+    chatMessages.value = []
+    chatSessionId.value = null
   }
 
   return {
@@ -99,6 +111,13 @@ export const useChuxueStore = defineStore('chuxue', () => {
     stop,
     sleep,
     wake,
+    chatOpen,
+    chatMessages,
+    chatSessionId,
+    openChat,
+    closeChat,
+    ensureSession,
+    addChatMessage,
     notifyVideoCompleted,
   }
 })
