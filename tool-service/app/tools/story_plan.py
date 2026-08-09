@@ -1128,7 +1128,40 @@ def _build_semantic_map(inputs: dict[str, Any]) -> dict[str, dict[str, list[str]
         except Exception:
             continue
 
+    transcript_inputs = matching_inputs(inputs, "transcript")
+    for inp in transcript_inputs:
+        try:
+            data = read_json_artifact(inp)
+            sources = data.get("sources") or []
+            for source in sources:
+                proxy_id = source.get("sourceProxyArtifactId")
+                segments = source.get("segments") or []
+                if not proxy_id:
+                    continue
+                for sid, shot in _shot_index_from_inputs(inputs).items():
+                    if shot.get("sourceProxyArtifactId") != proxy_id:
+                        continue
+                    shot_start, shot_end = int(shot.get("startMs", 0)), int(shot.get("endMs", 0))
+                    snippets = [str(seg.get("text", "")).strip() for seg in segments
+                                if int(seg.get("endMs", 0)) > shot_start and int(seg.get("startMs", 0)) < shot_end]
+                    if snippets:
+                        sem.setdefault(sid, {}).setdefault("transcript", []).extend(snippets[:3])
+        except Exception:
+            continue
+
     return sem
+
+
+def _shot_index_from_inputs(inputs: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    index: dict[str, dict[str, Any]] = {}
+    for inp in matching_inputs(inputs, "ranking"):
+        try:
+            for shot in (read_json_artifact(inp).get("shots") or []):
+                if shot.get("shotId"):
+                    index[str(shot["shotId"])] = shot
+        except Exception:
+            continue
+    return index
 
 
 def _parse_duration_prompt(prompt: str) -> int | None:

@@ -4,11 +4,11 @@ from typing import Any
 
 
 ROLE_QUERIES = {
-    "HOOK": ("opening", "attention", "person", "close", "motion", "strong"),
-    "INTRO": ("establish", "context", "wide", "landscape", "city", "scenery"),
-    "JOURNEY": ("journey", "movement", "activity", "water", "nature", "continuity"),
-    "CLIMAX": ("climax", "impressive", "peak", "action", "person", "quality"),
-    "ENDING": ("ending", "calm", "wide", "sky", "landscape", "complete"),
+    "HOOK": ("opening", "attention", "开头", "精彩", "person", "motion"),
+    "INTRO": ("establish", "context", "介绍", "风景", "wide", "scenery"),
+    "JOURNEY": ("journey", "movement", "旅程", "游玩", "activity", "continuity"),
+    "CLIMAX": ("climax", "impressive", "高潮", "精彩", "action", "quality"),
+    "ENDING": ("ending", "calm", "结尾", "风景", "sky", "complete"),
 }
 
 
@@ -16,6 +16,7 @@ def _tags(shot: dict[str, Any], semantic: dict[str, Any]) -> set[str]:
     values: list[str] = []
     for key in ("scene", "object", "person"):
         values.extend(str(value).lower() for value in semantic.get(key, []) or [])
+    values.extend(str(value).lower() for value in semantic.get("transcript", []) or [])
     for key in ("sceneTags", "objectTags", "personTags"):
         raw = shot.get(key) or []
         values.extend(str(item.get("label", item)).lower() if isinstance(item, dict) else str(item).lower() for item in raw)
@@ -61,6 +62,7 @@ def retrieve_story_evidence(
                     "qualityScore": shot.get("qualityScore"),
                     "motionInterest": shot.get("motionInterest"),
                     "tags": sorted(_tags(shot, semantic.get(sid, {}))),
+                    "transcript": (semantic.get(sid, {}).get("transcript") or [])[:3],
                 },
             })
         evidence[role] = rows
