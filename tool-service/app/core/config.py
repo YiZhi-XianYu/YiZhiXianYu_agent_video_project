@@ -73,6 +73,7 @@ class Settings(BaseSettings):
     worker_resource_group: str = "LIGHT"
     control_plane_base_url: str = "http://127.0.0.1:8080"
     rabbitmq_worker_token: str = ""
+    chuxue_graph_enabled: bool = True
 
     model_config = SettingsConfigDict(
         env_prefix="TOOL_SERVICE_",

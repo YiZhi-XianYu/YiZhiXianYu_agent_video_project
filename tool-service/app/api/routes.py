@@ -13,6 +13,7 @@ from app.registry.registry import registry
 from app.llm.router import model_router, provider_health, ROUTE_CALLS, ROUTE_LATENCY, ROUTE_TOKENS
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from fastapi.responses import Response
+from app.core.config import settings
 
 router = APIRouter(prefix="/api/v1")
 logger = logging.getLogger(__name__)
@@ -200,8 +201,7 @@ def chuxue_chat(request: ChuxueChatRequest) -> ChuxueChatResponse:
         failed = dict(route); failed["fallbackReason"] = "MODEL_CALL_FAILED"
         return ChuxueChatResponse(reply="", shouldPlan=False, modelRoute=failed, llmUsed=False)
 
-@router.post("/chuxue/chat", response_model=ChuxueChatResponse)
-def chuxue_chat_v2(request: ChuxueChatRequest) -> ChuxueChatResponse:
+def _chuxue_chat_legacy_decision(request: ChuxueChatRequest) -> ChuxueChatResponse:
     route = model_router.route("CHAT", request_id=uuid.uuid4().hex[:12]).to_dict()
     if not route["available"]:
         route["fallbackReason"] = "LLM_UNAVAILABLE"
@@ -305,6 +305,22 @@ def chuxue_chat_v2(request: ChuxueChatRequest) -> ChuxueChatResponse:
     failed = dict(last_route)
     failed["fallbackReason"] = "CHAT_RESPONSE_INVALID_AFTER_RETRY"
     return ChuxueChatResponse(reply="", shouldPlan=False, modelRoute=failed, llmUsed=False)
+
+
+@router.post("/chuxue/chat", response_model=ChuxueChatResponse)
+def chuxue_chat_v2(request: ChuxueChatRequest) -> ChuxueChatResponse:
+    """Public Chat endpoint with an optional LangGraph decision boundary."""
+    if not settings.chuxue_graph_enabled:
+        return _chuxue_chat_legacy_decision(request)
+    try:
+        from app.agent.chuxue_graph import run as run_graph
+        return run_graph(request, _chuxue_chat_legacy_decision)
+    except (ImportError, ModuleNotFoundError) as exc:
+        logger.warning("LangGraph unavailable; using legacy Chuxue decision path: %s", exc)
+        return _chuxue_chat_legacy_decision(request)
+    except Exception as exc:
+        logger.exception("LangGraph decision failed; using legacy Chuxue decision path: %s", exc)
+        return _chuxue_chat_legacy_decision(request)
 
 @router.get("/health")
 def health() -> dict[str, str]:
