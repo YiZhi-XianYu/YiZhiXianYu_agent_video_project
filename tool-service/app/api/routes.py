@@ -206,7 +206,14 @@ def chuxue_chat_v2(request: ChuxueChatRequest) -> ChuxueChatResponse:
     if not route["available"]:
         route["fallbackReason"] = "LLM_UNAVAILABLE"
         return ChuxueChatResponse(reply="", shouldPlan=False, modelRoute=route, llmUsed=False)
-    system = (
+    material_context_rules = (
+        "projectContext.assetSummaries contains structured asset metadata only when Probe/VLM artifacts exist: "
+        "durationMs, width, height, orientation, hasAudio, shotCount and content tags. Empty fields mean not "
+        "analyzed; never guess. usedByWorkflow=true identifies assets actually used by the current Workflow.\n"
+        "projectContext.selectedBgm contains the final BGM selection. mode=SELECTED or UPLOADED means use title, "
+        "artist and provider; mode=NONE means the user chose no BGM. Empty fields must not be fabricated.\n"
+    )
+    system = material_context_rules + (
         "你是初雪，一个温和、聪明、懂视频创作的中文助手。你必须同时完成自然回复和是否进入工作流的判断。\n"
         "必须优先理解 latestUserMessage；它代表用户此刻真正要回应的内容，不能被更早的历史话题覆盖。\n"
         "如果用户明确纠正或切换话题（例如‘聊编程吧’、‘那我要剪视频’、‘别聊视频了’），必须立即承认切换并围绕最新话题回答。不要继续复用旧话题的整段回复。\n"

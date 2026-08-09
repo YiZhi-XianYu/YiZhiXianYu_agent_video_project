@@ -14,6 +14,9 @@ import com.yizhixianyu.agentvideo.execution.WorkflowRunRepository;
 import com.yizhixianyu.agentvideo.trace.AgentTraceEventEntity;
 import com.yizhixianyu.agentvideo.trace.AgentTraceEventRepository;
 import com.yizhixianyu.agentvideo.project.ProjectService;
+import com.yizhixianyu.agentvideo.asset.AssetRepository;
+import com.yizhixianyu.agentvideo.asset.AssetEntity;
+import com.yizhixianyu.agentvideo.execution.WorkflowAssetRepository;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -33,6 +36,8 @@ public class BlackboardService {
     private final ArtifactRepository artifacts;
     private final AgentTraceEventRepository traces;
     private final ProjectService projects;
+    private final AssetRepository assetRepository;
+    private final WorkflowAssetRepository workflowAssets;
     private final ObjectMapper mapper;
     private final RedisDraftService redis;
     private final Duration ttl;
@@ -40,11 +45,13 @@ public class BlackboardService {
     public BlackboardService(AgentSessionRepository sessions, AgentSessionTurnRepository turns,
                              WorkflowRunRepository workflows, TaskRunRepository tasks,
                              ArtifactRepository artifacts, AgentTraceEventRepository traces,
-                             ProjectService projects, ObjectMapper mapper,
+                             ProjectService projects, AssetRepository assetRepository,
+                             WorkflowAssetRepository workflowAssets, ObjectMapper mapper,
                              ObjectProvider<RedisDraftService> redisProvider,
                              @Value("${app.redis.agent-blackboard-ttl-seconds:1800}") long ttlSeconds) {
         this.sessions = sessions; this.turns = turns; this.workflows = workflows; this.tasks = tasks;
-        this.artifacts = artifacts; this.traces = traces; this.projects = projects; this.mapper = mapper;
+        this.artifacts = artifacts; this.traces = traces; this.projects = projects;
+        this.assetRepository = assetRepository; this.workflowAssets = workflowAssets; this.mapper = mapper;
         this.redis = redisProvider.getIfAvailable();
         this.ttl = Duration.ofSeconds(Math.max(60, ttlSeconds));
     }
@@ -56,7 +63,12 @@ public class BlackboardService {
         if (redis != null) {
             try {
                 var cached = redis.get(key);
-                if (cached != null) return fromJson(cached.json());
+                if (cached != null) {
+                    try { return fromJson(cached.json()); }
+                    catch (RuntimeException staleSnapshot) {
+                        try { redis.delete(key); } catch (RuntimeException ignored) { }
+                    }
+                }
             } catch (RuntimeException ignored) { }
         }
         var view = rebuild(session);
@@ -85,9 +97,21 @@ public class BlackboardService {
         var turnViews = turns.findBySessionIdOrderBySequenceNumberAsc(session.getId()).stream()
             .map(t -> new TurnView(t.getId(), t.getSequenceNumber(), t.getRole(), t.getContent(), t.getPlanId(), t.getWorkflowRunId())).toList();
         var taskViews = workflow == null ? List.<TaskView>of() : tasks.findByWorkflowRunIdOrderByCreatedAtAsc(workflow.getId()).stream()
-            .map(t -> new TaskView(t.getId(), t.getNodeKey(), t.getToolName(), t.getToolVersion(), t.getStatus().name(), t.getAttempt(), t.getProgress(), t.getErrorMessage())).toList();
+            .map(t -> new TaskView(t.getId(), t.getNodeKey(), t.getToolName(), t.getToolVersion(), t.getStatus().name(), t.getAttempt(), t.getProgress(), t.getErrorMessage(), t.getAssetId())).toList();
         var artifactViews = workflow == null ? List.<ArtifactView>of() : artifacts.findByProducerTaskRunIdIn(taskViews.stream().map(TaskView::taskRunId).toList()).stream()
             .map(a -> new ArtifactView(a.getId(), a.getExternalArtifactId(), a.getType(), a.getContentHash(), a.getProducerTaskRunId())).toList();
+        var workflowArtifacts = workflow == null ? List.<ArtifactEntity>of()
+            : artifacts.findByProducerTaskRunIdIn(taskViews.stream().map(TaskView::taskRunId).toList());
+        var allProjectAssets = assetRepository.findByProjectIdAndStatusOrderByCreatedAtDesc(
+            session.getProjectId(), AssetEntity.STATUS_AVAILABLE);
+        var selectedAssetIds = workflow == null ? java.util.Set.<String>of()
+            : workflowAssets.findByWorkflowRunIdOrderByPositionIndexAsc(workflow.getId()).stream()
+                .map(item -> item.getAssetId()).collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+        var assetViews = allProjectAssets.stream().map(asset -> assetView(
+            asset, selectedAssetIds.contains(asset.getId()), taskViews, workflowArtifacts,
+            recentProjectArtifacts(session.getProjectId(), asset.getId()))).toList();
+        var bgm = selectedBgm(workflowArtifacts.isEmpty()
+            ? recentProjectArtifacts(session.getProjectId(), null) : workflowArtifacts);
         var traceViews = traces.findBySessionIdOrderByOccurredAtAsc(session.getId()).stream()
             .map(t -> new TraceView(t.getEventType(), t.getTraceId(), t.getWorkflowRunId(), t.getTaskRunId(), t.getExecutionId(), t.getOccurredAt())).toList();
         var latestFailure = traceViews.stream().filter(t -> "TASK_FAILED".equals(t.eventType()) || "TASK_FALLBACK_RETRY".equals(t.eventType()))
@@ -105,8 +129,92 @@ public class BlackboardService {
                 actions(workflow, activeTask), latestFailure == null ? null : latestFailure.eventType());
         return new BlackboardView(1L, session.getId(), session.getUserId(), session.getProjectId(), session.getNaturalLanguageGoal(),
             session.getTargetDurationMs(), session.getStatus(), session.getCurrentPlanId(), session.getDagVersion(),
-            session.getCurrentWorkflowRunId(), session.getCurrentGateKey(), runtime, turnViews, taskViews, artifactViews, traceViews);
+            session.getCurrentWorkflowRunId(), session.getCurrentGateKey(), runtime, assetViews, bgm,
+            turnViews, taskViews, artifactViews, traceViews);
     }
+
+    private AssetView assetView(AssetEntity asset, boolean selected, List<TaskView> taskViews,
+                                List<ArtifactEntity> workflowArtifacts, List<ArtifactEntity> projectArtifacts) {
+        var taskIds = taskViews.stream().filter(task -> asset.getId().equals(task.assetId()))
+            .map(TaskView::taskRunId).collect(java.util.stream.Collectors.toSet());
+        var related = workflowArtifacts.stream().filter(a -> taskIds.contains(a.getProducerTaskRunId())).toList();
+        if (related.isEmpty()) related = projectArtifacts;
+        var metadata = latestPayload(related, "VIDEO_METADATA");
+        var shots = latestPayload(related, "SHOT_LIST");
+        var scenes = summarizeTags(related, "SCENE_TAGS", "sceneTags");
+        var objects = summarizeTags(related, "OBJECT_TAGS", "objectTags");
+        var people = summarizeTags(related, "PERSON_TAGS", "personTags");
+        Integer width = integer(metadata.get("width"));
+        Integer height = integer(metadata.get("height"));
+        return new AssetView(asset.getId(), asset.getFileName(), asset.getSizeBytes(), selected,
+            integer(metadata.get("durationMs")), width, height,
+            width == null || height == null ? null : width >= height ? "LANDSCAPE" : "PORTRAIT",
+            bool(metadata.get("hasAudio")), integer(shots.get("shotCount")), scenes, objects, people);
+    }
+
+    private BgmView selectedBgm(List<ArtifactEntity> workflowArtifacts) {
+        var audio = workflowArtifacts.stream().filter(a -> "BGM_AUDIO".equals(a.getType()))
+            .reduce((first, second) -> second).orElse(null);
+        var selection = workflowArtifacts.stream().filter(a -> "BGM_SELECTION".equals(a.getType()))
+            .reduce((first, second) -> second).map(a -> parseMap(a.getMetadataJson())).orElse(Map.of());
+        if (audio == null && selection.isEmpty()) return null;
+        var metadata = audio == null ? Map.<String, Object>of() : parseMap(audio.getMetadataJson());
+        var candidate = metadata.get("candidate") instanceof Map<?, ?> map ? stringMap(map) : metadata;
+        return new BgmView(String.valueOf(selection.getOrDefault("mode", audio == null ? "NONE" : "SELECTED")),
+            text(candidate, "title", "name", "fileName"), text(candidate, "artist", "author"),
+            text(candidate, "provider"), text(candidate, "providerTrackId", "trackId"),
+            audio == null ? null : audio.getExternalArtifactId());
+    }
+
+    private List<ArtifactEntity> recentProjectArtifacts(String projectId, String assetId) {
+        var types = assetId == null
+            ? List.of("BGM_AUDIO", "BGM_SELECTION")
+            : List.of("VIDEO_METADATA", "SHOT_LIST", "SCENE_TAGS", "OBJECT_TAGS", "PERSON_TAGS");
+        var result = new java.util.ArrayList<ArtifactEntity>();
+        for (var type : types) {
+            for (var artifact : artifacts.findTop100ByProjectIdAndTypeOrderByCreatedAtDesc(projectId, type)) {
+                var payload = parseMap(artifact.getMetadataJson());
+                var sourceAssetId = text(payload, "sourceAssetId", "assetId");
+                if (assetId == null || assetId.equals(sourceAssetId)) result.add(artifact);
+            }
+        }
+        return result;
+    }
+
+    private Map<String, Object> latestPayload(List<ArtifactEntity> values, String type) {
+        return values.stream().filter(a -> type.equals(a.getType())).reduce((first, second) -> second)
+            .map(a -> parseMap(a.getMetadataJson())).orElse(Map.of());
+    }
+
+    private List<String> summarizeTags(List<ArtifactEntity> values, String type, String tagKey) {
+        var payload = latestPayload(values, type);
+        var counts = new java.util.LinkedHashMap<String, Integer>();
+        if (payload.get("shots") instanceof List<?> shotList) for (var item : shotList) {
+            if (!(item instanceof Map<?, ?> shot) || !(shot.get(tagKey) instanceof List<?> tags)) continue;
+            for (var tag : tags) if (tag instanceof Map<?, ?> value) {
+                var label = String.valueOf(value.get("labelZh") == null ? value.get("label") : value.get("labelZh")).trim();
+                if (!label.isBlank() && !"null".equals(label)) counts.merge(label, 1, Integer::sum);
+            }
+        }
+        return counts.entrySet().stream().sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
+            .limit(8).map(Map.Entry::getKey).toList();
+    }
+
+    private Map<String, Object> parseMap(String json) {
+        try { return mapper.readValue(json == null ? "{}" : json, new com.fasterxml.jackson.core.type.TypeReference<>() {}); }
+        catch (Exception ignored) { return Map.of(); }
+    }
+    private Map<String, Object> stringMap(Map<?, ?> source) {
+        var result = new java.util.LinkedHashMap<String, Object>();
+        source.forEach((key, value) -> result.put(String.valueOf(key), value));
+        return result;
+    }
+    private String text(Map<String, Object> map, String... keys) {
+        for (var key : keys) { var value = map.get(key); if (value != null && !String.valueOf(value).isBlank()) return String.valueOf(value); }
+        return null;
+    }
+    private Integer integer(Object value) { return value instanceof Number n ? n.intValue() : null; }
+    private Boolean bool(Object value) { return value instanceof Boolean b ? b : null; }
 
     private String nextAction(WorkflowRunEntity workflow, TaskRunEntity activeTask) {
         return switch (workflow.getStatus()) {
@@ -160,14 +268,22 @@ public class BlackboardService {
 
     public record BlackboardView(Long revision, String sessionId, String userId, String projectId, String goal,
                                  Integer targetDurationMs, String status, String planId, Integer dagVersion,
-                                 String workflowRunId, String currentGateKey, RuntimeView runtime, List<TurnView> turns,
+                                 String workflowRunId, String currentGateKey, RuntimeView runtime,
+                                 List<AssetView> assets, BgmView selectedBgm, List<TurnView> turns,
                                  List<TaskView> tasks, List<ArtifactView> artifacts, List<TraceView> traces) {}
     public record RuntimeView(String workflowStatus, String currentGateKey, int progress, String errorMessage,
                               String nextAction, java.time.Instant completedAt, String currentTaskNode,
                               String currentTaskStatus, String currentTaskError, boolean retryable,
                               List<String> availableActions, String latestFailureEvent) {}
     public record TurnView(String id, int sequenceNumber, String role, String content, String planId, String workflowRunId) {}
-    public record TaskView(String taskRunId, String nodeKey, String toolName, String toolVersion, String status, int attempt, int progress, String errorMessage) {}
+    public record AssetView(String assetId, String fileName, long sizeBytes, boolean usedByWorkflow,
+                            Integer durationMs, Integer width, Integer height, String orientation,
+                            Boolean hasAudio, Integer shotCount, List<String> sceneTags,
+                            List<String> objectTags, List<String> personTags) {}
+    public record BgmView(String mode, String title, String artist, String provider, String providerTrackId,
+                          String audioArtifactId) {}
+    public record TaskView(String taskRunId, String nodeKey, String toolName, String toolVersion, String status,
+                           int attempt, int progress, String errorMessage, String assetId) {}
     public record ArtifactView(String id, String externalArtifactId, String type, String contentHash, String producerTaskRunId) {}
     public record TraceView(String eventType, String traceId, String workflowRunId, String taskRunId, String executionId, java.time.Instant occurredAt) {}
 }

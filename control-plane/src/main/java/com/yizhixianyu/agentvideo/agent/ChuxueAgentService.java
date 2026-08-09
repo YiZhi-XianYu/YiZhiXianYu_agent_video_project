@@ -87,6 +87,10 @@ public class ChuxueAgentService {
         var projectAssets = assets.listByProject(board.projectId());
         context.put("assetCount", projectAssets.size());
         context.put("assetNames", projectAssets.stream().limit(20).map(asset -> asset.getFileName()).toList());
+        context.put("assetSummaries", board.assets());
+        context.put("selectedBgm", board.selectedBgm());
+        context.put("workflowTasks", board.tasks());
+        context.put("workflowArtifacts", board.artifacts());
         context.put("capabilityContract", capabilityContract());
         var response = toolClient.chat(new ToolServiceClient.ChuxueChatRequest(
             message, history == null ? List.of() : history, context));
