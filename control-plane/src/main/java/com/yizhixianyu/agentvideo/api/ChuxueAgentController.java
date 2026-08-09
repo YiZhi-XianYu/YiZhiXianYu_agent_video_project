@@ -37,7 +37,7 @@ public class ChuxueAgentController {
             throw new IllegalArgumentException("projectId does not match request");
         }
         return chuxue.plan(user.id(), request.sessionId(), request.goal(), request.targetDurationMs(),
-            request.quality(), request.assetIds(), request.autoMode());
+            request.quality(), request.assetIds(), request.autoMode(), request.reviewGateKeys());
     }
 
     @PostMapping("/plans/{planId}/confirm")
@@ -53,6 +53,7 @@ public class ChuxueAgentController {
         Integer targetDurationMs,
         @NotNull ProxyQuality quality,
         @NotNull @Size(min = 1, max = 20) List<@NotBlank String> assetIds,
-        boolean autoMode
+        boolean autoMode,
+        @Size(max = 20) java.util.Set<String> reviewGateKeys
     ) {}
 }

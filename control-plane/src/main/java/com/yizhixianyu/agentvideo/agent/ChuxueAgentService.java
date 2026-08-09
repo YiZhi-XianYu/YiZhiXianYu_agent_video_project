@@ -55,6 +55,13 @@ public class ChuxueAgentService {
     @Transactional
     public Decision plan(String userId, String sessionId, String goal, Integer targetDurationMs,
                          ProxyQuality quality, List<String> assetIds, boolean autoMode) {
+        return plan(userId, sessionId, goal, targetDurationMs, quality, assetIds, autoMode, null);
+    }
+
+    @Transactional
+    public Decision plan(String userId, String sessionId, String goal, Integer targetDurationMs,
+                         ProxyQuality quality, List<String> assetIds, boolean autoMode,
+                         java.util.Set<String> reviewGateKeys) {
         var session = sessions.requireOwned(userId, sessionId);
         var parsedIntent = intentParser.parse(goal, targetDurationMs, autoMode);
         var turn = sessions.addTurn(userId, sessionId, "USER", goal);
@@ -78,7 +85,7 @@ public class ChuxueAgentService {
                 !parsedIntent.subtitlesExplicit() || parsedIntent.subtitles(), parsedIntent.bgmExplicit() ? parsedIntent.bgm() : true)
             : null;
         var preview = planner.previewWithBlackboard(userId, sessionId, quality, durationPrompt(effectiveDuration),
-            autoMode, requested, requested == null, effectiveGoal, assetIds);
+            autoMode, requested, requested == null, effectiveGoal, assetIds, reviewGateKeys);
         var traceId = UUID.randomUUID().toString();
         var planId = "plan-" + UUID.randomUUID();
         var definitionJson = toJson(preview.definition());

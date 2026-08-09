@@ -34,11 +34,18 @@ public class DynamicWorkflowPlanner {
 
     public WorkflowPlanPreview preview(ProxyQuality quality, String durationPrompt, boolean autoMode,
                                        WorkflowCapabilities requested, boolean useDefault) {
-        return preview(quality, durationPrompt, autoMode, requested, useDefault, "", List.of("asset-1"));
+        return preview(quality, durationPrompt, autoMode, requested, useDefault, "", List.of("asset-1"), null);
     }
 
     public WorkflowPlanPreview preview(ProxyQuality quality, String durationPrompt, boolean autoMode,
                                        WorkflowCapabilities requested, boolean useDefault, String goal, List<String> assetIds) {
+        return preview(quality, durationPrompt, autoMode, requested, useDefault, goal, assetIds, null);
+    }
+
+    public WorkflowPlanPreview preview(ProxyQuality quality, String durationPrompt, boolean autoMode,
+                                       WorkflowCapabilities requested, boolean useDefault, String goal, List<String> assetIds,
+                                       Set<String> reviewGateKeys) {
+        validateReviewGates(reviewGateKeys);
         var defaults = WorkflowCapabilities.defaults();
         var llmIntent = useDefault || requested != null ? null : requestIntent(goal, durationPrompt, assetIds == null ? 1 : assetIds.size());
         var capabilities = useDefault ? defaults : requested != null ? requested.normalized() : capabilitiesFromIntent(llmIntent);
@@ -47,7 +54,8 @@ public class DynamicWorkflowPlanner {
             ? parseDurationMs(durationPrompt)
             : llmIntent == null ? parseDurationMs(goal) : llmIntent.targetDurationMs();
         var defaultDefinition = template.create(quality, goal, autoMode, targetDurationMs);
-        var candidate = buildDefinition(defaultDefinition, capabilities);
+        var effectiveReviewGates = reviewGateKeys == null && autoMode ? Set.<String>of() : reviewGateKeys;
+        var candidate = buildDefinition(defaultDefinition, capabilities, autoMode, effectiveReviewGates);
         validator.validate(candidate);
         var intent = new WorkflowIntentView("TRAVEL_HIGHLIGHT", String.valueOf(targetDurationMs),
             llmIntent == null ? "已按用户选择生成受控候选流程图" : llmIntent.explanation(), capabilities);
@@ -57,16 +65,34 @@ public class DynamicWorkflowPlanner {
         }).toList();
         var governanceWarnings = explanations.stream().filter(NodeExplanation::requiresUserConfirmation)
             .map(item -> item.tool() + " requires user confirmation before execution").toList();
-        return new WorkflowPlanPreview(intent, candidate, defaultDefinition, explanations, capabilities.equals(defaults), expandCanvas(candidate, assetIds), llmIntent != null && llmIntent.llmUsed(), governanceWarnings, !governanceWarnings.isEmpty());
+        var riskGates = candidate.gates().stream().filter(g -> g.gateKey().startsWith("gate_governance_")
+            || "gate_bgm_review".equals(g.gateKey()) || "gate_render_review".equals(g.gateKey())).map(WorkflowDefinition.Gate::gateKey).toList();
+        var requiredGates = new ArrayList<>(riskGates);
+        return new WorkflowPlanPreview(intent, candidate, defaultDefinition, explanations, capabilities.equals(defaults), expandCanvas(candidate, assetIds), llmIntent != null && llmIntent.llmUsed(), governanceWarnings, !requiredGates.isEmpty(), requiredGates, autoMode ? "AUTO" : "COLLABORATIVE");
+    }
+
+    private void validateReviewGates(Set<String> reviewGateKeys) {
+        if (reviewGateKeys == null) return;
+        var allowed = Set.of("gate_shot_ranking", "gate_story_edit", "gate_timeline_preview", "gate_bgm_review", "gate_render_review");
+        if (!allowed.containsAll(reviewGateKeys)) {
+            throw new IllegalArgumentException("Unsupported review Gate requested: " + reviewGateKeys);
+        }
     }
 
     public WorkflowPlanPreview previewWithBlackboard(String userId, String sessionId, ProxyQuality quality,
                                                      String durationPrompt, boolean autoMode,
                                                      WorkflowCapabilities requested, boolean useDefault,
                                                      String goal, List<String> assetIds) {
+        return previewWithBlackboard(userId, sessionId, quality, durationPrompt, autoMode, requested, useDefault, goal, assetIds, null);
+    }
+
+    public WorkflowPlanPreview previewWithBlackboard(String userId, String sessionId, ProxyQuality quality,
+                                                     String durationPrompt, boolean autoMode,
+                                                     WorkflowCapabilities requested, boolean useDefault,
+                                                     String goal, List<String> assetIds, Set<String> reviewGateKeys) {
         var board = blackboard == null ? null : blackboard.get(userId, sessionId);
         var effectiveGoal = goal == null || goal.isBlank() ? board == null ? "" : board.goal() : goal;
-        return preview(quality, durationPrompt, autoMode, requested, useDefault, effectiveGoal, assetIds);
+        return preview(quality, durationPrompt, autoMode, requested, useDefault, effectiveGoal, assetIds, reviewGateKeys);
     }
 
     private ToolServiceClient.WorkflowIntentResponse requestIntent(String goal, String durationPrompt, int assetCount) {
@@ -97,6 +123,15 @@ public class DynamicWorkflowPlanner {
     }
 
     public WorkflowDefinition buildDefinition(WorkflowDefinition defaultDefinition, WorkflowCapabilities capabilities) {
+        return buildDefinition(defaultDefinition, capabilities, false, null);
+    }
+
+    public WorkflowDefinition buildDefinition(WorkflowDefinition defaultDefinition, WorkflowCapabilities capabilities, boolean autoMode) {
+        return buildDefinition(defaultDefinition, capabilities, autoMode, null);
+    }
+
+    public WorkflowDefinition buildDefinition(WorkflowDefinition defaultDefinition, WorkflowCapabilities capabilities,
+                                               boolean autoMode, Set<String> reviewGateKeys) {
         var selected = capabilities == null ? WorkflowCapabilities.defaults() : capabilities.normalized();
         var nodes = defaultDefinition.nodes().stream()
             .filter(node -> selected.sourceTranscription() || !"source_transcribe".equals(node.nodeKey()))
@@ -104,7 +139,10 @@ public class DynamicWorkflowPlanner {
             .filter(node -> selected.bgm() || !"bgm_select".equals(node.nodeKey())).toList();
         var keys = nodes.stream().map(WorkflowDefinition.Node::nodeKey).collect(java.util.stream.Collectors.toSet());
         var edges = defaultDefinition.edges().stream().filter(edge -> keys.contains(edge.from()) && keys.contains(edge.to())).toList();
-        var gates = defaultDefinition.gates().stream().filter(gate -> keys.contains(gate.afterNodeKey())).toList();
+        var gates = new ArrayList<>(defaultDefinition.gates().stream()
+            .filter(gate -> keys.contains(gate.afterNodeKey()))
+            .filter(gate -> reviewGateKeys == null || reviewGateKeys.contains(gate.gateKey()))
+            .toList());
         return new WorkflowDefinition(defaultDefinition.definitionKey(), defaultDefinition.definitionVersion(), nodes, edges, gates);
     }
 
@@ -202,7 +240,8 @@ public class DynamicWorkflowPlanner {
                                   String resourceGroup) {}
     public record WorkflowPlanPreview(WorkflowIntentView intent, WorkflowDefinition definition, WorkflowDefinition defaultDefinition,
                                       List<NodeExplanation> explanations, boolean defaultSelected, CanvasGraph canvas, boolean llmUsed,
-                                      List<String> governanceWarnings, boolean requiresConfirmation) {}
+                                      List<String> governanceWarnings, boolean requiresConfirmation,
+                                      List<String> requiredGates, String automationMode) {}
     public record CanvasGraph(List<CanvasNode> nodes, List<CanvasEdge> edges) {}
     public record CanvasNode(String id, String logicalNodeKey, String label, String toolName, String toolVersion, String scope,
                              String assetId, Integer assetIndex, int x, int y, boolean optional) {}

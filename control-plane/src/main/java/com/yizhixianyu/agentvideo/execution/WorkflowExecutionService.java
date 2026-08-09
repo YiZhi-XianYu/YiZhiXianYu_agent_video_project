@@ -1260,7 +1260,7 @@ public class WorkflowExecutionService {
         List<TaskRunEntity> tasks,
         WorkflowRunEntity workflow
     ) {
-        if (workflow.isAutoMode() || definition == null || definition.gates() == null) {
+        if (definition == null || definition.gates() == null) {
             return null;
         }
         for (var gate : definition.gates()) {
@@ -1273,7 +1273,7 @@ public class WorkflowExecutionService {
                         || ("gate_bgm_review".equals(gate.gateKey())
                             && task.getStatus() == TaskStatus.FAILED))
             );
-            if (producerSucceeded) {
+            if (producerSucceeded && (!workflow.isAutoMode() || workflow.getAgentSessionId() != null)) {
                 return gate;
             }
         }
@@ -1378,7 +1378,7 @@ public class WorkflowExecutionService {
                 } else if (allUpstreamTerminal) {
                     /* Gate 检查：如果上游 Node 关联了 Gate 且非 auto 模式，暂停 Workflow */
                     var gate = findGateForTask(definition, task, upstream, tasksById, workflow);
-                    if (gate != null && !workflow.isAutoMode()) {
+                    if (gate != null && (!workflow.isAutoMode() || workflow.getAgentSessionId() != null)) {
                         workflow.pause(gate.gateKey());
                         // The downstream task stays PENDING until the user continues the Gate.
                         // Return now so this transaction commits instead of evaluating the same Gate forever.
