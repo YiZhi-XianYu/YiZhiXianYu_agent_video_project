@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { X, Send, Loader2, CheckCircle2, Plus, MessageSquare, Workflow } from 'lucide-vue-next'
+import WorkflowMonitorPage from '@/features/workflow/WorkflowMonitorPage.vue'
 import { useChuxueStore } from '@/stores/chuxue'
 import { useProjectStore } from '@/stores/project'
 import {
@@ -9,6 +10,7 @@ import {
   createChuxueSession,
   getChuxueRuntime,
   getChuxueTurns,
+  getChuxueGate,
   listChuxueSessions,
   planWithChuxue,
   type ChuxueRuntime,
@@ -21,6 +23,13 @@ const input = ref('')
 const sending = ref(false)
 const loadingSessions = ref(false)
 const pendingPlan = ref<string | null>(null)
+const currentGate = ref<Awaited<ReturnType<typeof getChuxueGate>> | null>(null)
+const embeddedGate = computed(() => Boolean(
+  currentGate.value?.gateKey
+  && currentGate.value.workflowStatus === 'PAUSED'
+  && runtime.value?.workflowRunId
+  && runtime.value.runtime?.workflowStatus === 'PAUSED',
+))
 const sessionList = ref<ChuxueSession[]>([])
 const runtime = ref<ChuxueRuntime | null>(null)
 const messages = computed(() => chuxue.chatMessages)
@@ -89,6 +98,13 @@ async function refreshRuntime(sessionId: string): Promise<void> {
   const nextStatus = snapshot.runtime?.workflowStatus || null
   const becameTerminal = nextStatus !== lastWorkflowStatus && ['SUCCEEDED', 'FAILED'].includes(nextStatus || '')
   runtime.value = snapshot
+  try {
+    currentGate.value = snapshot.currentGateKey && snapshot.workflowRunId
+      ? await getChuxueGate(snapshot.workflowRunId)
+      : null
+  } catch {
+    currentGate.value = null
+  }
   lastWorkflowStatus = nextStatus
   // A session created before the terminal-workflow detachment fix may still
   // contain the old run ID. PLAN_READY is authoritative for the confirmation
@@ -132,6 +148,7 @@ function newConversation(): void {
   stopRuntimePolling()
   chuxue.resetChat(null)
   pendingPlan.value = null
+  currentGate.value = null
   runtime.value = null
   lastWorkflowStatus = null
   input.value = ''
@@ -153,6 +170,12 @@ async function selectConversation(session: ChuxueSession): Promise<void> {
   pendingPlan.value = snapshot.status === 'PLAN_READY'
     && (!snapshot.workflowRunId || ['SUCCEEDED', 'FAILED'].includes(snapshot.runtime?.workflowStatus || ''))
     ? snapshot.planId : null
+  try {
+    currentGate.value = snapshot.currentGateKey && snapshot.workflowRunId
+      ? await getChuxueGate(snapshot.workflowRunId) : null
+  } catch {
+    currentGate.value = null
+  }
   startRuntimePolling(sessionId)
   scrollToBottom()
 }
@@ -205,6 +228,7 @@ async function send(): Promise<void> {
       project.assets.map(asset => asset.id),
       chat.userTurnId,
       chat.targetDurationMs,
+      chat.reviewGateKeys,
     )
     if (chuxue.chatSessionId !== requestSessionId) return
     pendingPlan.value = decision.planId
@@ -245,6 +269,20 @@ async function confirm(): Promise<void> {
     sending.value = false
     await refreshSessions()
   }
+}
+
+async function handleEmbeddedGateResolved(payload: { gateKey: string }): Promise<void> {
+  const sessionId = chuxue.chatSessionId
+  currentGate.value = null
+  if (sessionId) await refreshRuntime(sessionId)
+  assistant(`这一阶段（${payload.gateKey}）已经处理完成。你觉得刚才的结果怎么样？如果需要调整，我可以继续根据你的反馈修改。`)
+}
+
+async function handleEmbeddedWorkflowCancelled(): Promise<void> {
+  currentGate.value = null
+  const sessionId = chuxue.chatSessionId
+  if (sessionId) await refreshRuntime(sessionId)
+  assistant('好的，当前 Workflow 已取消，审核卡片也已关闭。你可以随时告诉我新的创作需求。')
 }
 
 watch(() => chuxue.chatOpen, open => {
@@ -322,6 +360,14 @@ onBeforeUnmount(stopRuntimePolling)
               <div class="chuxue-workflow-progress"><i :style="{ width: `${runtime.runtime?.progress || 0}%` }" /></div>
               <p>该 Workflow 完成或失败前，当前会话不会开启新的 Workflow。</p>
             </div>
+            <WorkflowMonitorPage
+              v-if="embeddedGate"
+              :project-id="project.currentProjectId || ''"
+              :run-id="runtime?.workflowRunId || ''"
+              embedded
+              @gate-resolved="handleEmbeddedGateResolved"
+              @workflow-cancelled="handleEmbeddedWorkflowCancelled"
+            />
           </div>
 
           <form class="chuxue-chat-input" @submit.prevent="send">
@@ -340,7 +386,7 @@ onBeforeUnmount(stopRuntimePolling)
 .chuxue-chat-layer{position:fixed;inset:0;z-index:80}.chuxue-chat-backdrop{position:absolute;inset:0;background:rgba(2,6,23,.68);backdrop-filter:blur(3px)}.chuxue-chat-card{position:fixed;inset:4vh 4vw;z-index:1;display:grid;grid-template-columns:260px minmax(0,1fr);grid-template-rows:minmax(0,1fr);overflow:hidden;border:1px solid rgba(96,165,250,.28);border-radius:28px;background:linear-gradient(160deg,rgba(15,23,42,.99),rgba(30,41,59,.99));box-shadow:0 28px 90px rgba(2,6,23,.72),0 0 42px rgba(96,165,250,.14)}
 .chuxue-session-sidebar{display:flex;flex-direction:column;min-width:0;padding:20px 14px;border-right:1px solid rgba(148,163,184,.14);background:rgba(15,23,42,.72)}.chuxue-session-heading{display:flex;justify-content:space-between;align-items:flex-start;padding:0 6px 18px;color:#e2e8f0}.chuxue-session-heading strong{display:block;font-size:19px}.chuxue-session-heading span{display:block;margin-top:3px;color:#94a3b8;font-size:11px}.chuxue-session-heading button{border:0;background:transparent;color:#94a3b8;cursor:pointer}.chuxue-new-chat{display:flex;align-items:center;justify-content:center;gap:7px;padding:10px;border:1px solid rgba(96,165,250,.3);border-radius:11px;background:rgba(37,99,235,.8);color:#fff;font-size:12px;cursor:pointer}.chuxue-session-list{flex:1;overflow:auto;margin-top:16px}.chuxue-session-item{display:flex;align-items:center;gap:8px;width:100%;margin-bottom:5px;padding:10px 8px;border:0;border-radius:10px;background:transparent;color:#cbd5e1;text-align:left;font-size:12px;cursor:pointer}.chuxue-session-item:hover,.chuxue-session-item.active{background:rgba(59,130,246,.18);color:#dbeafe}.chuxue-session-item span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.chuxue-session-item i{width:7px;height:7px;border-radius:50%;background:#60a5fa;box-shadow:0 0 9px #3b82f6}.chuxue-session-empty{padding:16px 8px;color:#64748b;font-size:11px;line-height:1.6}
 .chuxue-chat-main{display:flex;min-width:0;min-height:0;overflow:hidden;flex-direction:column}.chuxue-chat-header{flex:0 0 auto;display:flex;align-items:center;padding:22px 26px;border-bottom:1px solid rgba(148,163,184,.14);color:#e2e8f0}.chuxue-chat-header strong{display:block;font-size:18px}.chuxue-chat-header span{display:block;margin-top:4px;color:#94a3b8;font-size:11px}.chuxue-chat-messages{flex:1 1 auto;min-height:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;padding:28px clamp(20px,6vw,90px);display:flex;flex-direction:column;gap:14px}.chuxue-chat-empty{margin:auto;max-width:460px;text-align:center;color:#94a3b8;font-size:14px;line-height:1.8}.chuxue-chat-message{max-width:min(760px,88%);padding:12px 15px;border-radius:16px;color:#dbeafe;font-size:14px;line-height:1.7;white-space:pre-wrap}.chuxue-chat-message.user{align-self:flex-end;background:#2563eb;color:#fff}.chuxue-chat-message.assistant{align-self:flex-start;background:rgba(51,65,85,.72)}.chuxue-chat-message.system{align-self:center;max-width:80%;background:rgba(100,116,139,.18);color:#94a3b8;font-size:12px}
-.chuxue-plan-card,.chuxue-workflow-card{align-self:stretch;padding:14px 16px;border:1px solid rgba(96,165,250,.25);border-radius:15px;background:rgba(30,41,59,.82);color:#dbeafe}.chuxue-plan-card{display:flex;align-items:center;justify-content:space-between;gap:18px}.chuxue-plan-card>div{display:flex;align-items:center;gap:10px}.chuxue-plan-card span,.chuxue-workflow-card span{display:block;color:#94a3b8;font-size:11px}.chuxue-plan-card button{display:flex;align-items:center;gap:6px;flex:0 0 auto;padding:9px 12px;border:0;border-radius:10px;background:#2563eb;color:white;cursor:pointer}.chuxue-workflow-heading{display:flex;align-items:center;gap:11px}.chuxue-workflow-heading>div{flex:1;min-width:0}.chuxue-workflow-heading span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.chuxue-workflow-heading b{font-size:13px;color:#93c5fd}.chuxue-workflow-progress{height:5px;margin-top:12px;overflow:hidden;border-radius:99px;background:rgba(148,163,184,.16)}.chuxue-workflow-progress i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#2563eb,#60a5fa);transition:width .35s ease}.chuxue-workflow-card p{margin:9px 0 0;color:#94a3b8;font-size:11px}.chuxue-workflow-card.succeeded{border-color:rgba(52,211,153,.25)}.chuxue-workflow-card.failed{border-color:rgba(248,113,113,.3)}
+.chuxue-plan-card,.chuxue-workflow-card,.chuxue-gate-card{align-self:stretch;padding:14px 16px;border:1px solid rgba(96,165,250,.25);border-radius:15px;background:rgba(30,41,59,.82);color:#dbeafe}.chuxue-plan-card{display:flex;align-items:center;justify-content:space-between;gap:18px}.chuxue-plan-card>div,.chuxue-gate-card>div:first-child{display:flex;flex-direction:column;gap:5px}.chuxue-plan-card span,.chuxue-workflow-card span,.chuxue-gate-card span{display:block;color:#94a3b8;font-size:11px}.chuxue-plan-card button,.chuxue-gate-actions button{display:flex;align-items:center;gap:6px;flex:0 0 auto;padding:9px 12px;border:0;border-radius:10px;background:#2563eb;color:white;cursor:pointer}.chuxue-gate-card{border-color:rgba(251,191,36,.35);background:rgba(120,53,15,.18)}.chuxue-gate-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.chuxue-gate-actions button{background:#d97706}.chuxue-gate-actions button.danger{background:#7f1d1d}.chuxue-workflow-heading{display:flex;align-items:center;gap:11px}.chuxue-workflow-heading>div{flex:1;min-width:0}.chuxue-workflow-heading span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.chuxue-workflow-heading b{font-size:13px;color:#93c5fd}.chuxue-workflow-progress{height:5px;margin-top:12px;overflow:hidden;border-radius:99px;background:rgba(148,163,184,.16)}.chuxue-workflow-progress i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#2563eb,#60a5fa);transition:width .35s ease}.chuxue-workflow-card p{margin:9px 0 0;color:#94a3b8;font-size:11px}.chuxue-workflow-card.succeeded{border-color:rgba(52,211,153,.25)}.chuxue-workflow-card.failed{border-color:rgba(248,113,113,.3)}
 .chuxue-chat-input{flex:0 0 auto;display:flex;gap:10px;margin:0 clamp(20px,6vw,90px) 24px;padding:12px 14px;border:1px solid rgba(148,163,184,.22);border-radius:16px;background:rgba(15,23,42,.88)}.chuxue-chat-input input{flex:1;min-width:0;border:0;background:transparent;color:#e2e8f0;outline:0;font-size:14px}.chuxue-chat-input button{display:grid;place-items:center;width:38px;border:0;border-radius:11px;background:#2563eb;color:#fff;cursor:pointer}.chuxue-chat-input button:disabled,.chuxue-plan-card button:disabled{opacity:.45;cursor:not-allowed}.spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 @media(max-width:700px){.chuxue-chat-card{inset:2vh 2vw;grid-template-columns:1fr;grid-template-rows:170px minmax(0,1fr)}.chuxue-session-sidebar{min-height:0;max-height:none;border-right:0;border-bottom:1px solid rgba(148,163,184,.14)}.chuxue-session-list{display:flex;gap:5px;overflow-x:auto;overflow-y:hidden}.chuxue-session-item{min-width:160px}.chuxue-chat-messages{padding:20px 14px}.chuxue-chat-input{margin:0 14px 14px}.chuxue-plan-card{align-items:stretch;flex-direction:column}}
 </style>

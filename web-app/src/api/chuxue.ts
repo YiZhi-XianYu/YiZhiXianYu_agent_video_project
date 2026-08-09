@@ -27,6 +27,7 @@ export interface ChuxueChatResponse {
   shouldPlan: boolean
   planningGoal: string | null
   targetDurationMs: number | null
+  reviewGateKeys: string[]
   llmUsed: boolean
   modelRoute?: Record<string, unknown>
   userTurnId: string
@@ -47,6 +48,16 @@ export interface ChuxueRuntime {
     currentTaskStatus: string | null
     errorMessage: string | null
   } | null
+}
+
+export interface ChuxueGateView {
+  workflowRunId: string
+  workflowStatus: string
+  gateKey: string | null
+  label: string | null
+  description: string | null
+  options: string[]
+  candidateArtifactIds: string[]
 }
 
 export interface ChuxueDecision {
@@ -88,9 +99,9 @@ export async function getChuxueRuntime(sessionId: string): Promise<ChuxueRuntime
   return get<ChuxueRuntime>(`/api/v1/agent-sessions/${sessionId}/chuxue/runtime`)
 }
 
-export async function planWithChuxue(projectId: string, sessionId: string, goal: string, assetIds: string[], userTurnId?: string, targetDurationMs?: number | null): Promise<ChuxueDecision> {
+export async function planWithChuxue(projectId: string, sessionId: string, goal: string, assetIds: string[], userTurnId?: string, targetDurationMs?: number | null, reviewGateKeys: string[] = []): Promise<ChuxueDecision> {
   return post<ChuxueDecision>(`/api/v1/projects/${projectId}/chuxue/plan`, {
-    projectId, sessionId, goal, targetDurationMs, quality: '1080P', assetIds, autoMode: true, userTurnId,
+    projectId, sessionId, goal, targetDurationMs, quality: '1080P', assetIds, autoMode: reviewGateKeys.length === 0, reviewGateKeys, userTurnId,
   })
 }
 
@@ -104,4 +115,12 @@ export async function chatWithChuxue(projectId: string, sessionId: string, messa
 
 export async function confirmChuxuePlan(projectId: string, planId: string): Promise<{ workflowRunId: string; status: string }> {
   return post<{ workflowRunId: string; status: string }>(`/api/v1/projects/${projectId}/chuxue/plans/${planId}/confirm`)
+}
+
+export async function getChuxueGate(workflowRunId: string): Promise<ChuxueGateView> {
+  return get<ChuxueGateView>(`/api/v1/workflow-runs/${workflowRunId}/chuxue-gate`)
+}
+
+export async function decideChuxueGate(workflowRunId: string, action: string): Promise<ChuxueGateView> {
+  return post<ChuxueGateView>(`/api/v1/workflow-runs/${workflowRunId}/chuxue-gate/decision`, { action })
 }

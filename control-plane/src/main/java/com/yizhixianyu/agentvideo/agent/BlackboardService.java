@@ -110,8 +110,9 @@ public class BlackboardService {
         var assetViews = allProjectAssets.stream().map(asset -> assetView(
             asset, selectedAssetIds.contains(asset.getId()), taskViews, workflowArtifacts,
             recentProjectArtifacts(session.getProjectId(), asset.getId()))).toList();
-        var bgm = selectedBgm(workflowArtifacts.isEmpty()
-            ? recentProjectArtifacts(session.getProjectId(), null) : workflowArtifacts);
+        // BGM is Workflow-scoped. Never fall back to a previous Workflow's
+        // selection when a new run has not selected audio yet.
+        var bgm = selectedBgm(workflowArtifacts);
         var traceViews = traces.findBySessionIdOrderByOccurredAtAsc(session.getId()).stream()
             .map(t -> new TraceView(t.getEventType(), t.getTraceId(), t.getWorkflowRunId(), t.getTaskRunId(), t.getExecutionId(), t.getOccurredAt())).toList();
         var latestFailure = traceViews.stream().filter(t -> "TASK_FAILED".equals(t.eventType()) || "TASK_FALLBACK_RETRY".equals(t.eventType()))
@@ -140,6 +141,9 @@ public class BlackboardService {
         var related = workflowArtifacts.stream().filter(a -> taskIds.contains(a.getProducerTaskRunId())).toList();
         if (related.isEmpty()) related = projectArtifacts;
         var metadata = latestPayload(related, "VIDEO_METADATA");
+        if (!metadata.containsKey("durationMs")) {
+            metadata = latestPayload(projectArtifacts, "VIDEO_METADATA");
+        }
         var shots = latestPayload(related, "SHOT_LIST");
         var scenes = summarizeTags(related, "SCENE_TAGS", "sceneTags");
         var objects = summarizeTags(related, "OBJECT_TAGS", "objectTags");

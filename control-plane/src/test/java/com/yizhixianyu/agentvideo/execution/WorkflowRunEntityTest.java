@@ -25,8 +25,10 @@ class WorkflowRunEntityTest {
     void canCancelNonTerminalWorkflow() {
         var workflow = new WorkflowRunEntity("project-1", "asset-1", "TEST", ProxyQuality.HD_720P);
         workflow.start();
+        workflow.pause("gate_timeline_preview");
         workflow.cancel();
         assertThat(workflow.getStatus()).isEqualTo(RunStatus.FAILED);
+        assertThat(workflow.getCurrentGateKey()).isNull();
         assertThat(workflow.getErrorMessage()).contains("cancelled");
     }
 

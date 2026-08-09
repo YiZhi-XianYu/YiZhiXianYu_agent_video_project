@@ -13,6 +13,7 @@ import { useReviewStore } from '@/stores/review'
 import { useUiStore } from '@/stores/ui'
 import { usePolling } from '@/shared/composables/usePolling'
 import { ApiError } from '@/api/client'
+import { post as apiPost } from '@/api/client'
 import { getGateDraft, saveGateDraft, submitGateFeedback } from '@/api/workflows'
 import { WORKFLOW_POLL_INTERVAL_MS, RUN_STATUS_LABEL } from '@/shared/constants'
 import ProgressBar from '@/components/ProgressBar.vue'
@@ -30,6 +31,11 @@ import type { BeatRole, ShotScore, StoryPlan, Timeline, TransitionType } from '@
 const props = defineProps<{
   projectId: string
   runId: string
+  embedded?: boolean
+}>()
+const emit = defineEmits<{
+  (event: 'gate-resolved', payload: { gateKey: string }): void
+  (event: 'workflow-cancelled', payload: { workflowRunId: string }): void
 }>()
 
 const router = useRouter()
@@ -114,7 +120,9 @@ const { start: startPolling, stop: stopPolling } = usePolling(
 )
 
 onMounted(async () => {
-  workflowStore.clear()
+  // The chat card embeds this monitor for the very same run. Do not clear a
+  // route-level monitor's shared snapshot while mounting the embedded view.
+  if (!props.embedded) workflowStore.clear()
   await workflowStore.fetchRun(props.runId)
   syncGate()
   if (!workflowStore.isTerminal) startPolling()
@@ -151,8 +159,12 @@ onUnmounted(() => {
   if (gateDraftTimer) clearTimeout(gateDraftTimer)
   gateDraftTimer = null
   gateDraftSaveQueued = false
-  workflowStore.clear()
-  reviewStore.resetAll()
+  // Embedded monitors share the active run with the chat/runtime poller. A
+  // component switch must not erase the outer monitor's state or drafts.
+  if (!props.embedded) {
+    workflowStore.clear()
+    reviewStore.resetAll()
+  }
 })
 
 // ===================== Gate 同步 =====================
@@ -436,8 +448,10 @@ async function enrichShotScores(scores: ShotScore[]): Promise<ShotScore[]> {
 // ===================== Actions =====================
 
 async function handleContinue(): Promise<void> {
+  const gateKey = workflowStore.currentGate?.gateKey
   try {
     await workflowStore.continueWorkflow(props.runId)
+    if (gateKey) emit('gate-resolved', { gateKey })
     startPolling()
   } catch {
     // 错误已在 Store 中处理
@@ -448,18 +462,35 @@ async function handleRenderConfirm(): Promise<void> {
   await handleContinue()
 }
 
+async function handleCancel(): Promise<void> {
+  try {
+    await apiPost(`/api/v1/workflow-runs/${props.runId}/cancel`)
+    await workflowStore.fetchRun(props.runId)
+    stopPolling()
+    emit('workflow-cancelled', { workflowRunId: props.runId })
+  } catch {
+    uiStore.showToast('Workflow 取消失败，请稍后重试', 'error')
+  }
+}
+
 async function handleStoryPlanApplied(): Promise<void> {
+  const gateKey = workflowStore.currentGate?.gateKey
   await workflowStore.fetchRun(props.runId)
+  if (gateKey) emit('gate-resolved', { gateKey })
   startPolling()
 }
 
 async function handleTimelineApplied(): Promise<void> {
+  const gateKey = workflowStore.currentGate?.gateKey
   await workflowStore.fetchRun(props.runId)
+  if (gateKey) emit('gate-resolved', { gateKey })
   startPolling()
 }
 
 async function handleBgmApplied(): Promise<void> {
+  const gateKey = workflowStore.currentGate?.gateKey
   await workflowStore.fetchRun(props.runId)
+  if (gateKey) emit('gate-resolved', { gateKey })
   startPolling()
 }
 
@@ -490,7 +521,7 @@ function goBack(): void {
 <template>
   <div class="page-shell workflow-page">
     <!-- 页头 -->
-    <header class="flex items-center gap-4 mb-8">
+    <header v-if="!embedded" class="flex items-center gap-4 mb-8">
       <button class="w-9 h-9 rounded-lg flex items-center justify-center
                      text-surface-400 hover:text-surface-200 hover:bg-surface-800 transition-colors shrink-0"
               @click="goBack">
@@ -522,7 +553,7 @@ function goBack(): void {
 
     <template v-else>
       <!-- 进度 -->
-      <div class="workflow-overview mb-8">
+      <div v-if="!embedded" class="workflow-overview mb-8">
         <div class="flex items-center justify-between mb-3">
           <h2 class="section-heading">执行进度</h2>
           <span class="text-sm text-surface-400">
@@ -536,7 +567,7 @@ function goBack(): void {
       </div>
 
       <!-- Task 网格 -->
-      <div class="mb-8">
+      <div v-if="!embedded" class="mb-8">
         <div class="section-title-row mb-4"><div><p class="section-eyebrow">PROCESS</p><h2>子进程执行进度</h2></div><span>实时刷新</span></div>
         <TaskGrid :tasks="workflowStore.tasks" />
       </div>
@@ -646,6 +677,10 @@ function goBack(): void {
           <button type="button" class="btn-secondary shrink-0 text-xs" :disabled="gateFeedbackStatus === 'saving'" @click="sendGateFeedback">{{ gateFeedbackStatus === 'saving' ? '保存中…' : '提交反馈' }}</button>
         </div>
       </section>
+
+      <div v-if="embedded && workflowStore.isPaused && workflowStore.currentGate" class="mt-3 text-right">
+        <button class="btn-secondary text-xs" @click="handleCancel">取消 Workflow</button>
+      </div>
 
       <!-- 未知 Gate 兜底 -->
       <div v-if="workflowStore.isPaused && workflowStore.currentGate && !hasDedicatedGateView" class="card mb-6 ring-1 ring-warning/40">

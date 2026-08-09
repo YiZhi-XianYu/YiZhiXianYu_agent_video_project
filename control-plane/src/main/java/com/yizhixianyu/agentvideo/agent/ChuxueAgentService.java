@@ -69,7 +69,9 @@ public class ChuxueAgentService {
         // Commit the user turn before waiting for the model. A conversation
         // switch while the request is running must not hide the sent message.
         var userTurn = sessions.addTurn(userId, sessionId, "USER", message);
-        var board = blackboard.get(userId, sessionId);
+        // Chat needs fresh Probe/Workflow facts. Redis remains a cache, but
+        // must not hide newly completed metadata from the Agent.
+        var board = blackboard.refresh(userId, sessionId, null);
         var context = new java.util.LinkedHashMap<String, Object>();
         var runtime = board.runtime();
         var workflowStatus = runtime == null || runtime.workflowStatus() == null ? "IDLE" : runtime.workflowStatus();
@@ -102,6 +104,7 @@ public class ChuxueAgentService {
             sessions.updateTargetDuration(userId, sessionId, response.targetDurationMs());
         }
         return new ChatResult(response.reply(), response.shouldPlan(), response.planningGoal(), response.targetDurationMs(),
+            response.reviewGateKeys() == null ? List.of() : response.reviewGateKeys(),
             response.modelRoute(), response.llmUsed(), userTurn.getId(), assistantTurn == null ? null : assistantTurn.getId());
     }
 
@@ -277,7 +280,7 @@ public class ChuxueAgentService {
 
     public record Confirmed(String planId, String workflowRunId, String status, String statusUrl) {}
 
-    public record ChatResult(String reply, boolean shouldPlan, String planningGoal, Integer targetDurationMs,
+    public record ChatResult(String reply, boolean shouldPlan, String planningGoal, Integer targetDurationMs, List<String> reviewGateKeys,
                              Map<String, Object> modelRoute, boolean llmUsed,
                              String userTurnId, String assistantTurnId) {}
 }

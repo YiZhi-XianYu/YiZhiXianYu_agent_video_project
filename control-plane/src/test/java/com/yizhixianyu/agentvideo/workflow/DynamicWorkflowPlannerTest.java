@@ -85,4 +85,17 @@ class DynamicWorkflowPlannerTest {
         assertThat(preview.definition().gates()).extracting(WorkflowDefinition.Gate::gateKey)
             .containsExactly("gate_bgm_review");
     }
+
+    @Test
+    void middleReviewRequestCreatesTimelineGateOnly() {
+        var preview = planner.preview(ProxyQuality.FHD_1080P, "15 seconds", false,
+            DynamicWorkflowPlanner.WorkflowCapabilities.defaults(), false,
+            "用当前素材制作 15 秒视频，中间让我审核一下", List.of("asset-1"),
+            Set.of("gate_timeline_preview"));
+
+        assertThat(preview.definition().gates()).extracting(WorkflowDefinition.Gate::gateKey)
+            .containsExactly("gate_timeline_preview");
+        assertThat(preview.definition().gates().getFirst().afterNodeKey())
+            .isEqualTo("timeline_compose");
+    }
 }

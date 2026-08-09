@@ -112,3 +112,21 @@ def test_invalid_llm_response_does_not_become_success(monkeypatch):
     assert response.reply == ""
     assert response.llmUsed is False
     assert response.modelRoute["fallbackReason"] == "CHAT_RESPONSE_INVALID_AFTER_RETRY"
+
+
+def test_general_manual_review_request_adds_all_review_gates(monkeypatch):
+    route = {"available": True, "provider": "deepseek", "model": "deepseek-chat"}
+    monkeypatch.setattr(routes.model_router, "route", lambda *args, **kwargs: SimpleNamespace(to_dict=lambda: dict(route)))
+    result = {
+        "reply": "我会在各个关键审核节点暂停，等你确认后再继续。",
+        "shouldPlan": True,
+        "missingInformation": [],
+        "planningGoal": "使用当前素材制作视频，并在每个关键节点进行人工审核",
+        "targetDurationMs": 30000,
+        "reviewGateKeys": [],
+    }
+    monkeypatch.setattr(routes, "generate_json_with_fallback", lambda *args, **kwargs: (result, route, "deepseek"))
+    response = routes.chuxue_chat_v2(ChuxueChatRequest(message="帮我开启人工审核，做一个视频"))
+    assert response.reviewGateKeys == [
+        "gate_shot_ranking", "gate_story_edit", "gate_timeline_preview", "gate_bgm_review", "gate_render_review"
+    ]

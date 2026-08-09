@@ -49,6 +49,7 @@ class ChuxueChatResponse(BaseModel):
     llmUsed: bool
     planningGoal: str | None = None
     targetDurationMs: int | None = None
+    reviewGateKeys: list[str] = Field(default_factory=list)
 
 
 def _chat_user_prompt(request: ChuxueChatRequest) -> str:
@@ -230,6 +231,7 @@ def _chuxue_chat_legacy_decision(request: ChuxueChatRequest) -> ChuxueChatRespon
         "同时输出 missingInformation：列出生成可靠 Workflow 仍缺少的关键信息。只要 missingInformation 非空，shouldPlan 必须为 false。\n"
         "planningGoal 是交给后端的完整、独立、可执行创作需求，不能只写‘可以’‘开始吧’‘和原来一样’。如果用户用简短确认承接前文，你必须从历史中重述素材范围、主题、时长、风格和明确约束。shouldPlan=false 时 planningGoal=null。\n"
         "targetDurationMs 是当前对话中用户最新确认的目标时长。用户明确说‘20秒’时输出20000，即使此轮仍需继续澄清；未知时为null。绝不能把已经确认的20秒恢复成默认30秒。\n"
+        "reviewGateKeys 表示用户明确希望在哪些节点亲自审核。‘开启人工审核/需要人工审核/全程人工审核’返回所有可用的用户审核 Gate（gate_shot_ranking、gate_story_edit、gate_timeline_preview、gate_bgm_review、gate_render_review），后端会按实际能力和节点过滤；‘中间审核/过程中让我审核/前半段确认’返回 gate_timeline_preview；如果用户明确说审核背景音乐，则返回 gate_bgm_review；明确要求审核最终成片，则返回 gate_render_review。没有明确审核要求时返回空数组。\n"
         "‘我想剪视频’、‘我有剪视频的想法’、‘我没什么想法，你帮我想想计划’都属于探索阶段：先提供少量方向或提出最少量澄清问题，missingInformation 非空，shouldPlan=false。\n"
         "只有目标基本可执行（例如明确了素材范围，并具备主题/目标时长/关键偏好中的必要信息）或用户确认了此前已讨论清楚的方案，missingInformation 才能为空且 shouldPlan=true。\n"
         "不得执行工具、生成命令或编造执行状态。严格只输出一个 JSON 对象，不要 Markdown、代码围栏或额外解释。"
@@ -241,6 +243,7 @@ def _chuxue_chat_legacy_decision(request: ChuxueChatRequest) -> ChuxueChatRespon
                   "missingInformation": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
                   "planningGoal": {"type": ["string", "null"]},
                   "targetDurationMs": {"type": ["integer", "null"], "minimum": 5000, "maximum": 300000},
+                  "reviewGateKeys": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
               },
               "required": ["reply", "shouldPlan", "missingInformation", "planningGoal", "targetDurationMs"]}
     user = _chat_user_prompt(request)
@@ -296,9 +299,24 @@ def _chuxue_chat_legacy_decision(request: ChuxueChatRequest) -> ChuxueChatRespon
                 logger.warning("Chuxue chat validation failed [%s]: targetDurationMs type=%s", request_id,
                                type(target_duration_ms).__name__)
                 continue
+            review_gate_keys = result.get("reviewGateKeys")
+            if not isinstance(review_gate_keys, list) or not all(isinstance(item, str) for item in review_gate_keys):
+                review_gate_keys = []
+            allowed_review_gates = {"gate_shot_ranking", "gate_story_edit", "gate_timeline_preview", "gate_bgm_review", "gate_render_review"}
+            review_gate_keys = [item for item in review_gate_keys if item in allowed_review_gates]
+            if should_plan:
+                # Keep explicit natural-language review scope authoritative even
+                # when the LLM omits the optional field or returns a partial one.
+                latest = request.message.lower()
+                all_review_gates = ["gate_shot_ranking", "gate_story_edit", "gate_timeline_preview", "gate_bgm_review", "gate_render_review"]
+                if any(token in latest for token in ("开启人工审核", "需要人工审核", "全程人工审核", "人工审核全部", "每个gate都审核", "每个节点都审核")):
+                    review_gate_keys = all_review_gates
+                elif not review_gate_keys and any(token in latest for token in ("中间审核", "过程审核", "前半段", "中途审核", "中间我可以自己审核", "审核一下")):
+                    review_gate_keys = ["gate_timeline_preview"]
             return ChuxueChatResponse(reply=reply, shouldPlan=should_plan,
                                       planningGoal=planning_goal.strip() if should_plan else None,
                                       targetDurationMs=target_duration_ms,
+                                      reviewGateKeys=review_gate_keys,
                                       modelRoute=last_route, llmUsed=True)
         except Exception as exc:
             logger.exception("Chuxue chat model attempt %d failed [%s]: %s", attempt + 1, request_id, exc)

@@ -235,6 +235,10 @@ public class WorkflowRunEntity extends BaseEntity {
             throw new IllegalStateException("Cannot cancel terminal Workflow");
         }
         status = RunStatus.FAILED;
+        // A cancelled run is terminal. Clear the active Gate so API snapshots,
+        // Blackboard and embedded Gate views cannot keep presenting a stale
+        // review card after cancellation.
+        currentGateKey = null;
         progress = Math.min(progress, 99);
         completedAt = Instant.now();
         errorMessage = "Workflow cancelled by user";
