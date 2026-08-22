@@ -149,7 +149,6 @@ video_render
 - Docker Desktop；
 - Docker Compose v2；
 - 如需本地前端开发，安装 Node.js 22；
-- 如需运行 Python 测试，使用 `agent-video-pipeline` Conda 环境。
 
 ### 2.2 配置环境变量
 
@@ -323,3 +322,5 @@ docs/             阶段性开发记录和测试材料
 - Artifact、Gate、Trace 组成的可解释执行链。
 
 后续的 Agent 质量评估、增量执行与 Artifact 复用、Workflow 版本 Diff、交付运维等属于可选的进一步生产化增强，不是当前核心功能运行的前置条件。
+
+如有疑问请联系南开大学软件学院：2412600
